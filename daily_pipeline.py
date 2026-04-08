@@ -157,7 +157,7 @@ def _load_existing(csv: str) -> pd.DataFrame | None:
         return None
 
 
-def _download_with_retry(ticker: dict, end_date: str, retries: int = 3, backoff: int = 15) -> bool:
+def _download_with_retry(ticker: dict, end_date: str, retries: int = 5, backoff: int = 30) -> bool:
     """Smart download: delta-only if CSV exists, full history if missing.
 
     - Existing CSV → fetch only rows after last date → append → save.
