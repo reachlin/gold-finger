@@ -5,8 +5,11 @@ Learns market state patterns from technical indicators, then generates
 daily trading signals: strong_buy, mild_buy, hold, mild_sell, strong_sell.
 """
 
+import os
+
 import numpy as np
 import pandas as pd
+import joblib
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 
@@ -15,6 +18,7 @@ from sklearn.preprocessing import StandardScaler
 # Technical Indicators
 # ---------------------------------------------------------------------------
 FEATURE_COLS = ["rsi", "macd_hist", "boll_pctb", "vol_ratio", "roc", "atr_ratio"]
+FEATURE_COLS_EXT = FEATURE_COLS + ["tfm_sma5_ret"]
 
 
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
@@ -266,6 +270,28 @@ class TradingBot:
         X = self.scaler.transform(features)
         label = self.kmeans.predict(X)[0]
         return self.cluster_signals[label]
+
+    def save(self, path: str):
+        """Save trained model state to a joblib file."""
+        joblib.dump({
+            "kmeans": self.kmeans,
+            "scaler": self.scaler,
+            "cluster_signals": self.cluster_signals,
+            "n_clusters": self.n_clusters,
+            "feature_cols": self.feature_cols,
+        }, path)
+
+    @classmethod
+    def load(cls, path: str) -> "TradingBot":
+        """Load a trained TradingBot from a joblib file."""
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Model file not found: {path}")
+        data = joblib.load(path)
+        bot = cls(n_clusters=data["n_clusters"], feature_cols=data["feature_cols"])
+        bot.kmeans = data["kmeans"]
+        bot.scaler = data["scaler"]
+        bot.cluster_signals = data["cluster_signals"]
+        return bot
 
 
 # ---------------------------------------------------------------------------

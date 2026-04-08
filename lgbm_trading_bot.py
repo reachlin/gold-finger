@@ -6,13 +6,17 @@ next-day return into 5 categories using percentile-based labeling (same as
 LSTM). Each row is an independent sample — no sliding windows needed.
 """
 
+import os
+
 import numpy as np
 import pandas as pd
+import joblib
 from sklearn.preprocessing import StandardScaler
 from lightgbm import LGBMClassifier
 
 from trading_bot import (
     FEATURE_COLS,
+    FEATURE_COLS_EXT,
     Portfolio,
     compute_indicators,
     LOT_SIZE,
@@ -44,12 +48,14 @@ class LGBMTradingBot:
         self.scaler = StandardScaler()
         self.thresholds = None
         self._labels = None  # stored for test inspection
+        self.feature_cols = FEATURE_COLS  # updated in fit() if tfm_sma5_ret present
 
     def fit(self, df: pd.DataFrame):
         """Fit scaler + LGBMClassifier on indicator features with percentile labels."""
-        features = df[FEATURE_COLS]
+        self.feature_cols = FEATURE_COLS_EXT if "tfm_sma5_ret" in df.columns else FEATURE_COLS
+        features = df[self.feature_cols]
         self.scaler.fit(features)
-        X = pd.DataFrame(self.scaler.transform(features), columns=FEATURE_COLS)
+        X = pd.DataFrame(self.scaler.transform(features), columns=self.feature_cols)
 
         # Forward 1-day return
         closes = df["close"].values
@@ -77,22 +83,44 @@ class LGBMTradingBot:
 
     def predict(self, df: pd.DataFrame) -> list[str]:
         """Predict signal for each row. Returns one signal per row."""
-        features = df[FEATURE_COLS]
-        X = pd.DataFrame(self.scaler.transform(features), columns=FEATURE_COLS)
+        features = df[self.feature_cols]
+        X = pd.DataFrame(self.scaler.transform(features), columns=self.feature_cols)
         preds = self.model.predict(X)
         return [SIGNAL_NAMES[p] for p in preds]
 
     def predict_single(self, row: pd.Series) -> str:
         """Predict signal for a single row."""
-        features = pd.DataFrame([row[FEATURE_COLS].values], columns=FEATURE_COLS)
-        X = pd.DataFrame(self.scaler.transform(features), columns=FEATURE_COLS)
+        features = pd.DataFrame([row[self.feature_cols].values], columns=self.feature_cols)
+        X = pd.DataFrame(self.scaler.transform(features), columns=self.feature_cols)
         pred = self.model.predict(X)[0]
         return SIGNAL_NAMES[pred]
 
     def feature_importance(self) -> dict[str, int]:
         """Return feature importance dict from the fitted model."""
         importances = self.model.feature_importances_
-        return {col: int(imp) for col, imp in zip(FEATURE_COLS, importances)}
+        return {col: int(imp) for col, imp in zip(self.feature_cols, importances)}
+
+    def save(self, path: str):
+        """Save trained LightGBM state to a joblib file."""
+        joblib.dump({
+            "model": self.model,
+            "scaler": self.scaler,
+            "thresholds": self.thresholds,
+            "feature_cols": self.feature_cols,
+        }, path)
+
+    @classmethod
+    def load(cls, path: str) -> "LGBMTradingBot":
+        """Load a trained LGBMTradingBot from a joblib file."""
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Model file not found: {path}")
+        data = joblib.load(path)
+        bot = cls()
+        bot.model = data["model"]
+        bot.scaler = data["scaler"]
+        bot.thresholds = data["thresholds"]
+        bot.feature_cols = data["feature_cols"]
+        return bot
 
 
 # ---------------------------------------------------------------------------

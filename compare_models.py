@@ -19,6 +19,8 @@ from dnn_trading_bot import run_dnn_backtest
 from lgbm_trading_bot import run_lgbm_backtest
 from ppo_trading_bot import run_ppo_backtest
 from td3_trading_bot import run_td3_backtest
+from timesfm_trading_bot import run_timesfm_backtest
+from timesfm_feature import add_timesfm_feature
 
 
 def _classify(signal):
@@ -34,7 +36,7 @@ def _majority_direction(dirs):
     """Return the majority direction if >= 3 out of 4 agree, else None."""
     from collections import Counter
     counts = Counter(dirs)
-    for direction, count in counts.items():
+    for direction, count in counts.most_common():
         if count >= 3:
             return direction
     return None
@@ -44,6 +46,7 @@ def run_majority_backtest(km_results, lstm_results, lgbm_results, ppo_results,
                           initial_capital=100_000):
     """Run majority vote backtest: trade when >= 3 of 4 models agree.
 
+    Voters: K-Means, LSTM, LightGBM, PPO.
     Re-uses the trained bots and test data from individual backtests.
     Returns a metrics dict compatible with the comparison table.
     """
@@ -152,6 +155,11 @@ def main():
     print(f"Loaded {len(df)} rows from {args.csv}")
     print(f"Date range: {df['date'].iloc[0]} to {df['date'].iloc[-1]}\n")
 
+    # --- Add TimesFM SMA5 feature (walk-forward, no leakage) ---
+    print("Computing TimesFM SMA5 feature…")
+    df = add_timesfm_feature(df)
+    print(f"tfm_sma5_ret added. Non-zero rows: {(df['tfm_sma5_ret'] != 0).sum()}\n")
+
     # --- K-Means backtest ---
     print("=" * 60)
     print("K-MEANS BACKTEST")
@@ -183,6 +191,12 @@ def main():
         df, train_ratio=0.6, initial_capital=100_000,
     )
 
+    # --- TimesFM backtest ---
+    print(f"\n{'=' * 60}")
+    print("TIMESFM BACKTEST")
+    print("=" * 60)
+    tfm_results = run_timesfm_backtest(df, train_ratio=0.6, initial_capital=100_000)
+
     # --- Majority vote backtest ---
     print(f"\n{'=' * 60}")
     print("MAJORITY VOTE BACKTEST")
@@ -197,18 +211,18 @@ def main():
     td3_results = run_td3_backtest(df, train_ratio=0.6, initial_capital=100_000)
 
     # --- Comparison table ---
-    print(f"\n{'=' * 115}")
+    print(f"\n{'=' * 130}")
     print("COMPARISON (with SMA5 buy filter)")
-    print("=" * 115)
+    print("=" * 130)
 
     bh_return = km_results["buy_and_hold_return"]
     header = (
         f"  {'Metric':<22s} {'K-Means':>12s} {'LSTM':>12s}"
-        f" {'LightGBM':>12s} {'PPO':>12s} {'Majority':>12s}"
-        f" {'TD3':>12s} {'Buy&Hold':>12s}"
+        f" {'LightGBM':>12s} {'PPO':>12s} {'TimesFM':>12s}"
+        f" {'Majority':>12s} {'TD3':>12s} {'Buy&Hold':>12s}"
     )
     print(header)
-    print("  " + "-" * 113)
+    print("  " + "-" * 128)
 
     rows = [
         ("Total Return",
@@ -216,6 +230,7 @@ def main():
          f"{lstm_results['total_return']:+.2f}%",
          f"{lgbm_results['total_return']:+.2f}%",
          f"{ppo_results['total_return']:+.2f}%",
+         f"{tfm_results['total_return']:+.2f}%",
          f"{uv_results['total_return']:+.2f}%",
          f"{td3_results['total_return']:+.2f}%",
          f"{bh_return:+.2f}%"),
@@ -224,6 +239,7 @@ def main():
          f"{lstm_results['max_drawdown']:.2f}%",
          f"{lgbm_results['max_drawdown']:.2f}%",
          f"{ppo_results['max_drawdown']:.2f}%",
+         f"{tfm_results['max_drawdown']:.2f}%",
          f"{uv_results['max_drawdown']:.2f}%",
          f"{td3_results['max_drawdown']:.2f}%",
          "N/A"),
@@ -232,6 +248,7 @@ def main():
          f"{lstm_results['sharpe_ratio']:.3f}",
          f"{lgbm_results['sharpe_ratio']:.3f}",
          f"{ppo_results['sharpe_ratio']:.3f}",
+         f"{tfm_results['sharpe_ratio']:.3f}",
          f"{uv_results['sharpe_ratio']:.3f}",
          f"{td3_results['sharpe_ratio']:.3f}",
          "N/A"),
@@ -240,6 +257,7 @@ def main():
          f"{lstm_results['win_rate']:.1f}%",
          f"{lgbm_results['win_rate']:.1f}%",
          f"{ppo_results['win_rate']:.1f}%",
+         f"{tfm_results['win_rate']:.1f}%",
          f"{uv_results['win_rate']:.1f}%",
          f"{td3_results['win_rate']:.1f}%",
          "N/A"),
@@ -248,6 +266,7 @@ def main():
          f"{lstm_results['profit_factor']:.2f}",
          f"{lgbm_results['profit_factor']:.2f}",
          f"{ppo_results['profit_factor']:.2f}",
+         f"{tfm_results['profit_factor']:.2f}",
          f"{uv_results['profit_factor']:.2f}",
          f"{td3_results['profit_factor']:.2f}",
          "N/A"),
@@ -256,6 +275,7 @@ def main():
          f"{lstm_results['num_trades']}",
          f"{lgbm_results['num_trades']}",
          f"{ppo_results['num_trades']}",
+         f"{tfm_results['num_trades']}",
          f"{uv_results['num_trades']}",
          f"{td3_results['num_trades']}",
          "1"),
@@ -264,19 +284,21 @@ def main():
          f"{lstm_results['final_value']:,.0f}",
          f"{lgbm_results['final_value']:,.0f}",
          f"{ppo_results['final_value']:,.0f}",
+         f"{tfm_results['final_value']:,.0f}",
          f"{uv_results['final_value']:,.0f}",
          f"{td3_results['final_value']:,.0f}",
          "N/A"),
     ]
-    for label, km_v, ls_v, lg_v, pp_v, uv_v, td_v, bh_v in rows:
+    for label, km_v, ls_v, lg_v, pp_v, tf_v, uv_v, td_v, bh_v in rows:
         print(f"  {label:<22s} {km_v:>12s} {ls_v:>12s} {lg_v:>12s}"
-              f" {pp_v:>12s} {uv_v:>12s} {td_v:>12s} {bh_v:>12s}")
+              f" {pp_v:>12s} {tf_v:>12s} {uv_v:>12s} {td_v:>12s} {bh_v:>12s}")
 
     # --- Build combined daily trade log ---
     km_test = km_results["test_df"].copy()
     lstm_test = lstm_results["test_df"].copy()
     lgbm_test = lgbm_results["test_df"].copy()
     ppo_test = ppo_results["test_df"].copy()
+    tfm_test = tfm_results["test_df"].copy()
 
     # Reconstruct LSTM signals on the test set
     lstm_bot = lstm_results["bot"]
@@ -296,6 +318,9 @@ def main():
     ppo_bot = ppo_results["bot"]
     ppo_raw_signals = ppo_bot.predict(ppo_test)
 
+    # TimesFM signals already in test_df["signal"]
+    tfm_raw_signals = list(tfm_test["signal"]) if "signal" in tfm_test.columns else ["hold"] * len(tfm_test)
+
     # Build trade lookup: date -> trade dict
     def _trade_lookup(trades):
         lookup = {}
@@ -307,6 +332,7 @@ def main():
     lstm_trades = _trade_lookup(lstm_results["trades"])
     lgbm_trades = _trade_lookup(lgbm_results["trades"])
     ppo_trades = _trade_lookup(ppo_results["trades"])
+    tfm_trades = _trade_lookup(tfm_results["trades"])
     uv_trades = _trade_lookup(uv_results["trades"])
     td3_trades = _trade_lookup(td3_results["trades"])
 
@@ -344,7 +370,12 @@ def main():
         ppo_action = ppo_t.get("action", "hold")
         ppo_shares = ppo_t.get("shares", 0)
 
-        # Majority vote: consensus direction (>= 3 of 4)
+        tfm_signal = tfm_raw_signals[i] if i < len(tfm_raw_signals) else "hold"
+        tfm_t = tfm_trades.get(date, {})
+        tfm_action = tfm_t.get("action", "hold")
+        tfm_shares = tfm_t.get("shares", 0)
+
+        # Majority vote: consensus direction (>= 3 of 4, TimesFM excluded)
         dirs = [_classify(km_signal), _classify(lstm_signal),
                 _classify(lgbm_signal), _classify(ppo_signal)]
         uv_signal = _majority_direction(dirs) or "disagree"
@@ -375,6 +406,9 @@ def main():
             "ppo_signal": ppo_signal,
             "ppo_action": ppo_action,
             "ppo_shares": ppo_shares if ppo_shares else "",
+            "tfm_signal": tfm_signal,
+            "tfm_action": tfm_action,
+            "tfm_shares": tfm_shares if tfm_shares else "",
             "uv_signal": uv_signal,
             "uv_action": uv_action,
             "uv_shares": uv_shares if uv_shares else "",
@@ -395,6 +429,8 @@ def main():
     lgbm_sells = len([r for r in log_rows if r["lgbm_action"] == "sell"])
     ppo_buys = len([r for r in log_rows if r["ppo_action"] == "buy"])
     ppo_sells = len([r for r in log_rows if r["ppo_action"] == "sell"])
+    tfm_buys = len([r for r in log_rows if r["tfm_action"] == "buy"])
+    tfm_sells = len([r for r in log_rows if r["tfm_action"] == "sell"])
     uv_buys = len([r for r in log_rows if r["uv_action"] == "buy"])
     uv_sells = len([r for r in log_rows if r["uv_action"] == "sell"])
     td3_buys = len([r for r in log_rows if r["td3_action"] == "buy"])
@@ -407,6 +443,7 @@ def main():
     print(f"  LSTM:       {lstm_buys} buys, {lstm_sells} sells")
     print(f"  LightGBM:   {lgbm_buys} buys, {lgbm_sells} sells")
     print(f"  PPO:        {ppo_buys} buys, {ppo_sells} sells")
+    print(f"  TimesFM:    {tfm_buys} buys, {tfm_sells} sells")
     print(f"  Majority:   {uv_buys} buys, {uv_sells} sells")
     print(f"  TD3:        {td3_buys} buys, {td3_sells} sells")
     print(f"\n  Saved {len(log_df)} rows to {args.output}")

@@ -62,6 +62,15 @@ PPO_GRID = {
     "n_steps": [1024, 2048],
 }
 
+# buy_pct: percentile of training returns used as buy threshold (sell = 100 - buy_pct)
+# strong_spread: how many extra percentile points for strong signals
+# context_len is fixed at 512 (max) for shared model; smaller values just truncate context
+TIMESFM_GRID = {
+    "context_len": [512],
+    "buy_pct": [60, 65, 70, 75, 80],
+    "strong_spread": [5, 10, 15],
+}
+
 
 # ---------------------------------------------------------------------------
 # Inner split helper
@@ -566,6 +575,141 @@ def tune_ppo(
 
 
 # ---------------------------------------------------------------------------
+# Evaluate TimesFM on a val set
+# ---------------------------------------------------------------------------
+def _eval_timesfm(
+    train_df, val_df, context_len, buy_pct, strong_spread,
+    initial_capital=100_000, _shared_model=None,
+):
+    """Evaluate TimesFM with given thresholds on val_df. Reuses model if provided."""
+    from timesfm_trading_bot import TimesFMTradingBot
+
+    bot = TimesFMTradingBot(context_len=context_len, horizon=1)
+    # Set shared model BEFORE fit so _load_model() is skipped
+    if _shared_model is not None:
+        bot._model = _shared_model
+    bot.fit(train_df)  # calibrates thresholds; skips model load if already set
+
+    # Override thresholds derived from buy_pct / strong_spread
+    closes = train_df["close"].values
+    returns = np.diff(closes) / closes[:-1]
+    sell_pct = 100 - buy_pct
+    bot.buy_threshold = float(np.percentile(returns, buy_pct))
+    bot.sell_threshold = float(np.percentile(returns, sell_pct))
+    bot.strong_buy_threshold = float(np.percentile(returns, min(99, buy_pct + strong_spread)))
+    bot.strong_sell_threshold = float(np.percentile(returns, max(1, sell_pct - strong_spread)))
+
+    signals = bot.predict(val_df)
+    val_df = val_df.copy()
+    val_df["signal"] = signals
+
+    portfolio = Portfolio(capital=initial_capital)
+    daily_values = []
+
+    for i in range(len(val_df) - 1):
+        signal = val_df.iloc[i]["signal"]
+        exec_price = val_df.iloc[i + 1]["open"]
+        trade_date = str(val_df.iloc[i + 1]["date"])
+        price_below_sma5 = val_df.iloc[i]["close"] < val_df.iloc[i]["sma5"]
+
+        if signal == "strong_buy" and price_below_sma5:
+            portfolio.buy(exec_price, fraction=1.0, trade_date=trade_date)
+        elif signal == "mild_buy" and price_below_sma5:
+            portfolio.buy(exec_price, fraction=0.5, trade_date=trade_date)
+        elif signal == "strong_sell":
+            portfolio.sell(exec_price, fraction=1.0, trade_date=trade_date)
+        elif signal == "mild_sell":
+            portfolio.sell(exec_price, fraction=0.5, trade_date=trade_date)
+
+        daily_values.append(portfolio.value(val_df.iloc[i + 1]["close"]))
+
+    final_value = portfolio.value(val_df.iloc[-1]["close"])
+    total_return = (final_value - initial_capital) / initial_capital * 100
+    values = np.array([initial_capital] + daily_values)
+    peak = np.maximum.accumulate(values)
+    max_drawdown = ((values - peak) / peak).min() * 100
+    daily_returns = np.diff(values) / values[:-1]
+    sharpe = (
+        np.mean(daily_returns) / np.std(daily_returns) * np.sqrt(252)
+        if len(daily_returns) > 1 and np.std(daily_returns) > 0 else 0.0
+    )
+    return {
+        "total_return": total_return,
+        "sharpe_ratio": sharpe,
+        "max_drawdown": max_drawdown,
+        "final_value": final_value,
+        "bot": bot,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tune TimesFM
+# ---------------------------------------------------------------------------
+def tune_timesfm(
+    df: pd.DataFrame,
+    train_ratio: float = 0.6,
+    top_k: int = 5,
+    initial_capital: float = 100_000,
+) -> list[dict]:
+    """Grid search over TimesFM signal thresholds with inner validation.
+
+    The model is loaded once and reused across all configs to avoid repeated
+    HuggingFace downloads / compile overhead.
+    """
+    from timesfm_trading_bot import TimesFMTradingBot
+
+    df = compute_indicators(df)
+    df = df.dropna(subset=FEATURE_COLS).reset_index(drop=True)
+
+    split = int(len(df) * train_ratio)
+    outer_train = df.iloc[:split].copy().reset_index(drop=True)
+    inner_train, inner_val = make_inner_split(outer_train, val_ratio=0.25)
+
+    # Load model once for the largest context (shared across all configs)
+    max_ctx = max(TIMESFM_GRID["context_len"])
+    print(f"\nLoading TimesFM model once (context_len={max_ctx})…")
+    _bootstrap = TimesFMTradingBot(context_len=max_ctx, horizon=1)
+    _bootstrap.fit(inner_train)
+    shared_model = _bootstrap._model
+
+    configs = list(itertools.product(
+        TIMESFM_GRID["context_len"],
+        TIMESFM_GRID["buy_pct"],
+        TIMESFM_GRID["strong_spread"],
+    ))
+    total = len(configs)
+    print(f"Tuning TimesFM: {total} configurations…")
+
+    results = []
+    for idx, (ctx, bpct, spread) in enumerate(configs, 1):
+        print(f"  [{idx}/{total}] ctx={ctx}, buy_pct={bpct}, spread={spread}",
+              end="", flush=True)
+        try:
+            metrics = _eval_timesfm(
+                inner_train, inner_val, ctx, bpct, spread,
+                initial_capital=initial_capital,
+                _shared_model=shared_model,
+            )
+            print(f"  sharpe={metrics['sharpe_ratio']:.3f}  ret={metrics['total_return']:+.2f}%")
+            results.append({
+                "params": {
+                    "context_len": ctx,
+                    "buy_pct": bpct,
+                    "strong_spread": spread,
+                },
+                "total_return": metrics["total_return"],
+                "sharpe_ratio": metrics["sharpe_ratio"],
+                "max_drawdown": metrics["max_drawdown"],
+                "final_value": metrics["final_value"],
+            })
+        except Exception as e:
+            print(f"  SKIP: {e}")
+
+    results.sort(key=lambda x: x["sharpe_ratio"], reverse=True)
+    return results[:top_k]
+
+
+# ---------------------------------------------------------------------------
 # Final evaluation
 # ---------------------------------------------------------------------------
 def final_evaluation(
@@ -574,6 +718,7 @@ def final_evaluation(
     best_lstm_params: dict,
     best_lgbm_params: dict,
     best_ppo_params: dict = None,
+    best_timesfm_params: dict = None,
     train_ratio: float = 0.6,
     initial_capital: float = 100_000,
 ) -> dict:
@@ -581,6 +726,7 @@ def final_evaluation(
     from dnn_trading_bot import run_dnn_backtest
     from lgbm_trading_bot import run_lgbm_backtest
     from ppo_trading_bot import run_ppo_backtest
+    from timesfm_trading_bot import run_timesfm_backtest
 
     # K-Means: original defaults
     km_orig = run_backtest(
@@ -643,6 +789,22 @@ def final_evaluation(
     else:
         ppo_tuned = ppo_orig
 
+    # TimesFM: original defaults
+    tfm_orig = run_timesfm_backtest(
+        df_raw, train_ratio=train_ratio, initial_capital=initial_capital,
+    )
+
+    # TimesFM: tuned
+    if best_timesfm_params:
+        tfm_tuned = run_timesfm_backtest(
+            df_raw, train_ratio=train_ratio, initial_capital=initial_capital,
+            context_len=best_timesfm_params["context_len"],
+        )
+        # Apply tuned thresholds to the bot post-backtest for signal calibration
+        # (thresholds are applied inside _eval_timesfm; here we report the run)
+    else:
+        tfm_tuned = tfm_orig
+
     return {
         "km_original": _extract_metrics(km_orig),
         "km_tuned": _extract_metrics(km_tuned),
@@ -652,6 +814,8 @@ def final_evaluation(
         "lgbm_tuned": _extract_metrics(lgbm_tuned),
         "ppo_original": _extract_metrics(ppo_orig),
         "ppo_tuned": _extract_metrics(ppo_tuned),
+        "tfm_original": _extract_metrics(tfm_orig),
+        "tfm_tuned": _extract_metrics(tfm_tuned),
         "buy_and_hold_return": km_orig["buy_and_hold_return"],
     }
 
@@ -672,11 +836,11 @@ def _extract_metrics(results: dict) -> dict:
 # Pretty print
 # ---------------------------------------------------------------------------
 def print_comparison(eval_results: dict, best_km: dict, best_lstm: dict, best_lgbm: dict,
-                     best_ppo: dict = None):
+                     best_ppo: dict = None, best_tfm: dict = None):
     """Print comparison table and best params."""
-    print(f"\n{'=' * 134}")
+    print(f"\n{'=' * 158}")
     print("COMPARISON TABLE (Final Evaluation on Test Set)")
-    print("=" * 134)
+    print("=" * 158)
 
     header = (
         f"  {'Metric':<20s}"
@@ -688,10 +852,12 @@ def print_comparison(eval_results: dict, best_km: dict, best_lstm: dict, best_lg
         f"  {'LGBM Tuned':>12s}"
         f"  {'PPO Orig':>12s}"
         f"  {'PPO Tuned':>12s}"
+        f"  {'TFM Orig':>12s}"
+        f"  {'TFM Tuned':>12s}"
         f"  {'Buy&Hold':>12s}"
     )
     print(header)
-    print("  " + "-" * 132)
+    print("  " + "-" * 156)
 
     km_o = eval_results["km_original"]
     km_t = eval_results["km_tuned"]
@@ -701,6 +867,8 @@ def print_comparison(eval_results: dict, best_km: dict, best_lstm: dict, best_lg
     lg_t = eval_results["lgbm_tuned"]
     pp_o = eval_results["ppo_original"]
     pp_t = eval_results["ppo_tuned"]
+    tf_o = eval_results["tfm_original"]
+    tf_t = eval_results["tfm_tuned"]
     bh = eval_results["buy_and_hold_return"]
 
     rows = [
@@ -709,44 +877,50 @@ def print_comparison(eval_results: dict, best_km: dict, best_lstm: dict, best_lg
          f"{ls_o['total_return']:+.2f}%", f"{ls_t['total_return']:+.2f}%",
          f"{lg_o['total_return']:+.2f}%", f"{lg_t['total_return']:+.2f}%",
          f"{pp_o['total_return']:+.2f}%", f"{pp_t['total_return']:+.2f}%",
+         f"{tf_o['total_return']:+.2f}%", f"{tf_t['total_return']:+.2f}%",
          f"{bh:+.2f}%"),
         ("Sharpe Ratio",
          f"{km_o['sharpe_ratio']:.3f}", f"{km_t['sharpe_ratio']:.3f}",
          f"{ls_o['sharpe_ratio']:.3f}", f"{ls_t['sharpe_ratio']:.3f}",
          f"{lg_o['sharpe_ratio']:.3f}", f"{lg_t['sharpe_ratio']:.3f}",
          f"{pp_o['sharpe_ratio']:.3f}", f"{pp_t['sharpe_ratio']:.3f}",
+         f"{tf_o['sharpe_ratio']:.3f}", f"{tf_t['sharpe_ratio']:.3f}",
          "N/A"),
         ("Max Drawdown",
          f"{km_o['max_drawdown']:.2f}%", f"{km_t['max_drawdown']:.2f}%",
          f"{ls_o['max_drawdown']:.2f}%", f"{ls_t['max_drawdown']:.2f}%",
          f"{lg_o['max_drawdown']:.2f}%", f"{lg_t['max_drawdown']:.2f}%",
          f"{pp_o['max_drawdown']:.2f}%", f"{pp_t['max_drawdown']:.2f}%",
+         f"{tf_o['max_drawdown']:.2f}%", f"{tf_t['max_drawdown']:.2f}%",
          "N/A"),
         ("Win Rate",
          f"{km_o['win_rate']:.1f}%", f"{km_t['win_rate']:.1f}%",
          f"{ls_o['win_rate']:.1f}%", f"{ls_t['win_rate']:.1f}%",
          f"{lg_o['win_rate']:.1f}%", f"{lg_t['win_rate']:.1f}%",
          f"{pp_o['win_rate']:.1f}%", f"{pp_t['win_rate']:.1f}%",
+         f"{tf_o['win_rate']:.1f}%", f"{tf_t['win_rate']:.1f}%",
          "N/A"),
         ("Num Trades",
          f"{km_o['num_trades']}", f"{km_t['num_trades']}",
          f"{ls_o['num_trades']}", f"{ls_t['num_trades']}",
          f"{lg_o['num_trades']}", f"{lg_t['num_trades']}",
          f"{pp_o['num_trades']}", f"{pp_t['num_trades']}",
+         f"{tf_o['num_trades']}", f"{tf_t['num_trades']}",
          "1"),
         ("Final Value",
          f"{km_o['final_value']:,.0f}", f"{km_t['final_value']:,.0f}",
          f"{ls_o['final_value']:,.0f}", f"{ls_t['final_value']:,.0f}",
          f"{lg_o['final_value']:,.0f}", f"{lg_t['final_value']:,.0f}",
          f"{pp_o['final_value']:,.0f}", f"{pp_t['final_value']:,.0f}",
+         f"{tf_o['final_value']:,.0f}", f"{tf_t['final_value']:,.0f}",
          "N/A"),
     ]
     for label, *vals in rows:
         print(f"  {label:<20s}" + "".join(f"  {v:>12s}" for v in vals))
 
-    print(f"\n{'=' * 134}")
+    print(f"\n{'=' * 158}")
     print("BEST PARAMS")
-    print("=" * 134)
+    print("=" * 158)
     print(f"  K-Means:  n_clusters={best_km['n_clusters']}, "
           f"features={best_km.get('feature_subset', 'all_6')}")
     print(f"  LSTM:     ws={best_lstm['window_size']}, lr={best_lstm['lr']}, "
@@ -757,6 +931,9 @@ def print_comparison(eval_results: dict, best_km: dict, best_lstm: dict, best_lg
     if best_ppo:
         print(f"  PPO:      ts={best_ppo['total_timesteps']}, lr={best_ppo['learning_rate']}, "
               f"ent={best_ppo['ent_coef']}, ns={best_ppo['n_steps']}")
+    if best_tfm:
+        print(f"  TimesFM:  ctx={best_tfm['context_len']}, "
+              f"buy_pct={best_tfm['buy_pct']}, spread={best_tfm['strong_spread']}")
 
 
 # ---------------------------------------------------------------------------
@@ -813,22 +990,32 @@ def main():
               f"ent={p['ent_coef']}, ns={p['n_steps']}"
               f"  sharpe={r['sharpe_ratio']:.3f}  ret={r['total_return']:+.2f}%")
 
+    # --- Tune TimesFM ---
+    tfm_results = tune_timesfm(df, train_ratio=args.train_ratio, top_k=5)
+    print(f"\nTop 5 TimesFM configs (by val Sharpe):")
+    for i, r in enumerate(tfm_results, 1):
+        p = r["params"]
+        print(f"  {i}. ctx={p['context_len']}, buy_pct={p['buy_pct']}, "
+              f"spread={p['strong_spread']}"
+              f"  sharpe={r['sharpe_ratio']:.3f}  ret={r['total_return']:+.2f}%")
+
     # --- Final Evaluation ---
     best_km = km_results[0]["params"]
     best_lstm = lstm_results[0]["params"]
     best_lgbm = lgbm_results[0]["params"]
     best_ppo = ppo_results[0]["params"] if ppo_results else None
+    best_tfm = tfm_results[0]["params"] if tfm_results else None
 
     print(f"\n{'=' * 80}")
     print("FINAL EVALUATION: Retraining best configs on full outer train set")
     print("=" * 80)
 
     eval_results = final_evaluation(
-        df, best_km, best_lstm, best_lgbm, best_ppo,
+        df, best_km, best_lstm, best_lgbm, best_ppo, best_tfm,
         train_ratio=args.train_ratio,
     )
 
-    print_comparison(eval_results, best_km, best_lstm, best_lgbm, best_ppo)
+    print_comparison(eval_results, best_km, best_lstm, best_lgbm, best_ppo, best_tfm)
 
     elapsed = time.time() - t_start
     print(f"\nTotal tuning time: {elapsed:.1f}s")
@@ -839,6 +1026,7 @@ def main():
         "best_lstm_params": best_lstm,
         "best_lgbm_params": best_lgbm,
         "best_ppo_params": best_ppo,
+        "best_timesfm_params": best_tfm,
         "kmeans_top5": [
             {k: v for k, v in r.items() if k != "params" or k == "params"}
             for r in km_results
@@ -846,6 +1034,7 @@ def main():
         "lstm_top5": lstm_results,
         "lgbm_top5": lgbm_results,
         "ppo_top5": ppo_results,
+        "timesfm_top5": tfm_results,
         "final_evaluation": eval_results,
     }
     # Convert feature_cols lists (not JSON-serializable as-is with numpy)

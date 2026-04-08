@@ -91,6 +91,103 @@ class TestConsensusClassify:
 
 
 # ---------------------------------------------------------------------------
+# Test download helpers
+# ---------------------------------------------------------------------------
+class TestLoadExisting:
+    def test_returns_none_when_file_missing(self, tmp_path):
+        from daily_pipeline import _load_existing
+        assert _load_existing(str(tmp_path / "nope.csv")) is None
+
+    def test_returns_none_when_empty(self, tmp_path):
+        from daily_pipeline import _load_existing
+        f = tmp_path / "empty.csv"
+        f.write_text("")
+        assert _load_existing(str(f)) is None
+
+    def test_returns_dataframe_for_valid_csv(self, tmp_path):
+        from daily_pipeline import _load_existing
+        f = tmp_path / "data.csv"
+        pd.DataFrame({"date": ["2024-01-01"], "close": [10.0]}).to_csv(f, index=False)
+        df = _load_existing(str(f))
+        assert df is not None
+        assert len(df) == 1
+
+
+class TestDownloadWithRetry:
+    def _ticker(self, csv):
+        return {"symbol": "601933", "start": "20200101", "csv": csv, "label": "test"}
+
+    def test_up_to_date_skips_download(self, tmp_path):
+        """If existing data is current, no fetch call is made."""
+        from daily_pipeline import _download_with_retry
+        csv = str(tmp_path / "data.csv")
+        today = datetime.now().strftime("%Y-%m-%d")
+        pd.DataFrame({"date": [today], "close": [10.0]}).to_csv(csv, index=False)
+
+        with patch("daily_pipeline.fetch_stock_daily") as mock_fetch:
+            result = _download_with_retry(self._ticker(csv), datetime.now().strftime("%Y%m%d"))
+        assert result is True
+        mock_fetch.assert_not_called()
+
+    def test_delta_download_when_stale(self, tmp_path):
+        """If existing data is old, fetches only the delta and appends."""
+        from daily_pipeline import _download_with_retry
+        csv = str(tmp_path / "data.csv")
+        old = pd.DataFrame({"date": ["2024-01-01", "2024-01-02"], "close": [10.0, 11.0]})
+        old.to_csv(csv, index=False)
+
+        new_rows = pd.DataFrame({"date": ["2024-01-03", "2024-01-04"], "close": [12.0, 13.0]})
+        with patch("daily_pipeline.fetch_stock_daily", return_value=new_rows):
+            result = _download_with_retry(self._ticker(csv), "20240104")
+
+        assert result is True
+        saved = pd.read_csv(csv)
+        assert len(saved) == 4
+        assert saved["date"].iloc[-1] == "2024-01-04"
+
+    def test_full_download_when_missing(self, tmp_path):
+        """If CSV is absent, downloads full history."""
+        from daily_pipeline import _download_with_retry
+        csv = str(tmp_path / "missing.csv")
+        full = pd.DataFrame({"date": ["2024-01-01", "2024-01-02"], "close": [10.0, 11.0]})
+
+        with patch("daily_pipeline.fetch_stock_daily", return_value=full):
+            result = _download_with_retry(self._ticker(csv), "20240102")
+
+        assert result is True
+        assert pd.read_csv(csv).equals(full)
+
+    def test_falls_back_to_existing_on_delta_failure(self, tmp_path):
+        """If delta download fails, returns True using existing data."""
+        from daily_pipeline import _download_with_retry
+        csv = str(tmp_path / "data.csv")
+        old = pd.DataFrame({"date": ["2024-01-01"], "close": [10.0]})
+        old.to_csv(csv, index=False)
+
+        with patch("daily_pipeline.fetch_stock_daily", side_effect=Exception("network error")):
+            result = _download_with_retry(self._ticker(csv), "20240110", retries=1)
+
+        assert result is True  # still usable from existing
+
+    def test_returns_false_when_totally_missing_and_fails(self, tmp_path):
+        """If no CSV and download fails, returns False."""
+        from daily_pipeline import _download_with_retry
+        csv = str(tmp_path / "nope.csv")
+
+        with patch("daily_pipeline.fetch_stock_daily", side_effect=Exception("network error")):
+            result = _download_with_retry(self._ticker(csv), "20240110", retries=1)
+
+        assert result is False
+
+    def test_no_index_symbols_in_tickers(self):
+        """TICKERS config must not contain any market index symbols."""
+        from daily_pipeline import TICKERS
+        for t in TICKERS:
+            assert "." not in t["symbol"], \
+                f"Index symbol found in TICKERS: {t['symbol']}"
+
+
+# ---------------------------------------------------------------------------
 # Test TICKERS config
 # ---------------------------------------------------------------------------
 class TestTickersConfig:

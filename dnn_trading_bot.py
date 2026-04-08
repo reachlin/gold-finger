@@ -6,6 +6,8 @@ into 5 categories (strong_sell to strong_buy), then executes trades via
 the same Portfolio engine used by the K-Means baseline.
 """
 
+import os
+
 import numpy as np
 import pandas as pd
 import torch
@@ -14,6 +16,7 @@ from torch.utils.data import Dataset, DataLoader
 
 from trading_bot import (
     FEATURE_COLS,
+    FEATURE_COLS_EXT,
     Portfolio,
     compute_indicators,
     LOT_SIZE,
@@ -39,7 +42,8 @@ class TradingDataset(Dataset):
         thresholds: np.ndarray | None = None,
     ):
         self.window_size = window_size
-        features = df[FEATURE_COLS].values.astype(np.float32)
+        feat_cols = FEATURE_COLS_EXT if "tfm_sma5_ret" in df.columns else FEATURE_COLS
+        features = df[feat_cols].values.astype(np.float32)
 
         # Forward 1-day return
         closes = df["close"].values
@@ -124,10 +128,12 @@ class DNNTradingBot:
         self.scaler_mean = None
         self.scaler_std = None
         self.thresholds = None
+        self.feature_cols = FEATURE_COLS  # updated in fit() if tfm_sma5_ret present
 
     def fit(self, df: pd.DataFrame):
         """Train the LSTM on the given DataFrame (must have indicators computed)."""
-        features = df[FEATURE_COLS].values.astype(np.float32)
+        self.feature_cols = FEATURE_COLS_EXT if "tfm_sma5_ret" in df.columns else FEATURE_COLS
+        features = df[self.feature_cols].values.astype(np.float32)
 
         # Fit scaler on training data
         self.scaler_mean = features.mean(axis=0)
@@ -136,7 +142,7 @@ class DNNTradingBot:
 
         # Normalize
         df_scaled = df.copy()
-        for i, col in enumerate(FEATURE_COLS):
+        for i, col in enumerate(self.feature_cols):
             df_scaled[col] = (df_scaled[col] - self.scaler_mean[i]) / self.scaler_std[i]
 
         # Create dataset (thresholds computed from training data)
@@ -162,7 +168,7 @@ class DNNTradingBot:
 
         # Model
         self.model = LSTMTradingModel(
-            input_size=len(FEATURE_COLS),
+            input_size=len(self.feature_cols),
             hidden1=self.hidden1,
             hidden2=self.hidden2,
         )
@@ -219,14 +225,14 @@ class DNNTradingBot:
     def _scale_df(self, df: pd.DataFrame) -> pd.DataFrame:
         """Apply stored scaler to a DataFrame."""
         df_scaled = df.copy()
-        for i, col in enumerate(FEATURE_COLS):
+        for i, col in enumerate(self.feature_cols):
             df_scaled[col] = (df_scaled[col] - self.scaler_mean[i]) / self.scaler_std[i]
         return df_scaled
 
     def predict(self, df: pd.DataFrame) -> list[str]:
         """Predict signals for all valid windows in df."""
         df_scaled = self._scale_df(df)
-        features = df_scaled[FEATURE_COLS].values.astype(np.float32)
+        features = df_scaled[self.feature_cols].values.astype(np.float32)
 
         signals = []
         self.model.eval()
@@ -243,13 +249,47 @@ class DNNTradingBot:
     def predict_single(self, df: pd.DataFrame) -> str:
         """Predict signal from the last window_size rows of df."""
         df_scaled = self._scale_df(df)
-        features = df_scaled[FEATURE_COLS].values.astype(np.float32)
+        features = df_scaled[self.feature_cols].values.astype(np.float32)
         window = torch.tensor(features[-self.window_size :]).unsqueeze(0)
         self.model.eval()
         with torch.no_grad():
             logits = self.model(window)
             pred = logits.argmax(dim=1).item()
         return SIGNAL_NAMES[pred]
+
+    def save(self, path: str):
+        """Save trained LSTM state to a .pt file."""
+        torch.save({
+            "state_dict": self.model.state_dict(),
+            "scaler_mean": self.scaler_mean,
+            "scaler_std": self.scaler_std,
+            "thresholds": self.thresholds,
+            "feature_cols": self.feature_cols,
+            "window_size": self.window_size,
+            "hidden1": self.hidden1,
+            "hidden2": self.hidden2,
+        }, path)
+
+    @classmethod
+    def load(cls, path: str) -> "DNNTradingBot":
+        """Load a trained DNNTradingBot from a .pt file."""
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Model file not found: {path}")
+        data = torch.load(path, weights_only=False)
+        bot = cls(
+            window_size=data["window_size"],
+            hidden1=data["hidden1"],
+            hidden2=data["hidden2"],
+        )
+        bot.feature_cols = data["feature_cols"]
+        bot.scaler_mean = data["scaler_mean"]
+        bot.scaler_std = data["scaler_std"]
+        bot.thresholds = data["thresholds"]
+        n_features = len(data["feature_cols"])
+        bot.model = LSTMTradingModel(n_features, data["hidden1"], data["hidden2"])
+        bot.model.load_state_dict(data["state_dict"])
+        bot.model.eval()
+        return bot
 
 
 # ---------------------------------------------------------------------------

@@ -8,6 +8,7 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -41,8 +42,7 @@ from range_predictor import RangePredictor
 # Config
 # ---------------------------------------------------------------------------
 TICKERS = [
-    {"symbol": "601933", "start": "20160101", "csv": "data/601933_10yr.csv",    "capital": 100_000, "label": "601933 Yonghui"},
-    {"symbol": "000001.SH", "start": "20060101", "csv": "data/000001SH_20yr.csv", "capital": 1_000_000, "label": "000001.SH Shanghai Composite"},
+    {"symbol": "601933", "start": "20160101", "csv": "data/601933_10yr.csv", "capital": 100_000, "label": "601933 Yonghui"},
 ]
 
 
@@ -144,37 +144,84 @@ def _print_tuning_table(results: dict, title: str, best_params: dict):
 # ---------------------------------------------------------------------------
 # Download
 # ---------------------------------------------------------------------------
-def _download_with_retry(ticker: dict, end_date: str, retries: int = 3, backoff: int = 15) -> bool:
-    """Download ticker data, retrying on transient errors.
+def _load_existing(csv: str) -> pd.DataFrame | None:
+    """Return existing CSV as DataFrame, or None if missing/unreadable."""
+    if not os.path.exists(csv):
+        return None
+    try:
+        df = pd.read_csv(csv)
+        if df.empty or "date" not in df.columns:
+            return None
+        return df
+    except Exception:
+        return None
 
-    Returns True if data is available (fresh download or existing CSV),
-    False if the download failed and no usable CSV exists.
+
+def _download_with_retry(ticker: dict, end_date: str, retries: int = 3, backoff: int = 15) -> bool:
+    """Smart download: delta-only if CSV exists, full history if missing.
+
+    - Existing CSV → fetch only rows after last date → append → save.
+    - Missing CSV  → fetch full history from ticker["start"] → save.
+    Returns True if usable data is available, False on total failure.
     """
     symbol, start = ticker["symbol"], ticker["start"]
     csv, label = ticker["csv"], ticker["label"]
 
     os.makedirs(os.path.dirname(csv) if os.path.dirname(csv) else ".", exist_ok=True)
 
-    for attempt in range(1, retries + 1):
-        try:
-            df = fetch_stock_daily(symbol, start_date=start, end_date=end_date)
-            df.to_csv(csv, index=False)
-            print(f"  {label:<35s}  {len(df):>5d} rows  "
-                  f"({df['date'].iloc[0]} to {df['date'].iloc[-1]})")
+    existing = _load_existing(csv)
+
+    if existing is not None:
+        last_date = pd.to_datetime(existing["date"]).max()
+        delta_start = (last_date + timedelta(days=1)).strftime("%Y%m%d")
+        delta_end = end_date
+
+        if delta_start > delta_end:
+            print(f"  {label:<35s}  already up to date ({last_date.date()})")
             return True
-        except Exception as e:
-            if attempt < retries:
-                wait = backoff * attempt
-                print(f"  {label:<35s}  attempt {attempt}/{retries} FAILED: {e}  "
-                      f"(retrying in {wait}s)")
-                time.sleep(wait)
-            else:
-                if os.path.exists(csv):
-                    print(f"  {label:<35s}  download FAILED after {retries} attempts: {e}")
-                    print(f"  {label:<35s}  WARNING: using existing (possibly stale) CSV")
+
+        # Download only the delta
+        for attempt in range(1, retries + 1):
+            try:
+                delta = fetch_stock_daily(symbol, start_date=delta_start, end_date=delta_end)
+                if delta.empty:
+                    print(f"  {label:<35s}  no new rows since {last_date.date()}")
                     return True
-                print(f"  {label:<35s}  FAILED after {retries} attempts: {e}")
-                return False
+                combined = pd.concat([existing, delta], ignore_index=True)
+                combined = combined.drop_duplicates(subset=["date"]).sort_values("date")
+                combined.to_csv(csv, index=False)
+                print(f"  {label:<35s}  +{len(delta):>4d} new rows  "
+                      f"(now {len(combined)} total, up to {combined['date'].iloc[-1]})")
+                return True
+            except Exception as e:
+                if attempt < retries:
+                    wait = backoff * attempt
+                    print(f"  {label:<35s}  delta attempt {attempt}/{retries} FAILED: {e}  "
+                          f"(retrying in {wait}s)")
+                    time.sleep(wait)
+                else:
+                    print(f"  {label:<35s}  delta download FAILED: {e}  "
+                          f"(using existing {len(existing)} rows)")
+                    return True
+    else:
+        # No existing data — download full history
+        print(f"  {label:<35s}  no local data, downloading full history from {start}…")
+        for attempt in range(1, retries + 1):
+            try:
+                df = fetch_stock_daily(symbol, start_date=start, end_date=end_date)
+                df.to_csv(csv, index=False)
+                print(f"  {label:<35s}  {len(df):>5d} rows  "
+                      f"({df['date'].iloc[0]} to {df['date'].iloc[-1]})")
+                return True
+            except Exception as e:
+                if attempt < retries:
+                    wait = backoff * attempt
+                    print(f"  {label:<35s}  attempt {attempt}/{retries} FAILED: {e}  "
+                          f"(retrying in {wait}s)")
+                    time.sleep(wait)
+                else:
+                    print(f"  {label:<35s}  FAILED after {retries} attempts: {e}")
+                    return False
 
 
 def download_all(end_date: str) -> set:
@@ -851,6 +898,65 @@ def main():
         print(f"    PPO:      {ppo_sig:<14s} -> {ppo_dir}")
         print(f"    TD3:      {td3_sig:<14s} -> {td3_dir}")
         print(f"    Majority vote (>= 3/4): {verdict}")
+
+    # --- Step 5b: Save trained models ---
+    print(f"\n{'=' * 76}")
+    print("SAVING MODELS")
+    print("=" * 76)
+    for ticker in tickers:
+        symbol = ticker["symbol"]
+        model_dir = os.path.join("models", symbol)
+        os.makedirs(model_dir, exist_ok=True)
+
+        csv = ticker["csv"]
+        df_raw = pd.read_csv(csv)
+        df = compute_indicators(df_raw).dropna(subset=FEATURE_COLS).reset_index(drop=True)
+
+        # Train on all data and save
+        km_bot = TradingBot(n_clusters=5)
+        km_bot.fit(df)
+        km_bot.save(os.path.join(model_dir, "kmeans.joblib"))
+
+        lstm_bot = DNNTradingBot(window_size=20, epochs=50, batch_size=32, lr=0.001)
+        lstm_bot.fit(df)
+        lstm_bot.save(os.path.join(model_dir, "lstm.pt"))
+
+        lgbm_bot = LGBMTradingBot()
+        lgbm_bot.fit(df)
+        lgbm_bot.save(os.path.join(model_dir, "lgbm.joblib"))
+
+        ppo_bot = PPOTradingBot()
+        ppo_bot.fit(df)
+        ppo_bot.save(model_dir)
+
+        # Save metadata
+        results = all_results[symbol]
+        metadata = {
+            "symbol": symbol,
+            "label": ticker["label"],
+            "train_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "data_rows": len(df),
+            "data_range": {
+                "start": str(df["date"].iloc[0]),
+                "end": str(df["date"].iloc[-1]),
+            },
+            "backtest_metrics": {
+                name: {
+                    "total_return": r["total_return"],
+                    "sharpe_ratio": r["sharpe_ratio"],
+                    "max_drawdown": r["max_drawdown"],
+                    "win_rate": r["win_rate"],
+                    "num_trades": r["num_trades"],
+                }
+                for name, r in results.items()
+                if isinstance(r, dict) and "total_return" in r
+            },
+        }
+        meta_path = os.path.join(model_dir, "metadata.json")
+        with open(meta_path, "w") as f:
+            json.dump(metadata, f, indent=2)
+
+        print(f"  {ticker['label']}: saved to {model_dir}/")
 
     # --- Step 6: Price range prediction ---
     for ticker in tickers:

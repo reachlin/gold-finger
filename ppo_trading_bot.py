@@ -9,8 +9,11 @@ Action space: Discrete(5) -> SIGNAL_NAMES [strong_sell..strong_buy]
 Observation:  Box(10,) = 6 z-scored indicators + 4 portfolio state features
 """
 
+import os
+
 import numpy as np
 import pandas as pd
+import joblib
 import gymnasium as gym
 from gymnasium import spaces
 from sklearn.preprocessing import StandardScaler
@@ -223,6 +226,23 @@ class PPOTradingBot:
         obs = np.concatenate([X.astype(np.float32), neutral_state])
         action, _ = self.model.predict(obs, deterministic=True)
         return SIGNAL_NAMES[int(action)]
+
+    def save(self, directory: str):
+        """Save trained PPO model and scaler to a directory."""
+        self.model.save(os.path.join(directory, "ppo_model.zip"))
+        joblib.dump(self.scaler, os.path.join(directory, "ppo_scaler.joblib"))
+
+    @classmethod
+    def load(cls, directory: str) -> "PPOTradingBot":
+        """Load a trained PPOTradingBot from a directory."""
+        model_path = os.path.join(directory, "ppo_model.zip")
+        scaler_path = os.path.join(directory, "ppo_scaler.joblib")
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"PPO model not found: {model_path}")
+        bot = cls()
+        bot.model = PPO.load(model_path)
+        bot.scaler = joblib.load(scaler_path)
+        return bot
 
 
 # ---------------------------------------------------------------------------

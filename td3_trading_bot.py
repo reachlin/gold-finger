@@ -17,8 +17,11 @@ Workflow:
   4. Evaluate TD3 on the augmented test set with identical backtest rules.
 """
 
+import os
+
 import numpy as np
 import pandas as pd
+import joblib
 import gymnasium as gym
 from gymnasium import spaces
 from sklearn.preprocessing import StandardScaler
@@ -319,6 +322,23 @@ class TD3TradingBot:
         obs = np.concatenate([signal_feats, indicator_vals, neutral_portfolio])
         action, _ = self.model.predict(obs, deterministic=True)
         return action_to_signal(float(action[0]))
+
+    def save(self, directory: str):
+        """Save trained TD3 model and scaler to a directory."""
+        self.model.save(os.path.join(directory, "td3_model.zip"))
+        joblib.dump(self.scaler, os.path.join(directory, "td3_scaler.joblib"))
+
+    @classmethod
+    def load(cls, directory: str) -> "TD3TradingBot":
+        """Load a trained TD3TradingBot from a directory."""
+        model_path = os.path.join(directory, "td3_model.zip")
+        scaler_path = os.path.join(directory, "td3_scaler.joblib")
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"TD3 model not found: {model_path}")
+        bot = cls()
+        bot.model = TD3.load(model_path)
+        bot.scaler = joblib.load(scaler_path)
+        return bot
 
 
 # ---------------------------------------------------------------------------
