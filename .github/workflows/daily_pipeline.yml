@@ -7,17 +7,6 @@ on:
     # Runs Mon–Fri only
     - cron: "30 10 * * 1-5"
   workflow_dispatch:
-    inputs:
-      skip_tune:
-        description: "Skip hyperparameter tuning"
-        required: false
-        default: "true"
-        type: boolean
-      predict_only:
-        description: "Predict only (skip training, use saved models)"
-        required: false
-        default: "false"
-        type: boolean
 
 jobs:
   run-pipeline:
@@ -43,9 +32,7 @@ jobs:
       - name: Run daily pipeline
         shell: bash -el {0}
         run: |
-          SKIP_TUNE="${{ github.event.inputs.skip_tune != 'false' && '--skip-tune' || '' }}"
-          PREDICT_ONLY="${{ github.event.inputs.predict_only == 'true' && '--predict-only' || '' }}"
-          python daily_pipeline.py --ticker 601933 $SKIP_TUNE $PREDICT_ONLY 2>&1 | tee pipeline_output.txt
+          python daily_pipeline.py --ticker 601933 --predict-only 2>&1 | tee pipeline_output.txt
 
       - name: Upload pipeline output
         uses: actions/upload-artifact@v4
