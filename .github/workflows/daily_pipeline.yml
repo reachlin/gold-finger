@@ -13,17 +13,16 @@ on:
         required: false
         default: "true"
         type: boolean
+      predict_only:
+        description: "Predict only (skip training, use saved models)"
+        required: false
+        default: "false"
+        type: boolean
 
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
     timeout-minutes: 45
-
-    strategy:
-      matrix:
-        ticker: [601328, 601933]
-      fail-fast: false
-      max-parallel: 1
 
     steps:
       - name: Checkout repository
@@ -45,13 +44,14 @@ jobs:
         shell: bash -el {0}
         run: |
           SKIP_TUNE="${{ github.event.inputs.skip_tune != 'false' && '--skip-tune' || '' }}"
-          python daily_pipeline.py --ticker "${{ matrix.ticker }}" $SKIP_TUNE 2>&1 | tee pipeline_output.txt
+          PREDICT_ONLY="${{ github.event.inputs.predict_only == 'true' && '--predict-only' || '' }}"
+          python daily_pipeline.py --ticker 601933 $SKIP_TUNE $PREDICT_ONLY 2>&1 | tee pipeline_output.txt
 
       - name: Upload pipeline output
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: pipeline-output-${{ matrix.ticker }}-${{ github.run_id }}
+          name: pipeline-output-601933-${{ github.run_id }}
           path: pipeline_output.txt
           retention-days: 30
 
@@ -68,7 +68,7 @@ jobs:
               print("SLACK_WEBHOOK_URL not set, skipping")
               exit(0)
 
-          ticker = "${{ matrix.ticker }}"
+          ticker = "601933"
           run_url = "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           try:
