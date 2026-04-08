@@ -767,6 +767,10 @@ def main():
         help="Initial capital when using --ticker (default: 100000)",
     )
     parser.add_argument(
+        "--predict-only", action="store_true",
+        help="Skip training; load saved models from models/<symbol>/ and predict today's signal.",
+    )
+    parser.add_argument(
         "--report", action="store_true",
         help="Backtest every *_20yr.csv in --data-dir, rank stocks, and write stock_report.md.",
     )
@@ -797,6 +801,15 @@ def main():
         }]
     else:
         tickers = TICKERS
+
+    # --- Predict-only mode: load saved models and output signals ---
+    if args.predict_only:
+        from predict import predict as run_predict
+        for ticker in tickers:
+            sym = ticker["symbol"]
+            csv = ticker.get("csv")
+            run_predict(sym, csv)
+        return
 
     # --- Step 1: Download ---
     print("=" * 76)
