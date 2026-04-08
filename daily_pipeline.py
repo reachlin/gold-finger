@@ -802,13 +802,22 @@ def main():
     else:
         tickers = TICKERS
 
-    # --- Predict-only mode: load saved models and output signals ---
+    # --- Predict-only mode: evaluate drift and predict signals ---
     if args.predict_only:
-        from predict import predict as run_predict
+        from predict import evaluate as run_evaluate
+        from fetch_china_stock import fetch_stock_daily
+
         for ticker in tickers:
             sym = ticker["symbol"]
             csv = ticker.get("csv")
-            run_predict(sym, csv)
+
+            # Download latest data before evaluating
+            if csv:
+                print(f"Updating data for {sym}...")
+                _download_with_retry(ticker, end_date)
+
+            result = run_evaluate(sym, csv, notify=True)
+            print(json.dumps(result, indent=2))
         return
 
     # --- Step 1: Download ---

@@ -67,20 +67,21 @@ jobs:
               m = re.search(pattern, text)
               return m.group(1).strip() if m else default
 
-          date    = find(r"(\d{4}-\d{2}-\d{2}), close=")
-          close   = find(r", close=([\d.]+)\)")
-          verdict = find(r"Majority vote \(>= 3/4\): (.+)")
-          pred_low  = find(r"Pred low\s+:\s+([\d.]+)")
-          pred_high = find(r"Pred high\s+:\s+([\d.]+)")
-          score     = find(r"Score / pred\s+:\s+([+-]?[\d.]+)")
+          date     = find(r"Latest data: (\d{4}-\d{2}-\d{2})")
+          close    = find(r"close=([\d.]+)")
+          signal   = find(r"Today's signal: (.+)")
+          accuracy = find(r"Overall accuracy:\s+([\d.]+%)")
+          roll_acc = find(r"Rolling 20d accuracy:\s+([\d.]+%)")
+          retrain  = find(r"Needs retrain:\s+(\w+)")
 
-          emoji = {"BUY": ":green_circle:", "SELL": ":red_circle:"}.get(verdict, ":white_circle:")
+          emoji = {"BUY": ":green_circle:", "SELL": ":red_circle:"}.get(signal, ":white_circle:")
+          status = ":warning: *Model needs retraining!*" if retrain == "YES" else ":white_check_mark: Model OK"
 
           msg = (
               f"*{ticker}* — {date}  |  close: *{close}*\n"
-              f"{emoji} Signal: *{verdict}*\n"
-              f":chart_with_upwards_trend: Pred range: *{pred_low} – {pred_high}*\n"
-              f":bar_chart: Score/pred: *{score}*\n"
+              f"{emoji} Signal: *{signal}*\n"
+              f":bar_chart: Accuracy: *{accuracy}* (20d: *{roll_acc}*)\n"
+              f"{status}\n"
               f"<{run_url}|View full output>"
           )
 
