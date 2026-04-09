@@ -637,6 +637,56 @@ class RangePredictor:
         return pred_low, pred_high
 
     # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def save(self, path: str) -> None:
+        """Save trained model weights, scaler, and config to a .pt file."""
+        torch.save({
+            "model_state": self.model.state_dict(),
+            "scaler_mean": self.scaler_mean,
+            "scaler_std": self.scaler_std,
+            "config": {
+                "window_size": self.window_size,
+                "hidden": self.hidden,
+                "num_layers": self.num_layers,
+                "fc_sizes": self.fc_sizes,
+                "dropout": self.dropout,
+                "layer_norm": self.layer_norm,
+                "use_attention": self.use_attention,
+                "tau_low": self.tau_low,
+                "tau_high": self.tau_high,
+                "ordering_weight": self.ordering_weight,
+                "match_pct": self.match_pct,
+                "epochs": self.epochs,
+                "batch_size": self.batch_size,
+                "lr": self.lr,
+                "patience": self.patience,
+            },
+        }, path)
+
+    @classmethod
+    def load(cls, path: str) -> "RangePredictor":
+        """Load a saved RangePredictor from a .pt file."""
+        data = torch.load(path, map_location="cpu", weights_only=False)
+        cfg = data["config"]
+        obj = cls(**cfg)
+        obj.scaler_mean = data["scaler_mean"]
+        obj.scaler_std = data["scaler_std"]
+        obj.model = BiLSTMRangeModel(
+            input_size=len(FEATURE_COLS),
+            hidden=cfg["hidden"],
+            num_layers=cfg["num_layers"],
+            fc_sizes=cfg["fc_sizes"],
+            dropout=cfg["dropout"],
+            layer_norm=cfg["layer_norm"],
+            use_attention=cfg["use_attention"],
+        )
+        obj.model.load_state_dict(data["model_state"])
+        obj.model.eval()
+        return obj
+
+    # ------------------------------------------------------------------
     # Evaluation
     # ------------------------------------------------------------------
 

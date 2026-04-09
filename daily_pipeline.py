@@ -520,11 +520,12 @@ _RANGE_PREDICTOR_CONFIG = dict(
 )
 
 
-def run_price_prediction(ticker: dict) -> dict:
+def run_price_prediction(ticker: dict, save_path: str | None = None) -> dict:
     """Train RangePredictor on all data and predict next-day (low, high).
 
     Also runs a 70/30 walk-forward backtest to report prediction quality.
     Returns a dict with prediction and scoring keys.
+    If save_path is given, saves the trained full predictor there.
     """
     csv, label = ticker["csv"], ticker["label"]
     df_raw = pd.read_csv(csv)
@@ -542,6 +543,9 @@ def run_price_prediction(ticker: dict) -> dict:
     # --- Full retrain on all data for next-day prediction ---
     full_predictor = RangePredictor(**_RANGE_PREDICTOR_CONFIG)
     full_predictor.fit(df)
+    if save_path:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        full_predictor.save(save_path)
     pred_low, pred_high = full_predictor.predict_single(df)
 
     last = df.iloc[-1]
@@ -818,6 +822,31 @@ def main():
 
             result = run_evaluate(sym, csv, notify=True)
             print(json.dumps(result, indent=2))
+
+            # Price range prediction: load saved model, skip retraining
+            range_model_path = os.path.join("models", sym, "range_predictor.pt")
+            try:
+                if os.path.exists(range_model_path):
+                    df_raw = pd.read_csv(csv)
+                    df = compute_indicators(df_raw).dropna(subset=FEATURE_COLS).reset_index(drop=True)
+                    predictor = RangePredictor.load(range_model_path)
+                    pred_low, pred_high = predictor.predict_single(df)
+                    last = df.iloc[-1]
+                    pred_result = {
+                        "pred_low": pred_low,
+                        "pred_high": pred_high,
+                        "last_date": str(last["date"]),
+                        "last_close": float(last["close"]),
+                        "score_per_pred": 0.0,
+                        "n_predictions": 0,
+                        "plus_two": 0, "plus_one": 0,
+                        "zero": 0, "minus_one": 0,
+                    }
+                    print_price_prediction(pred_result, ticker["label"])
+                else:
+                    print(f"  No saved range predictor found at {range_model_path}, skipping.")
+            except Exception as e:
+                print(f"  Price prediction failed for {ticker['label']}: {e}")
         return
 
     # --- Step 1: Download ---
@@ -982,9 +1011,12 @@ def main():
 
     # --- Step 6: Price range prediction ---
     for ticker in tickers:
+        symbol = ticker["symbol"]
+        model_dir = os.path.join("models", symbol)
+        range_model_path = os.path.join(model_dir, "range_predictor.pt")
         print(f"\nTraining price predictor for {ticker['label']}...")
         try:
-            pred_result = run_price_prediction(ticker)
+            pred_result = run_price_prediction(ticker, save_path=range_model_path)
             print_price_prediction(pred_result, ticker["label"])
         except Exception as e:
             print(f"  Price prediction failed for {ticker['label']}: {e}")
