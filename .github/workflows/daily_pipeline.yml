@@ -73,14 +73,18 @@ jobs:
           accuracy = find(r"Overall accuracy:\s+([\d.]+%)")
           roll_acc = find(r"Rolling 20d accuracy:\s+([\d.]+%)")
           retrain  = find(r"Needs retrain:\s+(\w+)")
+          pred_low  = find(r"Pred low\s+:\s+([\d.]+)")
+          pred_high = find(r"Pred high\s+:\s+([\d.]+)")
 
           emoji = {"BUY": ":green_circle:", "SELL": ":red_circle:"}.get(signal, ":white_circle:")
           status = ":warning: *Model needs retraining!*" if retrain == "YES" else ":white_check_mark: Model OK"
+          range_line = f":dart: Next-day range: *{pred_low} – {pred_high}*\n" if pred_low != "N/A" else ""
 
           msg = (
               f"*{ticker}* — {date}  |  close: *{close}*\n"
               f"{emoji} Signal: *{signal}*\n"
               f":bar_chart: Accuracy: *{accuracy}* (20d: *{roll_acc}*)\n"
+              f"{range_line}"
               f"{status}\n"
               f"<{run_url}|View full output>"
           )
