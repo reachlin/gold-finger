@@ -815,10 +815,15 @@ def main():
             sym = ticker["symbol"]
             csv = ticker.get("csv")
 
-            # Download latest data before evaluating
+            # Download latest data before evaluating; fall back to cached CSV on failure
             if csv:
                 print(f"Updating data for {sym}...")
-                _download_with_retry(ticker, end_date)
+                ok = _download_with_retry(ticker, end_date)
+                if not ok and not os.path.exists(csv):
+                    print(f"  Download failed and no cached data available for {sym}, skipping.")
+                    continue
+                if not ok:
+                    print(f"  Download failed; using cached data for {sym}.")
 
             result = run_evaluate(sym, csv, notify=True)
             print(json.dumps(result, indent=2))
