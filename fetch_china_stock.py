@@ -90,12 +90,60 @@ def _fetch_etf_daily(
     return df
 
 
+def _fetch_baostock(
+    symbol: str,
+    start_date: str,
+    end_date: str,
+) -> pd.DataFrame:
+    """Fetch via baostock as fallback. Dates in YYYYMMDD or YYYY-MM-DD format."""
+    try:
+        import baostock as bs
+    except ImportError:
+        raise RuntimeError("baostock not installed; run: pip install baostock")
+
+    # baostock wants YYYY-MM-DD
+    def _fmt(d: str) -> str:
+        return f"{d[:4]}-{d[4:6]}-{d[6:]}" if len(d) == 8 else d
+
+    # determine exchange prefix: 6xxxxx -> sh, others -> sz
+    prefix = "sh" if symbol.startswith("6") else "sz"
+    bs_symbol = f"{prefix}.{symbol}"
+
+    lg = bs.login()
+    if lg.error_code != "0":
+        raise RuntimeError(f"baostock login failed: {lg.error_msg}")
+
+    rs = bs.query_history_k_data_plus(
+        bs_symbol,
+        "date,open,high,low,close,volume,amount,turn",
+        start_date=_fmt(start_date),
+        end_date=_fmt(end_date),
+        frequency="d",
+        adjustflag="2",  # forward-adjusted
+    )
+    rows = []
+    while rs.error_code == "0" and rs.next():
+        rows.append(rs.get_row_data())
+    bs.logout()
+
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows, columns=["date", "open", "high", "low", "close",
+                                      "volume", "amount", "turnover_rate"])
+    for col in ["open", "high", "low", "close", "volume", "amount", "turnover_rate"]:
+        df[col] = pd.to_numeric(df[col])
+    return df
+
+
 def fetch_stock_daily(
     symbol: str,
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> pd.DataFrame:
     """Fetch daily OHLCV data for a China A-share stock, ETF, or index.
+
+    Tries akshare first; falls back to baostock if akshare raises an error.
 
     Args:
         symbol: Stock ticker number, e.g. "000001" (Ping An Bank),
@@ -116,36 +164,40 @@ def fetch_stock_daily(
     if start_date is None:
         start_date = (datetime.now() - timedelta(days=365)).strftime("%Y%m%d")
 
-    df = ak.stock_zh_a_hist(
-        symbol=symbol,
-        period="daily",
-        start_date=start_date,
-        end_date=end_date,
-        adjust="qfq",  # forward-adjusted prices
-    )
+    try:
+        df = ak.stock_zh_a_hist(
+            symbol=symbol,
+            period="daily",
+            start_date=start_date,
+            end_date=end_date,
+            adjust="qfq",  # forward-adjusted prices
+        )
 
-    # If empty, try ETF fetch
-    if df.empty:
-        return _fetch_etf_daily(symbol, start_date, end_date)
+        # If empty, try ETF fetch
+        if df.empty:
+            return _fetch_etf_daily(symbol, start_date, end_date)
 
-    # Rename columns from Chinese to English
-    column_map = {
-        "日期": "date",
-        "股票代码": "symbol",
-        "开盘": "open",
-        "收盘": "close",
-        "最高": "high",
-        "最低": "low",
-        "成交量": "volume",
-        "成交额": "amount",
-        "振幅": "amplitude",
-        "涨跌幅": "pct_change",
-        "涨跌额": "change",
-        "换手率": "turnover_rate",
-    }
-    df.rename(columns=column_map, inplace=True)
+        # Rename columns from Chinese to English
+        column_map = {
+            "日期": "date",
+            "股票代码": "symbol",
+            "开盘": "open",
+            "收盘": "close",
+            "最高": "high",
+            "最低": "low",
+            "成交量": "volume",
+            "成交额": "amount",
+            "振幅": "amplitude",
+            "涨跌幅": "pct_change",
+            "涨跌额": "change",
+            "换手率": "turnover_rate",
+        }
+        df.rename(columns=column_map, inplace=True)
+        return df
 
-    return df
+    except Exception as e:
+        print(f"  akshare failed ({e}), falling back to baostock...")
+        return _fetch_baostock(symbol, start_date, end_date)
 
 
 def main():
