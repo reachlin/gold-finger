@@ -86,16 +86,21 @@ jobs:
           pred_low  = find(r"Pred low\s+:\s+([\d.]+)")
           pred_high = find(r"Pred high\s+:\s+([\d.]+)")
 
+          from datetime import date as _date
+          today = _date.today().strftime("%m-%d")
+
           emoji = {"BUY": ":green_circle:", "SELL": ":red_circle:"}.get(signal, ":white_circle:")
           status = ":warning: *Model needs retraining!*" if retrain == "YES" else ":white_check_mark: Model OK"
-          range_line = f":dart: Next-day range: *{pred_low} – {pred_high}*\n" if pred_low != "N/A" else ""
+          range_line = f":dart: *{today} range: {pred_low} – {pred_high}*\n" if pred_low != "N/A" else ""
 
           msg = (
-              f"*{ticker}* — {date}  |  close: *{close}*\n"
+              f"*{ticker} Daily Prediction*\n"
+              f"\n"
               f"{emoji} Signal: *{signal}*\n"
               f":bar_chart: Accuracy: *{accuracy}* (20d: *{roll_acc}*)\n"
               f"{range_line}"
               f"{status}\n"
+              f"_From data by {date}  |  close: {close}_\n"
               f"<{run_url}|View full output>"
           )
 
