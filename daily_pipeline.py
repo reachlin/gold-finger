@@ -187,7 +187,9 @@ def _download_with_retry(ticker: dict, end_date: str, retries: int = 5, backoff:
                 if delta.empty:
                     print(f"  {label:<35s}  no new rows since {last_date.date()}")
                     return True
+                delta["date"] = pd.to_datetime(delta["date"]).dt.strftime("%Y-%m-%d")
                 combined = pd.concat([existing, delta], ignore_index=True)
+                combined["date"] = pd.to_datetime(combined["date"]).dt.strftime("%Y-%m-%d")
                 combined = combined.drop_duplicates(subset=["date"]).sort_values("date")
                 combined.to_csv(csv, index=False)
                 print(f"  {label:<35s}  +{len(delta):>4d} new rows  "
