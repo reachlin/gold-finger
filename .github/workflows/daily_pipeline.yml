@@ -29,15 +29,13 @@ jobs:
         shell: bash -el {0}
         run: pip install -r requirements.txt
 
-      - name: Restore cached data and models
+      - name: Restore cached models
         uses: actions/cache@v4
         with:
-          path: |
-            data/
-            models/
-          key: pipeline-data-models-601933-${{ github.run_id }}
+          path: models/
+          key: pipeline-models-601933-${{ github.run_id }}
           restore-keys: |
-            pipeline-data-models-601933-
+            pipeline-models-601933-
 
       - name: Run daily pipeline
         shell: bash -el {0}
