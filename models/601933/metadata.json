@@ -1,10 +1,54 @@
 {
   "symbol": "601933",
-  "label": "601933 Yonghui",
-  "train_date": "2026-04-08 16:24:22",
-  "data_rows": 2421,
+  "label": "601933",
+  "train_date": "2026-04-09 01:02:00",
+  "data_rows": 3661,
   "data_range": {
-    "start": "2016-02-25",
-    "end": "2026-02-13"
+    "start": "2011-02-01",
+    "end": "2026-04-08"
+  },
+  "backtest_metrics": {
+    "km": {
+      "total_return": -43.82802124999997,
+      "sharpe_ratio": -0.6727268053405029,
+      "max_drawdown": -50.16841074850906,
+      "win_rate": 65.56603773584906,
+      "num_trades": 555
+    },
+    "lstm": {
+      "total_return": 58.76270699999999,
+      "sharpe_ratio": 0.4840067808040774,
+      "max_drawdown": -28.62683746062023,
+      "win_rate": 59.09090909090909,
+      "num_trades": 54
+    },
+    "lgbm": {
+      "total_return": -68.19406825000007,
+      "sharpe_ratio": -0.8284832746298654,
+      "max_drawdown": -73.58208828200713,
+      "win_rate": 61.563517915309454,
+      "num_trades": 617
+    },
+    "ppo": {
+      "total_return": -57.56340125000001,
+      "sharpe_ratio": -0.21624374896002435,
+      "max_drawdown": -81.4213051312675,
+      "win_rate": 65.51724137931035,
+      "num_trades": 95
+    },
+    "majority": {
+      "total_return": -61.09007849999999,
+      "sharpe_ratio": -0.471085796728886,
+      "max_drawdown": -74.54455689071477,
+      "win_rate": 64.0,
+      "num_trades": 51
+    },
+    "td3": {
+      "total_return": -43.301398750000125,
+      "sharpe_ratio": -0.3408264788024054,
+      "max_drawdown": -56.21833099871685,
+      "win_rate": 56.21621621621622,
+      "num_trades": 371
+    }
   }
 }
