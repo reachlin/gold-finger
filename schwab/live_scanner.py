@@ -163,13 +163,17 @@ def _print_signal(s: dict, paper: bool = False):
     print(f"EMA50:   ${s.get('ema50', '?')}")
     print(f"REASON:  {s['reason']}")
     print(f"{SIGNAL_END}")
-    print("\n>>> Waiting for Claude verification... (y=approve / n=skip / q=quit)")
-    print("Proceed? [y/N]: ", end="", flush=True)
+    print("\n>>> Waiting for Claude verification... (yes=approve / n=skip / q=quit)")
+    print("Proceed? [yes/N]: ", end="", flush=True)
 
 
 def _wait_for_verdict() -> str:
     try:
-        return input().strip().lower()
+        ans = input().strip().lower()
+        # Accept "yes" or "y", treat anything else as skip
+        if ans == "yes":
+            return "y"
+        return ans
     except (EOFError, KeyboardInterrupt):
         return "q"
 
