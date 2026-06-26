@@ -57,13 +57,19 @@ def send_slack(signals):
     today = datetime.now().strftime("%Y-%m-%d")
     lines = [f"*Pullback Scanner — {today}*\n"]
     for s in signals:
+        chk = s.get("verification", {})
+        verdict = chk.get("verdict", "PASS")
+        vix = chk.get("vix", 0.0)
+        icon = ":large_green_circle:" if verdict == "PASS" else ":warning:"
+        risks = chk.get("top_risks", [])
+        risk_line = f"\n  Risks: {'; '.join(risks[:2])}" if risks else ""
         lines.append(
-            f":green_circle: *{s['symbol']}* @ ${s['entry']}\n"
+            f"{icon} *{s['symbol']}* @ ${s['entry']}  [{verdict} | VIX={vix:.1f}]\n"
             f"  Target: ${s['target']} (+20%)  |  Stop: ${s['stop']} (-8%)  |  R/R: {s['risk_reward']}\n"
-            f"  RSI: {s['rsi']}  ADX: {s['adx']}  |  {s['reason']}"
+            f"  RSI: {s['rsi']}  ADX: {s['adx']}  |  {s['reason']}{risk_line}"
         )
     if not signals:
-        lines.append("No BUY signals today.")
+        lines.append("No approved BUY signals today.")
     payload = json.dumps({"text": "\n".join(lines)}).encode()
     req = urllib.request.Request(
         SLACK_WEBHOOK, data=payload,
@@ -71,6 +77,36 @@ def send_slack(signals):
     )
     urllib.request.urlopen(req)
     print("Slack notification sent.")
+
+
+def verify_and_filter(signals: list) -> list:
+    """Run macro verification gate on each BUY signal; return only approved ones."""
+    from signal_verifier import verify_signal
+    approved = []
+    for s in signals:
+        symbol = s["symbol"]
+        print(f"\n  Verifying macro conditions for {symbol}...")
+        try:
+            chk = verify_signal(symbol)
+            verdict = chk["verdict"]
+            vix = chk["vix"]
+            risks = chk.get("top_risks", [])
+        except Exception as exc:
+            print(f"    Verifier error: {exc} — treating as WARN")
+            verdict, vix, risks = "WARN", 0.0, [str(exc)]
+
+        icon = {"PASS": "✓", "WARN": "⚠", "BLOCK": "✗"}.get(verdict, "?")
+        print(f"    {icon} {verdict}  VIX={vix:.1f}  earnings_near={chk.get('near_earnings')}")
+        if risks:
+            for r in risks:
+                print(f"       • {r}")
+
+        s["verification"] = chk
+        if verdict != "BLOCK":
+            approved.append(s)
+        else:
+            print(f"    Signal BLOCKED for {symbol} — skipping.")
+    return approved
 
 
 def main():
@@ -107,16 +143,26 @@ def main():
     print("=" * 68)
     print(f"BUY signals: {len(buy_signals)} / {len(results)} scanned")
 
+    # Macro verification gate (live only — not used in backtesting)
     if buy_signals:
+        print("\n--- Macro Verification ---")
+        approved_signals = verify_and_filter(buy_signals)
+        print(f"\n  Approved after verification: {len(approved_signals)} / {len(buy_signals)}")
+    else:
+        approved_signals = []
+
+    if approved_signals:
         print("\n--- Action Plan ---")
-        for s in buy_signals:
+        for s in approved_signals:
+            verdict = s.get("verification", {}).get("verdict", "PASS")
             risk_per_share = s["entry"] - s["stop"]
             shares = max(1, int(600 / s["entry"]))   # ~$600 budget per trade
             max_loss = round(shares * risk_per_share, 2)
-            print(f"  {s['symbol']}: buy {shares} shares @ ${s['entry']}")
+            size_note = "(reduced — WARN)" if verdict == "WARN" else ""
+            print(f"  {s['symbol']}: buy {shares} shares @ ${s['entry']} {size_note}")
             print(f"    Target ${s['target']}  |  Stop ${s['stop']}  |  Max loss ${max_loss}")
 
-    send_slack(buy_signals)
+    send_slack(approved_signals)
 
 
 if __name__ == "__main__":

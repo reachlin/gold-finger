@@ -11,10 +11,10 @@ import ta
 import pandas as pd
 import numpy as np
 
-TREND_ADX_MIN    = 25      # ADX threshold for confirmed trend
-PULLBACK_RSI_LO  = 33      # RSI lower bound for pullback zone
-PULLBACK_RSI_HI  = 57      # RSI upper bound for pullback zone
-PULLBACK_EMA_PCT = 0.05    # price must be within 5% of EMA20
+TREND_ADX_MIN    = 15      # ADX threshold — secondary filter only
+PULLBACK_RSI_LO  = 28      # RSI lower bound for pullback zone
+PULLBACK_RSI_HI  = 50      # RSI upper bound — wait for deeper pullback
+PULLBACK_EMA_PCT = 0.08    # price must be within 8% of EMA20
 TARGET_PCT       = 0.20    # take profit
 STOP_PCT         = 0.08    # stop loss
 
@@ -44,34 +44,37 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def detect_trend(df: pd.DataFrame) -> bool:
-    """True if last row is in a confirmed uptrend."""
+    """True if last row is in a confirmed uptrend.
+    Uses EMA alignment as primary signal; ADX as secondary confirmation.
+    Also checks that EMA50 itself is rising (not just price above it).
+    """
     last = df.iloc[-1]
+    prev = df.iloc[-6] if len(df) > 6 else df.iloc[0]   # 5-bar lookback
+    ema50_rising = last["ema50"] > prev["ema50"]
     return bool(
         last["ema20"] > last["ema50"]        # short MA above long MA
-        and last["adx"] > TREND_ADX_MIN      # trend has strength
         and last["close"] > last["ema50"]    # price above long MA
+        and ema50_rising                     # long MA itself is rising
     )
 
 
 def detect_pullback(df: pd.DataFrame) -> bool:
-    """True if price has pulled back to EMA20 zone with RSI cooling off."""
-    last = df.iloc[-1]
-    price      = last["close"]
-    ema20      = last["ema20"]
-    rsi        = last["rsi"]
-    pct_from_ema20 = abs(price - ema20) / ema20
+    """True if a pullback to EMA20 occurred recently (last 5 bars).
+    We look back to see if RSI dipped and price touched EMA20, even if
+    it has since started recovering — that's the entry window.
+    """
+    last  = df.iloc[-1]
+    ema20 = last["ema20"]
 
-    # RSI dipped into pullback zone
-    rsi_in_zone = PULLBACK_RSI_LO < rsi < PULLBACK_RSI_HI
+    # RSI dipped into pullback zone in the last 5 bars
+    recent_rsi = df["rsi"].iloc[-5:]
+    rsi_dipped = (recent_rsi < PULLBACK_RSI_HI).any() and (recent_rsi.min() > PULLBACK_RSI_LO)
 
-    # Price near or touched EMA20 recently (last 3 bars)
-    recent_low = df["low"].iloc[-3:].min()
-    touched_ema20 = recent_low <= ema20 * 1.02
+    # Price touched or came close to EMA20 in last 5 bars
+    recent_low    = df["low"].iloc[-5:].min()
+    touched_ema20 = recent_low <= ema20 * 1.04
 
-    # Pullback on declining volume (sellers losing steam)
-    vol_declining = last["vol_ratio"] < 1.1
-
-    return bool(rsi_in_zone and touched_ema20 and vol_declining)
+    return bool(rsi_dipped and touched_ema20)
 
 
 def detect_entry(df: pd.DataFrame) -> bool:
