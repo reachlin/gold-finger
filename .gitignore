@@ -4,3 +4,5 @@ __pycache__/
 .env
 .claude/
 tuning_results.json
+schwab/schwab_token.json
+schwab/__pycache__/
