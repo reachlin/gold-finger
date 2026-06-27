@@ -27,6 +27,19 @@ def black_scholes_put(S: float, K: float, T: float,
     return float(max(price, 0.0))
 
 
+def black_scholes_call(S: float, K: float, T: float,
+                       r: float, sigma: float) -> float:
+    """European call price via Black-Scholes."""
+    if T <= 0:
+        return float(max(S - K, 0.0))
+    if sigma <= 0:
+        return float(max(S * np.exp(r * T) - K, 0.0))
+    d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+    d2 = d1 - sigma * np.sqrt(T)
+    price = S * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
+    return float(max(price, 0.0))
+
+
 def historical_vol(prices: pd.Series, window: int = 20) -> float:
     """Annualized historical volatility. Returns 0.0 if insufficient data."""
     if len(prices) < window + 1:

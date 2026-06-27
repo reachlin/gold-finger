@@ -30,6 +30,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 from trend_scanner import compute_indicators
 from vault76.overseer import Overseer
+from vault76.armory.raider import Raider
 from vault76.armory.scavenger import Scavenger
 
 SCAN_INTERVAL_MIN = 5
@@ -46,6 +47,8 @@ WATCHLIST = [
     "NVDA", "AMD", "AAPL", "AMZN",
     "META", "MSFT", "GOOGL",
     "IBM", "INTC", "IONQ", "KO",
+    # Scavenger prime targets — high % time sideways
+    "MMM", "PG", "XOM",
 ]
 
 PAPER_TRADES_PATH = os.path.join(
@@ -108,6 +111,7 @@ def _fetch_with_indicators(client, symbol: str) -> pd.DataFrame | None:
 
 
 _overseer  = Overseer()
+_raider    = Raider()
 _scavenger = Scavenger()
 
 
@@ -132,9 +136,14 @@ def _scan_all(client, regime: str = Overseer.RECLAMATION) -> list[dict]:
         df_ind = _fetch_with_indicators(client, symbol)
         if df_ind is None:
             continue
-        result = _scavenger.scan(symbol, df_ind, regime=regime)
-        if result["signal"] == "BUY":
-            signals.append(result)
+        # The Raider: buy pullbacks in uptrends
+        r = _raider.scan(symbol, df_ind, regime=regime)
+        if r["signal"] != "NONE":
+            signals.append(r)
+        # The Scavenger: sell options on sideways stocks
+        s = _scavenger.scan(symbol, df_ind, regime=regime)
+        if s["signal"] != "NONE":
+            signals.append(s)
     return signals
 
 
@@ -171,18 +180,41 @@ def _make_price_fetcher(client):
 # ---------------------------------------------------------------------------
 
 def _print_signal(s: dict, paper: bool = False):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now      = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     mode_tag = " [PAPER]" if paper else ""
+    sig      = s["signal"]
+    card     = s.get("card", "?")
+
     print(f"\n{SIGNAL_START}")
     print(f"TIME:    {now}{mode_tag}")
-    print(f"SYMBOL:  {s['symbol']}")
-    print(f"ENTRY:   ${s['entry']}")
-    print(f"TARGET:  ${s['target']}  (+20%)")
-    print(f"STOP:    ${s['stop']}   (-8%)")
-    print(f"RSI:     {s['rsi']}")
-    print(f"ADX:     {s['adx']}")
-    print(f"EMA20:   ${s.get('ema20', '?')}")
-    print(f"EMA50:   ${s.get('ema50', '?')}")
+    print(f"SYMBOL:  {s['symbol']}  [{card.upper()}]")
+    print(f"ACTION:  {sig}")
+    print(f"CLOSE:   ${s.get('close', '?')}")
+
+    if sig == "BUY":
+        print(f"ENTRY:   ${s['entry']}")
+        print(f"TARGET:  ${s['target']}")
+        print(f"STOP:    ${s['stop']}")
+        print(f"RSI:     {s.get('rsi', '?')}  ADX: {s.get('adx', '?')}")
+        print(f"EMA20:   ${s.get('ema20', '?')}  EMA50: ${s.get('ema50', '?')}")
+
+    elif sig == "SELL_PUT":
+        print(f"STRIKE:  ${s['strike']}  ({s.get('otm_pct', '5')}% OTM)")
+        print(f"PREMIUM: ${s['premium']}/sh  (${s['premium']*100:.0f}/contract)  "
+              f"+{s['premium_pct']:.2f}% yield")
+        print(f"DTE:     {s['dte']} days")
+        print(f"MAX LOSS:${s.get('max_loss', '?')}/contract if assigned")
+        print(f"HV:      {s.get('hv', '?')}%  ADX: {s.get('adx', '?')}")
+
+    elif sig == "SELL_CALL":
+        print(f"STRIKE:  ${s['strike']}  ({s.get('otm_pct', '8')}% OTM)")
+        print(f"PREMIUM: ${s['premium']}/sh  (${s['premium']*100:.0f}/contract)  "
+              f"+{s['premium_pct']:.2f}% yield")
+        print(f"COST BASIS: ${s.get('cost_basis', '?')}")
+        print(f"DTE:     {s['dte']} days")
+        print(f"MAX GAIN:${s.get('max_gain', '?')}/contract if called away")
+        print(f"HV:      {s.get('hv', '?')}%  ADX: {s.get('adx', '?')}")
+
     print(f"REASON:  {s['reason']}")
     print(f"{SIGNAL_END}")
     print("\n>>> Waiting for Claude verification... (yes=approve / n=skip / q=quit)")
@@ -198,6 +230,73 @@ def _wait_for_verdict() -> str:
         return ans
     except (EOFError, KeyboardInterrupt):
         return "q"
+
+
+# ---------------------------------------------------------------------------
+# Startup banner
+# ---------------------------------------------------------------------------
+
+def _send_slack(message: str):
+    try:
+        import sys as _sys
+        _sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+        from notify_slack import send
+        send(message)
+    except Exception as exc:
+        print(f"  [Slack] failed to send: {exc}")
+
+
+def _print_startup(client, paper: bool, portfolio=None):
+    """Print the daily startup banner and post it to Slack."""
+    now_str  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    mode     = "PAPER TRADING" if paper else "LIVE"
+    mode_ico = "📄" if paper else "💰"
+
+    # Fetch regime before market opens
+    try:
+        regime = _fetch_regime(client)
+    except Exception:
+        regime = Overseer.WASTELAND
+
+    regime_label = _overseer.describe(regime)
+    cards        = _overseer.recommend_perk_cards(regime)
+    cards_str    = ", ".join(c.upper() for c in cards) if cards else "NONE — stand down"
+
+    # Portfolio cash if available
+    cash_line = ""
+    if portfolio:
+        cash_line = f"  Cash available:  ${portfolio.cash:,.2f}\n"
+
+    # ── Terminal banner ──────────────────────────────────────────────────────
+    sep = "=" * 62
+    print(f"\n{sep}")
+    print(f"  VAULT 76 — DAILY BRIEFING  {now_str}")
+    print(sep)
+    print(f"  Mode:            {mode_ico}  {mode}")
+    print(f"  Regime:          {regime_label}")
+    print(f"  Active cards:    {cards_str}")
+    print(f"  Watchlist ({len(WATCHLIST)}):   {', '.join(WATCHLIST)}")
+    print(f"  Scan interval:   {SCAN_INTERVAL_MIN} min")
+    print(f"  Budget/trade:    ${BUDGET_PER_TRADE}")
+    if cash_line:
+        print(cash_line, end="")
+    if paper:
+        print(f"  Paper trades:    {PAPER_TRADES_PATH}")
+    print(f"  Monitor:         /schwab watch")
+    print(sep)
+
+    # ── Slack message ────────────────────────────────────────────────────────
+    slack_lines = [
+        f"*VAULT 76 — Daily Briefing* {now_str}",
+        f"*Mode:* {mode_ico} {mode}",
+        f"*Regime:* {regime_label}",
+        f"*Active cards:* {cards_str}",
+        f"*Watchlist ({len(WATCHLIST)}):* {', '.join(WATCHLIST)}",
+        f"*Scan interval:* {SCAN_INTERVAL_MIN} min | *Budget/trade:* ${BUDGET_PER_TRADE}",
+    ]
+    if portfolio:
+        slack_lines.append(f"*Cash available:* ${portfolio.cash:,.2f}")
+    _send_slack("\n".join(slack_lines))
 
 
 # ---------------------------------------------------------------------------
@@ -221,15 +320,7 @@ def main():
         from paper_portfolio import PaperPortfolio
         portfolio = PaperPortfolio(PAPER_TRADES_PATH)
 
-    mode_label = "PAPER TRADING" if args.paper else "LIVE (no orders placed)"
-    print("=" * 60)
-    print(f"  Live Scanner — pullback-in-trend  [{mode_label}]")
-    print(f"  Watchlist: {', '.join(WATCHLIST)}")
-    print(f"  Scan interval: {SCAN_INTERVAL_MIN} min  |  Budget: ${BUDGET_PER_TRADE}/trade")
-    if args.paper:
-        print(f"  Paper trades: {PAPER_TRADES_PATH}")
-    print("  Tell Claude Code: '/schwab watch'")
-    print("=" * 60)
+    _print_startup(client, paper=args.paper, portfolio=portfolio)
 
     price_fetcher = _make_price_fetcher(client)
     scan_count = 0
