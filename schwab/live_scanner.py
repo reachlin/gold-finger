@@ -246,13 +246,56 @@ def _send_slack(message: str):
         print(f"  [Slack] failed to send: {exc}")
 
 
-def _print_startup(client, paper: bool, portfolio=None):
+def _position_lines(portfolio, price_fetcher=None) -> tuple[list[str], list[str]]:
+    """
+    Build terminal and Slack lines for open positions.
+    Returns (terminal_lines, slack_lines).
+    """
+    term, slack = [], []
+    positions = portfolio.open_positions if portfolio else []
+
+    if not positions:
+        term.append("  Positions:       none")
+        slack.append("*Positions:* none")
+        return term, slack
+
+    term.append(f"  Positions ({len(positions)}):")
+    slack.append(f"*Positions ({len(positions)}):*")
+
+    for pos in positions:
+        sym    = pos["symbol"]
+        shares = pos["shares"]
+        entry  = pos["entry"]
+        tgt    = pos["target"]
+        stp    = pos["stop"]
+        since  = pos["entry_date"][:10]
+
+        cur_str = ""
+        slack_cur = ""
+        if price_fetcher:
+            try:
+                cur = price_fetcher(sym)["close"]
+                pct = (cur - entry) / entry * 100
+                usd = shares * (cur - entry)
+                cur_str   = f"  → ${cur:.2f} ({pct:+.1f}%  ${usd:+.0f})"
+                slack_cur = f" → ${cur:.2f} ({pct:+.1f}%, ${usd:+.0f})"
+            except Exception:
+                pass
+
+        term.append(f"    {sym:<6} {shares} sh @ ${entry:.2f}"
+                    f"  tgt ${tgt:.2f}  stp ${stp:.2f}  [{since}]{cur_str}")
+        slack.append(f"  • {sym} {shares}sh @${entry:.2f}"
+                     f" | tgt ${tgt:.2f} stp ${stp:.2f} [{since}]{slack_cur}")
+
+    return term, slack
+
+
+def _print_startup(client, paper: bool, portfolio=None, price_fetcher=None):
     """Print the daily startup banner and post it to Slack."""
     now_str  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     mode     = "PAPER TRADING" if paper else "LIVE"
     mode_ico = "📄" if paper else "💰"
 
-    # Fetch regime before market opens
     try:
         regime = _fetch_regime(client)
     except Exception:
@@ -262,10 +305,7 @@ def _print_startup(client, paper: bool, portfolio=None):
     cards        = _overseer.recommend_perk_cards(regime)
     cards_str    = ", ".join(c.upper() for c in cards) if cards else "NONE — stand down"
 
-    # Portfolio cash if available
-    cash_line = ""
-    if portfolio:
-        cash_line = f"  Cash available:  ${portfolio.cash:,.2f}\n"
+    pos_term, pos_slack = _position_lines(portfolio, price_fetcher)
 
     # ── Terminal banner ──────────────────────────────────────────────────────
     sep = "=" * 62
@@ -276,10 +316,11 @@ def _print_startup(client, paper: bool, portfolio=None):
     print(f"  Regime:          {regime_label}")
     print(f"  Active cards:    {cards_str}")
     print(f"  Watchlist ({len(WATCHLIST)}):   {', '.join(WATCHLIST)}")
-    print(f"  Scan interval:   {SCAN_INTERVAL_MIN} min")
-    print(f"  Budget/trade:    ${BUDGET_PER_TRADE}")
-    if cash_line:
-        print(cash_line, end="")
+    print(f"  Scan interval:   {SCAN_INTERVAL_MIN} min  |  Budget: ${BUDGET_PER_TRADE}/trade")
+    if portfolio:
+        print(f"  Cash:            ${portfolio.cash:,.2f}")
+    for line in pos_term:
+        print(line)
     if paper:
         print(f"  Paper trades:    {PAPER_TRADES_PATH}")
     print(f"  Monitor:         /schwab watch")
@@ -295,7 +336,40 @@ def _print_startup(client, paper: bool, portfolio=None):
         f"*Scan interval:* {SCAN_INTERVAL_MIN} min | *Budget/trade:* ${BUDGET_PER_TRADE}",
     ]
     if portfolio:
-        slack_lines.append(f"*Cash available:* ${portfolio.cash:,.2f}")
+        slack_lines.append(f"*Cash:* ${portfolio.cash:,.2f}")
+    slack_lines += pos_slack
+    _send_slack("\n".join(slack_lines))
+
+
+def _print_eod(portfolio, price_fetcher, scan_count: int):
+    """Print end-of-day summary and post it to Slack."""
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    cur_prices = _get_current_prices(portfolio, price_fetcher) if portfolio else {}
+
+    print(f"\n{'='*62}")
+    print(f"  VAULT 76 — END OF DAY  {now_str}  (scans: {scan_count})")
+    print(f"{'='*62}")
+    if portfolio:
+        portfolio.print_status(cur_prices)
+
+    pos_term, pos_slack = _position_lines(portfolio, price_fetcher)
+
+    if portfolio:
+        s = portfolio.summary(cur_prices)
+        pnl_sign = "+" if s["total_pnl_dollar"] >= 0 else ""
+        slack_lines = [
+            f"*VAULT 76 — End of Day* {now_str}",
+            f"*Scans today:* {scan_count}",
+            f"*Cash:* ${s['cash']:,.2f}  |  "
+            f"*Total:* ${s['total_value']:,.2f}  |  "
+            f"*P&L:* {pnl_sign}${s['total_pnl_dollar']:,.2f} ({pnl_sign}{s['total_pnl_pct']:.2f}%)",
+            f"*Realized:* ${s['realized_pnl_dollar']:+,.2f}  |  "
+            f"*Unrealized:* ${s['unrealized_pnl_dollar']:+,.2f}",
+        ] + pos_slack
+    else:
+        slack_lines = [f"*VAULT 76 — End of Day* {now_str}  (scans: {scan_count})"]
+
     _send_slack("\n".join(slack_lines))
 
 
@@ -320,20 +394,17 @@ def main():
         from paper_portfolio import PaperPortfolio
         portfolio = PaperPortfolio(PAPER_TRADES_PATH)
 
-    _print_startup(client, paper=args.paper, portfolio=portfolio)
-
     price_fetcher = _make_price_fetcher(client)
+    _print_startup(client, paper=args.paper, portfolio=portfolio,
+                   price_fetcher=price_fetcher)
     scan_count = 0
 
     while True:
         now = datetime.now().strftime("%H:%M:%S")
 
         if _market_closed_for_today():
-            print(f"\n[{now}] Market closed for today.")
+            _print_eod(portfolio, price_fetcher, scan_count)
             if portfolio:
-                cur_prices = _get_current_prices(portfolio, price_fetcher)
-                print("Final portfolio status:")
-                portfolio.print_status(cur_prices)
                 portfolio.log_scan(scan_num=scan_count, symbols_scanned=0,
                                    signals_found=0)
             print("Scanner exiting. Restart tomorrow (9am–4pm ET).")
