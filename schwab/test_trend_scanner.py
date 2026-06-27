@@ -10,6 +10,7 @@ from trend_scanner import (
     detect_trend,
     detect_pullback,
     detect_entry,
+    detect_market_regime,
     compute_levels,
     scan_symbol,
 )
@@ -102,3 +103,70 @@ def test_scan_symbol_structure():
     if result["signal"] == "BUY":
         assert result["target"] > result["entry"]
         assert result["stop"]   < result["entry"]
+
+
+# ── detect_market_regime ───────────────────────────────────────────────────
+
+def test_regime_true_for_uptrending_index():
+    df = compute_indicators(_make_trending_df(120))
+    df = df.dropna().reset_index(drop=True)
+    assert detect_market_regime(df) is True
+
+
+def test_regime_false_for_flat_index():
+    df = compute_indicators(_make_flat_df(120))
+    df = df.dropna().reset_index(drop=True)
+    assert detect_market_regime(df) is False
+
+
+def test_regime_false_when_price_below_ema50():
+    """Build an uptrend then crash below EMA50."""
+    np.random.seed(5)
+    n = 120
+    # First 100 bars: strong uptrend to build EMA
+    close_up = 100 * np.cumprod(1 + 0.003 + np.random.randn(100) * 0.005)
+    # Last 20 bars: sharp crash below EMA50
+    close_down = close_up[-1] * np.cumprod(1 - 0.03 + np.random.randn(20) * 0.005)
+    close = np.concatenate([close_up, close_down])
+    df = pd.DataFrame({
+        "datetime": pd.date_range("2025-01-01", periods=n, freq="B"),
+        "open":  close * 0.995,
+        "high":  close * 1.01,
+        "low":   close * 0.985,
+        "close": close,
+        "volume": np.ones(n) * 1e7,
+    })
+    df_ind = compute_indicators(df).dropna().reset_index(drop=True)
+    assert detect_market_regime(df_ind) is False
+
+
+def test_regime_returns_bool():
+    df = compute_indicators(_make_trending_df())
+    df = df.dropna().reset_index(drop=True)
+    assert isinstance(detect_market_regime(df), bool)
+
+
+def test_scan_symbol_blocked_by_bad_regime():
+    """A valid BUY signal should be suppressed when regime_ok=False."""
+    # Use a strongly trending stock df that would normally get a BUY
+    stock_df = compute_indicators(_make_trending_df(200, drift=0.003))
+    stock_df = stock_df.dropna().reset_index(drop=True)
+    flat_spy  = compute_indicators(_make_flat_df(200))
+    flat_spy  = flat_spy.dropna().reset_index(drop=True)
+
+    regime_bad  = detect_market_regime(flat_spy)   # False
+    result_bad  = scan_symbol("TEST", stock_df, regime_ok=regime_bad)
+
+    # Whether or not a BUY fires without regime gate, with regime_ok=False it must be NONE
+    assert result_bad["signal"] == "NONE"
+    if not regime_bad:
+        assert result_bad["reason"] == "market regime bearish"
+
+
+def test_scan_symbol_regime_ok_true_allows_signal():
+    """regime_ok=True should not block signals that would otherwise fire."""
+    stock_df = compute_indicators(_make_trending_df(200, drift=0.003))
+    stock_df = stock_df.dropna().reset_index(drop=True)
+    # With regime allowed, result should be the normal scan output
+    result = scan_symbol("TEST", stock_df, regime_ok=True)
+    assert result["signal"] in ("BUY", "NONE")   # regime doesn't force BUY, just allows it

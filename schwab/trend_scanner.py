@@ -99,6 +99,17 @@ def detect_entry(df: pd.DataFrame) -> bool:
     return bool(rsi_recovering and green_candle and above_ema20 and vol_rising)
 
 
+def detect_market_regime(index_df: pd.DataFrame) -> bool:
+    """True if the broad market (SPY/QQQ) is in a healthy uptrend.
+    Requires close > EMA50 AND EMA50 is rising — both must hold.
+    Pass a df with indicators already computed via compute_indicators().
+    """
+    last = index_df.iloc[-1]
+    prev = index_df.iloc[-6] if len(index_df) > 6 else index_df.iloc[0]
+    ema50_rising = last["ema50"] > prev["ema50"]
+    return bool(last["close"] > last["ema50"] and ema50_rising)
+
+
 def compute_levels(entry: float) -> dict:
     target = round(entry * (1 + TARGET_PCT), 2)
     stop   = round(entry * (1 - STOP_PCT), 2)
@@ -106,8 +117,12 @@ def compute_levels(entry: float) -> dict:
     return {"entry": entry, "target": target, "stop": stop, "risk_reward": rr}
 
 
-def scan_symbol(symbol: str, df: pd.DataFrame) -> dict:
-    """Run full scan on a prepared (indicators already computed) dataframe."""
+def scan_symbol(symbol: str, df: pd.DataFrame,
+                regime_ok: bool = True) -> dict:
+    """Run full scan on a prepared (indicators already computed) dataframe.
+
+    regime_ok: pass detect_market_regime(spy_df) result; False blocks all signals.
+    """
     base = {"symbol": symbol, "signal": "NONE", "entry": None,
             "target": None, "stop": None, "risk_reward": None,
             "rsi": None, "adx": None, "reason": ""}
@@ -122,6 +137,10 @@ def scan_symbol(symbol: str, df: pd.DataFrame) -> dict:
     base["ema20"] = round(last["ema20"], 2)
     base["ema50"] = round(last["ema50"], 2)
     base["close"] = round(last["close"], 2)
+
+    if not regime_ok:
+        base["reason"] = "market regime bearish"
+        return base
 
     if not detect_trend(df):
         base["reason"] = "no uptrend"

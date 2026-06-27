@@ -20,7 +20,7 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from trend_scanner import compute_indicators, scan_symbol, detect_trend
+from trend_scanner import compute_indicators, scan_symbol, detect_trend, detect_market_regime
 
 TARGET_ATR  = 5.0       # target = entry + 5 * ATR
 STOP_ATR    = 2.0       # stop   = entry - 2 * ATR
@@ -54,10 +54,12 @@ def simulate_trade(future_df: pd.DataFrame, entry: float,
     return {"exit_reason": "timeout", "pnl_pct": round((last_close - entry) / entry * 100, 2), "hold_days": len(future_df)}
 
 
-def walk_forward(df: pd.DataFrame, min_history: int = MIN_HISTORY) -> list:
+def walk_forward(df: pd.DataFrame, spy_df: pd.DataFrame = None,
+                 min_history: int = MIN_HISTORY) -> list:
     """
     Walk forward through df day by day.
     At each bar i, use df[0:i] to scan for signal.
+    If spy_df is provided, apply market-regime gate (SPY must be above EMA50).
     If BUY, enter at bar i+1 open and simulate the trade.
     """
     trades = []
@@ -72,7 +74,15 @@ def walk_forward(df: pd.DataFrame, min_history: int = MIN_HISTORY) -> list:
             i += 1
             continue
 
-        result = scan_symbol("", history_ind)
+        regime_ok = True
+        if spy_df is not None:
+            bar_date  = df.iloc[i]["datetime"]
+            spy_hist  = spy_df[spy_df["datetime"] <= bar_date].copy()
+            if len(spy_hist) >= min_history:
+                spy_ind   = compute_indicators(spy_hist).dropna().reset_index(drop=True)
+                regime_ok = detect_market_regime(spy_ind)
+
+        result = scan_symbol("", history_ind, regime_ok=regime_ok)
 
         if not in_trade and result["signal"] == "BUY":
             entry_bar  = df.iloc[i + 1]
@@ -191,8 +201,15 @@ def main():
         df = pd.read_csv(csv_path, parse_dates=["datetime"])
         print(f"Loaded {len(df)} bars from {csv_path}")
 
+    spy_path = os.path.join(os.path.dirname(__file__), "..", "data", "spy_history.csv")
+    spy_df = pd.read_csv(spy_path, parse_dates=["datetime"]) if os.path.exists(spy_path) else None
+    if spy_df is not None:
+        print(f"Loaded SPY regime data ({len(spy_df)} bars) — regime filter ON")
+    else:
+        print("No SPY data found — regime filter OFF")
+
     print("Running walk-forward backtest...")
-    trades = walk_forward(df)
+    trades = walk_forward(df, spy_df=spy_df)
     stats  = summarize(trades)
     print_report(args.symbol, df, trades, stats)
 
