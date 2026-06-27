@@ -42,7 +42,8 @@ VERDICT_SKIP = "===SKIPPED==="
 
 WATCHLIST = [
     "NVDA", "AMD", "TSLA", "AAPL", "AMZN",
-    "META", "MSFT", "GOOGL", "TQQQ", "SOXL",
+    "META", "MSFT", "GOOGL",
+    "IBM", "INTC", "IONQ", "KO",
 ]
 
 PAPER_TRADES_PATH = os.path.join(
