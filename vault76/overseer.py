@@ -32,9 +32,9 @@ class Overseer:
 
     # Which perk cards are active per regime
     _PERK_CARDS = {
-        RECLAMATION: ["scavenger"],
-        WASTELAND:   ["scavenger"],
-        NUKED_ZONE:  [],
+        RECLAMATION: ["raider", "scavenger"],   # Raider attacks pullbacks; Scavenger sells puts on sideways stocks
+        WASTELAND:   ["scavenger", "raider"],   # Scavenger primary for income; Raider opportunistic on any trending names
+        NUKED_ZONE:  [],                        # Blast radius — all Dwellers stand down
     }
 
     def classify(self, spy_df: pd.DataFrame, vix: float = 20.0) -> str:
