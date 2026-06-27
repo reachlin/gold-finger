@@ -28,7 +28,9 @@ sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
-from trend_scanner import compute_indicators, scan_symbol, detect_market_regime
+from trend_scanner import compute_indicators
+from vault76.overseer import Overseer
+from vault76.armory.scavenger import Scavenger
 
 SCAN_INTERVAL_MIN = 5
 MARKET_OPEN_ET    = 9
@@ -105,22 +107,32 @@ def _fetch_with_indicators(client, symbol: str) -> pd.DataFrame | None:
     return compute_indicators(df).dropna().reset_index(drop=True)
 
 
-def _fetch_regime(client) -> bool:
-    """Fetch SPY and return True if market is in a healthy uptrend."""
+_overseer  = Overseer()
+_scavenger = Scavenger()
+
+
+def _fetch_regime(client) -> str:
+    """Fetch SPY + VIX and return the current Overseer regime string."""
     df = _fetch_history(client, "SPY")
     if df is None or len(df) < 60:
-        return True   # can't determine — don't block
-    ind = compute_indicators(df).dropna().reset_index(drop=True)
-    return detect_market_regime(ind)
+        return Overseer.RECLAMATION   # can't determine — don't block
+
+    try:
+        from signal_verifier import fetch_vix
+        vix = fetch_vix()
+    except Exception:
+        vix = 20.0
+
+    return _overseer.classify(df, vix=vix)
 
 
-def _scan_all(client, regime_ok: bool = True) -> list[dict]:
+def _scan_all(client, regime: str = Overseer.RECLAMATION) -> list[dict]:
     signals = []
     for symbol in WATCHLIST:
         df_ind = _fetch_with_indicators(client, symbol)
         if df_ind is None:
             continue
-        result = scan_symbol(symbol, df_ind, regime_ok=regime_ok)
+        result = _scavenger.scan(symbol, df_ind, regime=regime)
         if result["signal"] == "BUY":
             signals.append(result)
     return signals
@@ -242,9 +254,9 @@ def main():
             continue
 
         scan_count += 1
-        regime_ok = _fetch_regime(client)
-        regime_str = "OK" if regime_ok else "BEARISH (signals blocked)"
-        print(f"\n[{now}] Scan #{scan_count} — SPY regime: {regime_str} — scanning {len(WATCHLIST)} symbols...")
+        regime     = _fetch_regime(client)
+        regime_str = _overseer.describe(regime)
+        print(f"\n[{now}] Scan #{scan_count} — {regime_str} — scanning {len(WATCHLIST)} symbols...")
 
         # Paper mode: check existing positions against current prices
         if portfolio:
@@ -258,7 +270,7 @@ def main():
                           f"  exit ${ex['exit']:.2f}")
 
         # Scan for new signals
-        signals = _scan_all(client, regime_ok=regime_ok)
+        signals = _scan_all(client, regime=regime)
 
         if portfolio:
             portfolio.log_scan(
