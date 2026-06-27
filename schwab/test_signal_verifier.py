@@ -1,7 +1,7 @@
 """
 Tests for signal_verifier.py — data-fetch utilities.
 
-All external calls (yfinance, Finnhub, feedparser) are mocked.
+All external calls (yfinance, Schwab client, feedparser) are mocked.
 
 Run: /Users/lincai/anaconda3/envs/gold-finger/bin/python -m pytest schwab/test_signal_verifier.py -v
 """
@@ -56,54 +56,112 @@ class TestCheckVix:
 
 
 # ---------------------------------------------------------------------------
-# check_earnings_proximity
+# check_earnings_proximity — via Schwab client
 # ---------------------------------------------------------------------------
+
+def _make_schwab_client(next_earnings_date: str | None = None,
+                        field: str = "nextEarningsDate"):
+    """Build a mock Schwab client that returns fundamentals with the given date."""
+    client = MagicMock()
+    fund = {field: next_earnings_date} if next_earnings_date else {}
+    client.get_instruments.return_value.raise_for_status = MagicMock()
+    client.get_instruments.return_value.json.return_value = {
+        "instruments": [{"symbol": "NVDA", "fundamental": fund}]
+    }
+    client.Instrument.Projection.FUNDAMENTAL = "fundamental"
+    return client
+
 
 class TestCheckEarningsProximity:
-    @patch("signal_verifier.finnhub_client")
-    def test_no_earnings_returns_false(self, mock_client):
+    def test_no_earnings_returns_false(self):
         from signal_verifier import check_earnings_proximity
-        mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
-        assert check_earnings_proximity("NVDA") is False
+        client = _make_schwab_client(next_earnings_date=None)
+        assert check_earnings_proximity("NVDA", schwab_client=client) is False
 
-    @patch("signal_verifier.finnhub_client")
-    def test_earnings_within_5_days_returns_true(self, mock_client):
+    def test_earnings_within_5_days_returns_true(self):
         from signal_verifier import check_earnings_proximity
-        near_date = (date.today() + timedelta(days=3)).isoformat()
-        mock_client.earnings_calendar.return_value = {
-            "earningsCalendar": [{"date": near_date, "symbol": "NVDA"}]
-        }
-        assert check_earnings_proximity("NVDA") is True
+        near = (date.today() + timedelta(days=3)).isoformat()
+        client = _make_schwab_client(near)
+        assert check_earnings_proximity("NVDA", schwab_client=client) is True
 
-    @patch("signal_verifier.finnhub_client")
-    def test_earnings_far_away_returns_false(self, mock_client):
+    def test_earnings_far_away_returns_false(self):
         from signal_verifier import check_earnings_proximity
-        far_date = (date.today() + timedelta(days=30)).isoformat()
-        mock_client.earnings_calendar.return_value = {
-            "earningsCalendar": [{"date": far_date, "symbol": "NVDA"}]
-        }
-        assert check_earnings_proximity("NVDA") is False
+        far = (date.today() + timedelta(days=30)).isoformat()
+        client = _make_schwab_client(far)
+        assert check_earnings_proximity("NVDA", schwab_client=client) is False
 
-    @patch("signal_verifier.finnhub_client")
-    def test_api_exception_returns_false(self, mock_client):
+    def test_earnings_today_returns_true(self):
         from signal_verifier import check_earnings_proximity
-        mock_client.earnings_calendar.side_effect = Exception("API error")
-        assert check_earnings_proximity("NVDA") is False
+        today = date.today().isoformat()
+        client = _make_schwab_client(today)
+        assert check_earnings_proximity("NVDA", schwab_client=client) is True
+
+    def test_earnings_exactly_5_days_returns_true(self):
+        from signal_verifier import check_earnings_proximity
+        cutoff = (date.today() + timedelta(days=5)).isoformat()
+        client = _make_schwab_client(cutoff)
+        assert check_earnings_proximity("NVDA", schwab_client=client) is True
+
+    def test_date_with_timestamp_suffix_parsed(self):
+        """Schwab may return dates like '2025-08-27 00:00:00.0'"""
+        from signal_verifier import check_earnings_proximity
+        near = (date.today() + timedelta(days=2)).isoformat() + " 00:00:00.0"
+        client = _make_schwab_client(near)
+        assert check_earnings_proximity("NVDA", schwab_client=client) is True
+
+    def test_schwab_api_exception_falls_back_to_yfinance(self):
+        from signal_verifier import check_earnings_proximity
+        bad_client = MagicMock()
+        bad_client.get_instruments.side_effect = Exception("network error")
+
+        near = date.today() + timedelta(days=3)
+        with patch("signal_verifier.yf") as mock_yf:
+            mock_ticker = MagicMock()
+            mock_ticker.calendar = {"Earnings Date": [near]}
+            mock_yf.Ticker.return_value = mock_ticker
+            result = check_earnings_proximity("NVDA", schwab_client=bad_client)
+        assert result is True
+
+    def test_no_client_falls_back_to_yfinance(self):
+        """Without schwab_client, use yfinance calendar only."""
+        from signal_verifier import check_earnings_proximity
+        near = date.today() + timedelta(days=2)
+        with patch("signal_verifier.yf") as mock_yf:
+            mock_ticker = MagicMock()
+            mock_ticker.calendar = {"Earnings Date": [near]}
+            mock_yf.Ticker.return_value = mock_ticker
+            result = check_earnings_proximity("NVDA")
+        assert result is True
+
+    def test_both_sources_fail_returns_false(self):
+        from signal_verifier import check_earnings_proximity
+        bad_client = MagicMock()
+        bad_client.get_instruments.side_effect = Exception("fail")
+        with patch("signal_verifier.yf") as mock_yf:
+            mock_yf.Ticker.return_value.calendar = None
+            result = check_earnings_proximity("NVDA", schwab_client=bad_client)
+        assert result is False
+
+    def test_empty_instruments_list_returns_false(self):
+        from signal_verifier import check_earnings_proximity
+        client = MagicMock()
+        client.get_instruments.return_value.raise_for_status = MagicMock()
+        client.get_instruments.return_value.json.return_value = {"instruments": []}
+        client.Instrument.Projection.FUNDAMENTAL = "fundamental"
+        with patch("signal_verifier.yf") as mock_yf:
+            mock_yf.Ticker.return_value.calendar = {}
+            result = check_earnings_proximity("NVDA", schwab_client=client)
+        assert result is False
 
 
 # ---------------------------------------------------------------------------
-# fetch_headlines
+# fetch_headlines — RSS only (no Finnhub)
 # ---------------------------------------------------------------------------
 
 class TestFetchHeadlines:
-    @patch("signal_verifier.finnhub_client")
     @patch("signal_verifier.feedparser")
-    def test_returns_list_of_strings(self, mock_feedparser, mock_finnhub):
+    def test_returns_list_of_strings(self, mock_feedparser):
         from signal_verifier import fetch_headlines
-        mock_finnhub.company_news.return_value = [
-            {"headline": "NVDA beats earnings"},
-            {"headline": "NVDA new GPU launch"},
-        ]
         mock_feedparser.parse.return_value = MagicMock(
             entries=[MagicMock(title="Market opens higher")]
         )
@@ -111,24 +169,24 @@ class TestFetchHeadlines:
         assert isinstance(headlines, list)
         assert all(isinstance(h, str) for h in headlines)
 
-    @patch("signal_verifier.finnhub_client")
     @patch("signal_verifier.feedparser")
-    def test_caps_at_max_headlines(self, mock_feedparser, mock_finnhub):
+    def test_caps_at_max_headlines(self, mock_feedparser):
         from signal_verifier import fetch_headlines
-        mock_finnhub.company_news.return_value = [
-            {"headline": f"Story {i}"} for i in range(30)
-        ]
         mock_feedparser.parse.return_value = MagicMock(
-            entries=[MagicMock(title=f"Macro {i}") for i in range(30)]
+            entries=[MagicMock(title=f"Story {i}") for i in range(50)]
         )
         assert len(fetch_headlines("NVDA", max_headlines=10)) <= 10
 
-    @patch("signal_verifier.finnhub_client")
     @patch("signal_verifier.feedparser")
-    def test_handles_empty_news_gracefully(self, mock_feedparser, mock_finnhub):
+    def test_handles_empty_feeds_gracefully(self, mock_feedparser):
         from signal_verifier import fetch_headlines
-        mock_finnhub.company_news.return_value = []
         mock_feedparser.parse.return_value = MagicMock(entries=[])
+        assert fetch_headlines("NVDA") == []
+
+    @patch("signal_verifier.feedparser")
+    def test_rss_exception_returns_empty(self, mock_feedparser):
+        from signal_verifier import fetch_headlines
+        mock_feedparser.parse.side_effect = Exception("RSS down")
         assert fetch_headlines("NVDA") == []
 
 
@@ -174,3 +232,13 @@ class TestGatherSignalContext:
         from signal_verifier import gather_signal_context
         ctx = gather_signal_context("NVDA")
         assert ctx["hard_blocks"] == []
+
+    def test_schwab_client_passed_through(self):
+        """schwab_client kwarg is forwarded to check_earnings_proximity."""
+        from signal_verifier import gather_signal_context
+        mock_client = MagicMock()
+        with patch("signal_verifier.fetch_vix", return_value=15.0), \
+             patch("signal_verifier.check_earnings_proximity", return_value=False) as mock_ep, \
+             patch("signal_verifier.fetch_headlines", return_value=[]):
+            gather_signal_context("NVDA", schwab_client=mock_client)
+            mock_ep.assert_called_once_with("NVDA", schwab_client=mock_client)
