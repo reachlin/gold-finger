@@ -41,7 +41,7 @@ VERDICT_OK   = "===APPROVED==="
 VERDICT_SKIP = "===SKIPPED==="
 
 WATCHLIST = [
-    "NVDA", "AMD", "TSLA", "AAPL", "AMZN",
+    "NVDA", "AMD", "AAPL", "AMZN",
     "META", "MSFT", "GOOGL",
     "IBM", "INTC", "IONQ", "KO",
 ]
