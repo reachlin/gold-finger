@@ -131,8 +131,25 @@ def run(symbols: list[str], role: str,
 # Report
 # ---------------------------------------------------------------------------
 
+# Fixed column widths — every cell uses these, header and data alike
+_W_SYM    = 8    # "  SYMBOL" — 2-space indent + 6 chars symbol
+_W_TRADES = 8    # right-align trades, 2-char gap from symbol column
+_W_PNL    = 13   # "  $ +14,784" — right-aligned dollar amount
+
+
 def _fmt(v: float) -> str:
-    return f"${v:>+10,.0f}"
+    """Format a dollar P&L value into exactly _W_PNL chars."""
+    raw = f"${v:>+10,.0f}"          # always 11 chars:  "$ +14,784"
+    return f"{raw:>{_W_PNL}}"       # right-pad to 13:  "  $ +14,784"
+
+
+def _row(sym: str, trades: int | str, cols: list[float | str]) -> str:
+    """Build one table row with consistent column widths."""
+    sym_cell    = f"  {sym:<{_W_SYM - 2}}"           # "  MMM   " (8 chars)
+    trades_cell = f"{str(trades):>{_W_TRADES}}"       # "      28"  (8 chars)
+    pnl_cells   = [f"{c:>{_W_PNL}}" if isinstance(c, str) else _fmt(float(c))
+                   for c in cols]
+    return sym_cell + trades_cell + "".join(pnl_cells)
 
 
 def print_report(rows: list[dict], role: str,
@@ -145,67 +162,52 @@ def print_report(rows: list[dict], role: str,
     run_raid = role in ("raider",    "overseer")
     run_chem = role in ("chemist",   "overseer")
 
+    # Ordered list of (header_label, data_key) for P&L columns
+    pnl_cols: list[tuple[str, str]] = []
+    if run_scav: pnl_cols.append(("Scavenger", "scav_pnl"))
+    if run_raid: pnl_cols.append(("Raider",    "raid_pnl"))
+    if run_chem: pnl_cols.append(("Chemist",   "chem_pnl"))
+    pnl_cols += [("Combined", "combined"), ("B&H", "bnh"), ("Edge", "edge")]
+
+    # Compute border width from actual column count
+    width = _W_SYM + _W_TRADES + _W_PNL * len(pnl_cols)
+
     # ── header ───────────────────────────────────────────────────────────────
     role_label = role.upper()
     if role == "overseer":
-        active = []
-        if run_scav: active.append("Scavenger")
-        if run_raid: active.append("Raider")
-        if run_chem: active.append("Chemist")
+        active = (["Scavenger"] if run_scav else []) + \
+                 (["Raider"]    if run_raid else []) + \
+                 (["Chemist"]   if run_chem else [])
         role_label = f"OVERSEER  ({' + '.join(active)})"
 
-    print(f"\n{'═'*100}")
+    print(f"\n{'═' * width}")
     print(f"  VAULT 76 BACKTEST  —  Role: {role_label}")
     print(f"  Date range   : {global_start} → {global_end}")
     print(f"  Capital      : 100 shares / 1 contract per trade (no compounding)")
-    print(f"{'═'*100}")
+    print(f"{'═' * width}")
 
-    # ── column header ────────────────────────────────────────────────────────
-    cols = ["Symbol", "Trades"]
-    if run_scav: cols.append("Scavenger")
-    if run_raid: cols.append("Raider")
-    if run_chem: cols.append("Chemist")
-    cols += ["Combined", "B&H", "Edge"]
+    # ── column labels ────────────────────────────────────────────────────────
+    print(_row("Symbol", "Trades", [lbl for lbl, _ in pnl_cols]))
+    print("  " + "─" * (width - 2))
 
-    hdr_parts = [f"  {'Symbol':<6}", f"{'Trades':>6}"]
-    if run_scav: hdr_parts.append(f"{'Scavenger':>12}")
-    if run_raid: hdr_parts.append(f"{'Raider':>12}")
-    if run_chem: hdr_parts.append(f"{'Chemist':>12}")
-    hdr_parts += [f"{'Combined':>12}", f"{'B&H':>12}", f"{'Edge':>12}"]
-    print("  ".join(hdr_parts) if False else "".join(hdr_parts))
-
-    sep = "─" * 98
-    print(f"  {sep}")
-
-    # ── rows ─────────────────────────────────────────────────────────────────
+    # ── data rows ────────────────────────────────────────────────────────────
     for r in rows:
         trades = r["scav_trades"] + r["raid_trades"] + r["chem_trades"]
-        parts  = [f"  {r['symbol']:<6}", f"{trades:>6}"]
-        if run_scav: parts.append(f"{_fmt(r['scav_pnl']):>12}")
-        if run_raid: parts.append(f"{_fmt(r['raid_pnl']):>12}")
-        if run_chem: parts.append(f"{_fmt(r['chem_pnl']):>12}")
-        parts += [f"{_fmt(r['combined']):>12}",
-                  f"{_fmt(r['bnh']):>12}",
-                  f"{_fmt(r['edge']):>12}"]
-        print("".join(parts))
+        print(_row(r["symbol"], trades, [r[key] for _, key in pnl_cols]))
 
     # ── totals ───────────────────────────────────────────────────────────────
-    print(f"  {sep}")
+    print("  " + "─" * (width - 2))
     tot_trades = sum(r["scav_trades"] + r["raid_trades"] + r["chem_trades"] for r in rows)
-    t_scav = sum(r["scav_pnl"] for r in rows)
-    t_raid = sum(r["raid_pnl"] for r in rows)
-    t_chem = sum(r["chem_pnl"] for r in rows)
-    t_comb = sum(r["combined"] for r in rows)
-    t_bnh  = sum(r["bnh"]      for r in rows)
-    t_edge = t_comb - t_bnh
-
-    parts = [f"  {'TOTAL':<6}", f"{tot_trades:>6}"]
-    if run_scav: parts.append(f"{_fmt(t_scav):>12}")
-    if run_raid: parts.append(f"{_fmt(t_raid):>12}")
-    if run_chem: parts.append(f"{_fmt(t_chem):>12}")
-    parts += [f"{_fmt(t_comb):>12}", f"{_fmt(t_bnh):>12}", f"{_fmt(t_edge):>12}"]
-    print("".join(parts))
-    print(f"{'═'*100}")
+    totals = {
+        "scav_pnl": sum(r["scav_pnl"] for r in rows),
+        "raid_pnl": sum(r["raid_pnl"] for r in rows),
+        "chem_pnl": sum(r["chem_pnl"] for r in rows),
+        "combined": sum(r["combined"] for r in rows),
+        "bnh":      sum(r["bnh"]      for r in rows),
+        "edge":     sum(r["combined"] for r in rows) - sum(r["bnh"] for r in rows),
+    }
+    print(_row("TOTAL", tot_trades, [totals[key] for _, key in pnl_cols]))
+    print(f"{'═' * width}")
 
     # ── summary ──────────────────────────────────────────────────────────────
     winners = [r["symbol"] for r in rows if r["edge"] > 0]
