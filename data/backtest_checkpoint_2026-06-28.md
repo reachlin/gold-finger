@@ -43,6 +43,81 @@ MMM, IONQ, TSLA, IBM, AAPL, UNH, ABT, XOM
 | IONQ | $6.19 | $619 | +$9,109 | 1,471.6% | 96.8%/yr |
 | TSLA | $288.09 | $28,809 | +$20,457 | 71.0% | 14.1%/yr |
 
+## Model & Strategy Parameters
+
+### Overseer — Regime Classifier (`vault76/overseer.py`)
+
+| Parameter | Value | Meaning |
+|-----------|-------|---------|
+| `VIX_NUKED` | 30.0 | VIX ≥ 30 → NUKED_ZONE (overrides SPY) |
+| `MIN_BARS` | 60 | Minimum SPY bars needed to classify |
+| RECLAMATION | SPY above rising EMA50, VIX < 30 | Bull market |
+| WASTELAND | SPY below EMA50 or EMA50 falling, VIX < 30 | Bear/sideways |
+| NUKED_ZONE | VIX ≥ 30 | Panic / extreme fear |
+| Active roles | RECLAMATION: Raider+Scavenger · WASTELAND: Scavenger+Raider · NUKED_ZONE: Chemist | |
+
+---
+
+### Scavenger — Cash-Secured Put → Covered Call (`vault76/armory/scavenger.py`)
+
+| Parameter | Value | Meaning |
+|-----------|-------|---------|
+| `OTM_PUT_PCT` | 0.05 | Sell put 5% below current price |
+| `OTM_CALL_PCT` | 0.08 | Sell call 8% above cost basis |
+| `SELL_DTE` | 30 | Days to expiration (both legs) |
+| `MIN_HV` | 0.20 | Min historical vol — thin premium below this |
+| `MIN_PREMIUM_PCT` | 0.005 | Min premium as % of stock price (0.5%) |
+| `ADX_TREND_MAX` | 20 | Block put-sell if stock is trending (Raider's turf) |
+| `RSI_NEUTRAL_LO` | 35 | RSI floor for put-selling (falling knife guard) |
+| `RSI_NEUTRAL_HI` | 65 | RSI ceiling for put-selling (overbought guard) |
+| `UNDERWATER_MAX` | 0.10 | Block call-sell if price > 10% below cost basis |
+| Exit target | 35–65% of premium collected | Buy back early if premium decays to this range |
+| Backtest shares | 100 | 1 contract = 100 shares |
+| `MIN_HISTORY` | 60 bars | Warm-up before scanning |
+| `RISK_FREE` | 0.05 | Black-Scholes risk-free rate |
+
+**Active in:** RECLAMATION, WASTELAND
+
+---
+
+### Raider — Pullback-in-Trend Long (`vault76/armory/raider.py`, `schwab/trend_scanner.py`)
+
+| Parameter | Value | Meaning |
+|-----------|-------|---------|
+| `RSI_PULLBACK_HI` | 47 | RSI must dip below this (real dip, not just noise) |
+| `RSI_PULLBACK_LO` | 28 | RSI floor — don't enter a freefall |
+| `ADX_MIN` | 20 | Confirmed trend strength required |
+| `TARGET_PCT` | 0.20 | Take profit at +20% |
+| `STOP_PCT` | 0.08 | Stop loss at -8% |
+| Risk/reward | 2.5:1 | 20% target / 8% stop |
+| `MAX_HOLD` | 60 bars | Safety valve (~3 months) |
+| Primary exit | EMA20 < EMA50 | Trend-end exit (overrides time stop) |
+| Backtest shares | 100 | |
+
+**Active in:** RECLAMATION, WASTELAND
+
+---
+
+### Chemist — Credit Put Spread (`vault76/armory/chemist.py`, `schwab/backtest_chemist.py`)
+
+| Parameter | Value | Meaning |
+|-----------|-------|---------|
+| `SHORT_PUT_OTM` | 0.08 | Sell put 8% OTM (collect premium) |
+| `LONG_PUT_OTM` | 0.18 | Buy put 18% OTM (cap risk) |
+| Spread width | 10% | Distance between strikes |
+| `SELL_DTE` | 30 | Trading days to expiration |
+| `MIN_HV` | 0.20 | Min historical vol — usually 35%+ in NUKED_ZONE |
+| `RSI_FREEFALL` | 20 | Block if RSI < 20 (skip freefalls) |
+| `UNDERWATER_MAX` | 0.30 | Block if stock > 30% below EMA50 |
+| `PROFIT_TARGET` | 0.70 | Buy back when 70% of max profit reached |
+| `LOSS_LIMIT` | 2.00 | Cut when spread reaches 200% of credit received |
+| `RISK_FREE` | 0.05 | Black-Scholes risk-free rate |
+| Backtest contracts | 1 (100 shares) | |
+
+**Active in:** NUKED_ZONE only
+
+---
+
 ## Key Observations
 
 - **Scavenger carries 96% of combined P&L** ($190K of $198K) — wheel is the workhorse
