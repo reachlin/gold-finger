@@ -316,6 +316,7 @@ WATCHLIST = [
     "META", "MSFT", "GOOGL",
     "IBM", "INTC", "IONQ", "KO",
     "MMM", "XOM", "PG", "TSLA",
+    "UNH", "HD", "ABT",
 ]
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
