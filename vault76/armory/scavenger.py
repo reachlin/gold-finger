@@ -41,15 +41,18 @@ from schwab.options_pricer import (
 )
 
 # ── Scavenger parameters ──────────────────────────────────────────────────────
-OTM_PUT_PCT      = 0.05   # sell put 5% below current price
-OTM_CALL_PCT     = 0.08   # sell call 8% above cost basis / current (whichever higher)
-SELL_DTE         = 30     # days to expiration for both legs
-MIN_HV           = 0.20   # minimum historical vol — below this, premium is too thin
-MIN_PREMIUM_PCT  = 0.005  # minimum premium as % of stock price (0.5%)
-ADX_TREND_MAX    = 20     # don't sell puts if stock is trending (Raider's turf)
-RSI_NEUTRAL_LO   = 35     # RSI floor for put-selling (below = falling knife)
-RSI_NEUTRAL_HI   = 65     # RSI ceiling for put-selling (above = overbought)
-UNDERWATER_MAX   = 0.10   # don't sell call if price is > 10% below cost basis
+OTM_PUT_PCT           = 0.05   # sell put 5% below current price
+OTM_CALL_PCT          = 0.08   # sell call 8% OTM (base — sideways stock)
+OTM_CALL_PCT_RECLAMATION = 0.13  # wider call for trending stock (ADX_CALL_WIDE ≤ ADX < ADX_CALL_BLOCK)
+ADX_CALL_WIDE         = 25     # ADX threshold to widen call strike
+ADX_CALL_BLOCK        = 35     # ADX threshold to skip call (reserved — requires share-exit in backtest)
+SELL_DTE              = 30     # days to expiration for both legs
+MIN_HV                = 0.20   # minimum historical vol — below this, premium is too thin
+MIN_PREMIUM_PCT       = 0.005  # minimum premium as % of stock price (0.5%)
+ADX_TREND_MAX         = 20     # don't sell puts if stock is trending (Raider's turf)
+RSI_NEUTRAL_LO        = 35     # RSI floor for put-selling (below = falling knife)
+RSI_NEUTRAL_HI        = 65     # RSI ceiling for put-selling (above = overbought)
+UNDERWATER_MAX        = 0.10   # don't sell call if price is > 10% below cost basis
 
 
 class Scavenger(Role):
@@ -57,9 +60,10 @@ class Scavenger(Role):
     name            = "The Scavenger"
     optimal_regimes = [Overseer.WASTELAND, Overseer.RECLAMATION]
 
-    otm_put_pct  = OTM_PUT_PCT
-    otm_call_pct = OTM_CALL_PCT
-    sell_dte     = SELL_DTE
+    otm_put_pct              = OTM_PUT_PCT
+    otm_call_pct             = OTM_CALL_PCT               # WASTELAND default
+    otm_call_pct_reclamation = OTM_CALL_PCT_RECLAMATION   # RECLAMATION: wider
+    sell_dte                 = SELL_DTE
 
     def scan(self, symbol: str, df: pd.DataFrame,
              regime: str | None = None,
@@ -106,7 +110,7 @@ class Scavenger(Role):
         base["adx"]   = round(adx, 1)
 
         if cost_basis is not None:
-            return self._covered_call_signal(base, close, adx, hv, cost_basis)
+            return self._covered_call_signal(base, close, adx, hv, cost_basis, regime)
         return self._cash_secured_put_signal(base, close, adx, rsi, hv)
 
     def _cash_secured_put_signal(self, base: dict, close: float,
@@ -142,23 +146,26 @@ class Scavenger(Role):
         return base
 
     def _covered_call_signal(self, base: dict, close: float,
-                              adx: float, hv: float, cost_basis: float) -> dict:
+                              adx: float, hv: float, cost_basis: float,
+                              regime: str | None = None) -> dict:
         underwater_pct = (cost_basis - close) / cost_basis
         if underwater_pct > UNDERWATER_MAX:
             base["reason"] = (f"price ${close:.2f} is {underwater_pct*100:.1f}% below cost "
                               f"${cost_basis:.2f} — wait for recovery")
             return base
 
-        if adx >= ADX_TREND_MAX + 5:   # a little looser — let mild trends run
-            base["reason"] = f"ADX {adx:.1f} — strong uptrend, hold shares, don't cap upside"
-            return base
-
         if hv < MIN_HV:
             base["reason"] = f"HV {hv*100:.1f}% too low — call premium not worth selling"
             return base
 
+        # Two-tier call strike based on stock's own ADX:
+        #   ADX < ADX_CALL_WIDE  → 8% OTM  (sideways, maximize premium income)
+        #   ADX >= ADX_CALL_WIDE → 13% OTM (trending, give the stock room before assignment)
+        # Note: ADX_CALL_BLOCK (skip call entirely) is intentionally unused here —
+        # the backtest has no share-exit path, so holding naked produces no P&L.
+        otm_pct = OTM_CALL_PCT_RECLAMATION if adx >= ADX_CALL_WIDE else OTM_CALL_PCT
         reference = max(close, cost_basis)
-        strike    = round(reference * (1 + OTM_CALL_PCT), 0)
+        strike    = round(reference * (1 + otm_pct), 0)
         T         = SELL_DTE / 365
         premium   = black_scholes_call(close, strike, T, RISK_FREE_RATE, hv)
 
@@ -173,6 +180,8 @@ class Scavenger(Role):
             "premium_pct": round(premium / close * 100, 2),
             "cost_basis":  round(cost_basis, 2),
             "max_gain":    round((strike - cost_basis + premium) * 100, 2),
-            "reason":      f"assigned shares — sell {OTM_CALL_PCT*100:.0f}% OTM call for income (The Scavenger)",
+            "regime":      regime,
+            "reason":      (f"assigned shares — sell {otm_pct*100:.0f}% OTM call "
+                            f"({'trending' if adx >= ADX_CALL_WIDE else 'sideways'} ADX={adx:.0f})"),
         })
         return base

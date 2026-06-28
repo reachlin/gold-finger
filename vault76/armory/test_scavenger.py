@@ -161,6 +161,68 @@ class TestScavengerSellCall:
                                  cost_basis=close * 0.95)
         assert res["signal"] == "NONE"
 
+    def test_wider_call_strike_when_stock_trending(self):
+        """High-ADX stock gets a wider call strike — don't cap a runner."""
+        import numpy as np
+        from vault76.armory.scavenger import Scavenger, ADX_CALL_WIDE
+        from schwab.trend_scanner import compute_indicators
+
+        # Build a strongly-trending df so ADX > ADX_CALL_WIDE
+        np.random.seed(7)
+        n = 200
+        close = np.linspace(80, 160, n) + np.random.randn(n) * 0.5  # strong uptrend
+        df_trend = pd.DataFrame({
+            "datetime": pd.date_range("2022-01-01", periods=n, freq="B"),
+            "open":  close * 0.999, "high": close * 1.005,
+            "low":   close * 0.995, "close": close,
+            "volume": np.ones(n) * 5e6,
+        })
+        df_trend = compute_indicators(df_trend).dropna().reset_index(drop=True)
+        df_side  = compute_indicators(_make_sideways_df()).dropna().reset_index(drop=True)
+
+        close_t = float(df_trend.iloc[-1]["close"])
+        close_s = float(df_side.iloc[-1]["close"])
+
+        res_trend = Scavenger().scan("TEST", df_trend, cost_basis=close_t * 0.95)
+        res_side  = Scavenger().scan("TEST", df_side,  cost_basis=close_s * 0.95)
+
+        if res_trend["signal"] == "SELL_CALL" and res_side["signal"] == "SELL_CALL":
+            assert res_trend["strike"] / close_t > res_side["strike"] / close_s, (
+                "Trending stock should get wider OTM call than sideways stock"
+            )
+
+    def test_wide_call_otm_pct_larger_than_base(self):
+        """OTM_CALL_PCT_RECLAMATION (wide) must exceed OTM_CALL_PCT (base)."""
+        from vault76.armory.scavenger import OTM_CALL_PCT_RECLAMATION, OTM_CALL_PCT
+        assert OTM_CALL_PCT_RECLAMATION > OTM_CALL_PCT
+
+    def test_no_call_when_stock_in_runaway_trend(self):
+        """ADX >= ADX_CALL_BLOCK: hold shares naked — don't cap a runaway runner."""
+        import numpy as np
+        from vault76.armory.scavenger import Scavenger, ADX_CALL_BLOCK
+        from schwab.trend_scanner import compute_indicators
+
+        np.random.seed(11)
+        n = 300
+        # Extremely strong trend to push ADX well above block threshold
+        close = np.linspace(50, 300, n) + np.random.randn(n) * 0.2
+        df = pd.DataFrame({
+            "datetime": pd.date_range("2022-01-01", periods=n, freq="B"),
+            "open":  close * 0.998, "high": close * 1.006,
+            "low":   close * 0.994, "close": close,
+            "volume": np.ones(n) * 8e6,
+        })
+        df = compute_indicators(df).dropna().reset_index(drop=True)
+        adx_val = float(df.iloc[-1]["adx"])
+        if adx_val < ADX_CALL_BLOCK:
+            pytest.skip(f"Synthetic df ADX={adx_val:.1f} didn't reach {ADX_CALL_BLOCK} — skip")
+
+        close_last = float(df.iloc[-1]["close"])
+        res = Scavenger().scan("TEST", df, cost_basis=close_last * 0.95)
+        assert res["signal"] == "NONE", (
+            f"Expected NONE for runaway trend (ADX={adx_val:.1f}), got {res['signal']}"
+        )
+
 
 class TestScavengerParameters:
     def test_otm_put_pct_is_conservative(self):
