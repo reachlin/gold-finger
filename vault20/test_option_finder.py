@@ -15,6 +15,7 @@ from vault20.option_finder import (
     filter_calls,
     filter_puts,
     format_candidates,
+    _parse_schwab_exp_map,
 )
 
 
@@ -133,6 +134,57 @@ class TestFilterPuts:
         df = self._chain()
         result = filter_puts(df, stock_price=128.0, min_oi=50, min_otm_pct=0)
         assert all(result["openInterest"] >= 50)
+
+
+class TestParseSchwebExpMap:
+    def _exp_map(self, strike, bid, ask, oi, delta, theta, vega, gamma, itm=False):
+        return {
+            "2026-07-24:26": {
+                str(float(strike)): [{
+                    "bid": bid, "ask": ask, "openInterest": oi,
+                    "totalVolume": 100, "volatility": 94.0,
+                    "delta": delta, "gamma": gamma,
+                    "theta": theta, "vega": vega,
+                    "inTheMoney": itm,
+                }]
+            }
+        }
+
+    def test_basic_call_parsed(self):
+        exp_map = self._exp_map(130, 12.0, 12.5, 500, 0.52, -0.15, 0.20, 0.01)
+        rows = _parse_schwab_exp_map(exp_map, "covered-call", 128.0, 100, 1.0)
+        assert len(rows) == 1
+        r = rows[0]
+        assert r["strike"]  == 130.0
+        assert r["bid"]     == 12.0
+        assert r["delta"]   == 0.52
+        assert r["theta"]   == -0.15
+        assert r["vega"]    == 0.20
+        assert r["gamma"]   == 0.01
+        assert r["expiry"]  == "2026-07-24"
+        assert r["dte"]     == 26
+
+    def test_itm_filtered(self):
+        exp_map = self._exp_map(125, 5.0, 5.5, 500, 0.75, -0.20, 0.15, 0.02, itm=True)
+        rows = _parse_schwab_exp_map(exp_map, "covered-call", 128.0, 100, 1.0)
+        assert len(rows) == 0
+
+    def test_low_oi_filtered(self):
+        exp_map = self._exp_map(130, 12.0, 12.5, 50, 0.52, -0.15, 0.20, 0.01)
+        rows = _parse_schwab_exp_map(exp_map, "covered-call", 128.0, 100, 1.0)
+        assert len(rows) == 0
+
+    def test_iv_converted_from_percentage(self):
+        exp_map = self._exp_map(130, 12.0, 12.5, 500, 0.52, -0.15, 0.20, 0.01)
+        rows = _parse_schwab_exp_map(exp_map, "covered-call", 128.0, 100, 1.0)
+        # Schwab sends 94.0, should be stored as 0.94
+        assert abs(rows[0]["iv"] - 0.94) < 0.001
+
+    def test_scoring_fields_present(self):
+        exp_map = self._exp_map(130, 12.0, 12.5, 500, 0.52, -0.15, 0.20, 0.01)
+        rows = _parse_schwab_exp_map(exp_map, "covered-call", 128.0, 100, 1.0)
+        for key in ("monthly_yield_pct", "otm_pct", "annual_yield_pct", "breakeven"):
+            assert key in rows[0]
 
 
 class TestFormatCandidates:
