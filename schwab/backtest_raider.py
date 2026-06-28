@@ -61,6 +61,10 @@ def walk_forward_raider(df: pd.DataFrame, symbol: str,
         regime   = _get_regime(overseer, cur_date, spy_ind, spy_date_idx, vix_by_date)
 
         if state == FLAT:
+            # Overseer gates entry: route by this stock's own ADX
+            if "raider" not in overseer.recommend_roles(regime, row):
+                i += 1
+                continue
             res = raid.scan(symbol, snapshot, regime=regime)
             if res["signal"] == "BUY":
                 pos = {

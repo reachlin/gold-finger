@@ -17,6 +17,7 @@ from schwab.trend_scanner import compute_indicators
 
 VIX_NUKED   = 30.0   # VIX ≥ this → NUKED_ZONE
 MIN_BARS    = 60     # minimum SPY bars needed to classify
+ADX_RUNNER  = 28     # per-stock ADX ≥ this → trending runner, route to Raider
 
 
 class Overseer:
@@ -67,9 +68,35 @@ class Overseer:
     def describe(self, regime: str) -> str:
         return self._DESCRIPTIONS.get(regime, regime)
 
-    def recommend_roles(self, regime: str) -> list[str]:
-        """Return list of role codenames to deploy for this regime."""
-        return list(self._ROLES.get(regime, []))
+    def recommend_roles(self, regime: str,
+                        stock_ind: "dict | pd.Series | None" = None) -> list[str]:
+        """
+        Return role codenames for this regime.
+
+        stock_ind : optional per-stock indicators (must contain 'adx').
+                    When provided, routes by the stock's own trend strength:
+                      RECLAMATION + ADX >= ADX_RUNNER → ["raider"]   (ride the trend)
+                      RECLAMATION + ADX <  ADX_RUNNER → ["scavenger"] (collect premium)
+                      WASTELAND (any ADX)             → ["scavenger"] (income focus)
+                      NUKED_ZONE (any ADX)            → ["chemist"]   (unchanged)
+                    Without stock_ind, returns the static regime mapping.
+        """
+        if stock_ind is None:
+            return list(self._ROLES.get(regime, []))
+
+        if regime == self.NUKED_ZONE:
+            return list(self._ROLES[self.NUKED_ZONE])
+
+        adx = float(stock_ind.get("adx", 0.0) if hasattr(stock_ind, "get")
+                    else getattr(stock_ind, "adx", 0.0))
+
+        if regime == self.RECLAMATION:
+            return ["raider"] if adx >= ADX_RUNNER else ["scavenger"]
+
+        if regime == self.WASTELAND:
+            return ["scavenger"]
+
+        return []
 
 
 # ---------------------------------------------------------------------------

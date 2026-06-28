@@ -143,6 +143,10 @@ def walk_forward_scavenger(df: pd.DataFrame, symbol: str,
 
         # ── FLAT: look for a put to sell ─────────────────────────────────────
         if state == FLAT:
+            # Overseer gates entry: route by this stock's own ADX
+            if "scavenger" not in overseer.recommend_roles(regime, row):
+                i += 1
+                continue
             res = scav.scan(symbol, snapshot, regime=regime)
             if res["signal"] == "SELL_PUT":
                 iv = _entry_iv(snapshot)

@@ -110,23 +110,76 @@ class TestOverseerWeaponSelection:
     def test_scavenger_recommended_in_wasteland(self):
         from vault76.overseer import Overseer
         o = Overseer()
-        cards = o.recommend_roles(Overseer.WASTELAND)
-        assert "scavenger" in cards
+        assert "scavenger" in o.recommend_roles(Overseer.WASTELAND)
 
-    def test_scavenger_recommended_in_reclamation(self):
+    def test_scavenger_recommended_in_reclamation_no_stock(self):
+        """Without stock_ind, static mapping applies — backward compat."""
         from vault76.overseer import Overseer
         o = Overseer()
-        cards = o.recommend_roles(Overseer.RECLAMATION)
-        assert "scavenger" in cards
+        assert "scavenger" in o.recommend_roles(Overseer.RECLAMATION)
 
     def test_chemist_active_in_nuked_zone(self):
         from vault76.overseer import Overseer
         o = Overseer()
-        roles = o.recommend_roles(Overseer.NUKED_ZONE)
-        assert "chemist" in roles
+        assert "chemist" in o.recommend_roles(Overseer.NUKED_ZONE)
 
     def test_recommend_returns_list(self):
         from vault76.overseer import Overseer
         o = Overseer()
         for regime in (Overseer.RECLAMATION, Overseer.WASTELAND, Overseer.NUKED_ZONE):
             assert isinstance(o.recommend_roles(regime), list)
+
+
+class TestOverseerStockRouting:
+    """Stock-aware routing: Overseer picks role based on per-stock ADX."""
+
+    def test_runner_routes_to_raider_in_reclamation(self):
+        """High-ADX stock in RECLAMATION → Raider (ride the trend)."""
+        from vault76.overseer import Overseer, ADX_RUNNER
+        o = Overseer()
+        ind = {"adx": ADX_RUNNER + 5}
+        roles = o.recommend_roles(Overseer.RECLAMATION, ind)
+        assert "raider" in roles
+        assert "scavenger" not in roles
+
+    def test_sideways_routes_to_scavenger_in_reclamation(self):
+        """Low-ADX stock in RECLAMATION → Scavenger (collect premium)."""
+        from vault76.overseer import Overseer, ADX_RUNNER
+        o = Overseer()
+        ind = {"adx": ADX_RUNNER - 5}
+        roles = o.recommend_roles(Overseer.RECLAMATION, ind)
+        assert "scavenger" in roles
+        assert "raider" not in roles
+
+    def test_wasteland_always_scavenger(self):
+        """WASTELAND → Scavenger regardless of stock ADX (income focus)."""
+        from vault76.overseer import Overseer
+        o = Overseer()
+        for adx in [10, 30, 50]:
+            roles = o.recommend_roles(Overseer.WASTELAND, {"adx": adx})
+            assert "scavenger" in roles
+            assert "raider" not in roles
+
+    def test_nuked_zone_always_chemist(self):
+        """NUKED_ZONE → Chemist regardless of stock ADX."""
+        from vault76.overseer import Overseer
+        o = Overseer()
+        for adx in [10, 30, 50]:
+            roles = o.recommend_roles(Overseer.NUKED_ZONE, {"adx": adx})
+            assert "chemist" in roles
+            assert "scavenger" not in roles
+            assert "raider" not in roles
+
+    def test_adx_at_threshold_routes_to_raider(self):
+        """ADX exactly at ADX_RUNNER → Raider (boundary inclusive)."""
+        from vault76.overseer import Overseer, ADX_RUNNER
+        o = Overseer()
+        roles = o.recommend_roles(Overseer.RECLAMATION, {"adx": ADX_RUNNER})
+        assert "raider" in roles
+
+    def test_backward_compat_no_stock_ind(self):
+        """No stock_ind → static mapping unchanged."""
+        from vault76.overseer import Overseer
+        o = Overseer()
+        roles = o.recommend_roles(Overseer.RECLAMATION)
+        assert "scavenger" in roles and "raider" in roles

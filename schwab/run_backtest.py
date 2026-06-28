@@ -207,6 +207,11 @@ def print_report(rows: list[dict], role: str,
         "edge":     sum(r["combined"] for r in rows) - sum(r["bnh"] for r in rows),
     }
     print(_row("TOTAL", tot_trades, [totals[key] for _, key in pnl_cols]))
+
+    # COMBO: bottom-line portfolio view — per-role columns blank, only Combined/B&H/Edge
+    _BOTTOM_LINE = {"combined", "bnh", "edge"}
+    combo_cols = [totals[key] if key in _BOTTOM_LINE else "—" for _, key in pnl_cols]
+    print(_row("COMBO", "—", combo_cols))
     print(f"{'═' * width}")
 
     # ── summary ──────────────────────────────────────────────────────────────
