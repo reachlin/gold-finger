@@ -260,6 +260,7 @@ WATCHLIST = [
     "NVDA", "AMD", "AAPL", "AMZN",
     "META", "MSFT", "GOOGL",
     "IBM", "INTC", "IONQ", "KO",
+    "MMM", "XOM", "PG", "TSLA",
 ]
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
