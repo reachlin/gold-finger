@@ -82,6 +82,38 @@ class TestWalkForwardScavenger:
                                                     "put_assigned")
 
 
+class TestAdaptiveProfitTarget:
+    def test_returns_float(self):
+        from backtest_scavenger import adaptive_profit_target
+        assert isinstance(adaptive_profit_target(0.40, 30), float)
+
+    def test_higher_iv_gives_higher_target(self):
+        from backtest_scavenger import adaptive_profit_target
+        low  = adaptive_profit_target(0.20, 30)
+        high = adaptive_profit_target(0.80, 30)
+        assert high > low
+
+    def test_longer_dte_gives_higher_target(self):
+        from backtest_scavenger import adaptive_profit_target
+        short = adaptive_profit_target(0.40, 15)
+        long_ = adaptive_profit_target(0.40, 60)
+        assert long_ > short
+
+    def test_range_always_35_to_65(self):
+        from backtest_scavenger import adaptive_profit_target
+        for iv in [0.10, 0.20, 0.50, 1.00, 2.00]:
+            for dte in [5, 15, 30, 60, 90]:
+                t = adaptive_profit_target(iv, dte)
+                assert 0.35 <= t <= 0.65, f"iv={iv} dte={dte} → {t}"
+
+    def test_midpoint_gives_50_pct(self):
+        from backtest_scavenger import adaptive_profit_target
+        # iv=0.60: iv_factor=(0.60-0.20)/0.80=0.5, dte=45: dte_factor=(45-15)/60=0.5
+        # score=0.6*0.5+0.4*0.5=0.5 → target=0.35+0.30*0.5=0.50
+        t = adaptive_profit_target(0.60, 45)
+        assert abs(t - 0.50) < 0.01
+
+
 class TestPnlCalculations:
     def test_put_expired_pnl_equals_premium_times_100(self):
         from backtest_scavenger import walk_forward_scavenger

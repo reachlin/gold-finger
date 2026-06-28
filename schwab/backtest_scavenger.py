@@ -9,9 +9,9 @@ State machine per symbol:
   HOLDING    → scan for SELL_CALL signal
   CALL_OPEN  → iterate bars; early-exit at 50% profit, or hold to expiry
 
-Early exit (from optopsy): buy back the short option when its current B-S value
-falls to PROFIT_TARGET_PCT of the premium collected. Frees capital sooner and
-avoids gamma risk near expiry.
+Early exit: buy back the short option when its B-S mark-to-market falls to the
+adaptive profit target (35%–65% of premium). Target scales with entry IV and DTE
+— high-IV / long-dated options wait longer; thin-premium / short-dated exit fast.
 
 Usage:
   /Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/backtest_scavenger.py
@@ -26,18 +26,49 @@ import pandas as pd
 
 from trend_scanner import compute_indicators
 from vault76.armory.scavenger import Scavenger
-from options_pricer import black_scholes_put, black_scholes_call, historical_vol
+from options_pricer import (black_scholes_put, black_scholes_call,
+                            historical_vol, yang_zhang_vol)
 
-DTE_BARS           = 30    # trading days to expiration
-SHARES             = 100   # 1 contract
-MIN_HISTORY        = 60    # bars needed before scanning starts
-PROFIT_TARGET_PCT  = 0.50  # buy back when option value ≤ 50% of premium sold
-RISK_FREE          = 0.05
+DTE_BARS    = 30    # trading days to expiration
+SHARES      = 100   # 1 contract
+MIN_HISTORY = 60    # bars needed before scanning starts
+RISK_FREE   = 0.05
+
+# Adaptive profit target bounds
+_TARGET_MIN = 0.35
+_TARGET_MAX = 0.65
 
 FLAT       = "FLAT"
 PUT_OPEN   = "PUT_OPEN"
 HOLDING    = "HOLDING"
 CALL_OPEN  = "CALL_OPEN"
+
+
+# ---------------------------------------------------------------------------
+# Adaptive profit target
+# ---------------------------------------------------------------------------
+
+def adaptive_profit_target(entry_iv: float, entry_dte: int) -> float:
+    """
+    Self-adjusting exit threshold in [35%, 65%]:
+    - Higher IV  → higher target (fat premium is worth waiting for more decay)
+    - Longer DTE → higher target (more time to collect full theta decay)
+
+    Calibration anchors:
+      iv=0.20, dte=15 → ~35%  (thin premium, exit fast)
+      iv=0.60, dte=45 → ~50%  (standard tastyworks rule)
+      iv=1.00, dte=75 → ~65%  (high-IV, long-dated — hold for bigger capture)
+    """
+    iv_factor  = min(max((entry_iv - 0.20) / 0.80, 0.0), 1.0)
+    dte_factor = min(max((entry_dte - 15)  / 60,   0.0), 1.0)
+    score      = 0.6 * iv_factor + 0.4 * dte_factor
+    return _TARGET_MIN + (_TARGET_MAX - _TARGET_MIN) * score
+
+
+def _entry_iv(snapshot: "pd.DataFrame") -> float:
+    """Yang-Zhang vol at entry; falls back to close-only HV."""
+    iv = yang_zhang_vol(snapshot) if "open" in snapshot.columns else 0.0
+    return iv if iv > 0 else (historical_vol(snapshot["close"]) or 0.30)
 
 
 # ---------------------------------------------------------------------------
@@ -66,14 +97,17 @@ def walk_forward_scavenger(df: pd.DataFrame, symbol: str) -> list[dict]:
         if state == FLAT:
             res = scav.scan(symbol, snapshot)
             if res["signal"] == "SELL_PUT":
+                iv = _entry_iv(snapshot)
                 cycle = {
-                    "symbol":       symbol,
-                    "put_entry_i":  i,
-                    "put_strike":   res["strike"],
-                    "put_premium":  res["premium"],
-                    "put_expiry_i": min(i + DTE_BARS, n - 1),
-                    "put_close":    float(row["close"]),
-                    "all_premiums": res["premium"],
+                    "symbol":           symbol,
+                    "put_entry_i":      i,
+                    "put_strike":       res["strike"],
+                    "put_premium":      res["premium"],
+                    "put_expiry_i":     min(i + DTE_BARS, n - 1),
+                    "put_close":        float(row["close"]),
+                    "all_premiums":     res["premium"],
+                    "put_entry_iv":     iv,
+                    "put_profit_target": adaptive_profit_target(iv, DTE_BARS),
                 }
                 state = PUT_OPEN
                 i    += 1   # step into the holding period bar-by-bar
@@ -91,8 +125,8 @@ def walk_forward_scavenger(df: pd.DataFrame, symbol: str) -> list[dict]:
                                           RISK_FREE, sigma)
             entry_prem = cycle["put_premium"]
 
-            # 50% profit target — buy back early
-            if cur_val <= entry_prem * PROFIT_TARGET_PCT and days_left > 0:
+            # Adaptive profit target — buy back early
+            if cur_val <= entry_prem * cycle["put_profit_target"] and days_left > 0:
                 pnl = (entry_prem - cur_val) * SHARES
                 events.append({**cycle, "event": "put_early_exit",
                                "pnl": round(pnl, 2), "exit_i": i,
@@ -123,11 +157,14 @@ def walk_forward_scavenger(df: pd.DataFrame, symbol: str) -> list[dict]:
         elif state == HOLDING:
             res = scav.scan(symbol, snapshot, cost_basis=cycle["cost_basis"])
             if res["signal"] == "SELL_CALL":
-                cycle["call_entry_i"]   = i
-                cycle["call_strike"]    = res["strike"]
-                cycle["call_premium"]   = res["premium"]
-                cycle["all_premiums"]  += res["premium"]
-                cycle["call_expiry_i"]  = min(i + DTE_BARS, n - 1)
+                iv = _entry_iv(snapshot)
+                cycle["call_entry_i"]        = i
+                cycle["call_strike"]         = res["strike"]
+                cycle["call_premium"]        = res["premium"]
+                cycle["all_premiums"]       += res["premium"]
+                cycle["call_expiry_i"]       = min(i + DTE_BARS, n - 1)
+                cycle["call_entry_iv"]       = iv
+                cycle["call_profit_target"]  = adaptive_profit_target(iv, DTE_BARS)
                 state = CALL_OPEN
                 i    += 1   # step bar-by-bar
             else:
@@ -144,8 +181,8 @@ def walk_forward_scavenger(df: pd.DataFrame, symbol: str) -> list[dict]:
                                            RISK_FREE, sigma)
             entry_prem = cycle["call_premium"]
 
-            # 50% profit target — buy back early, hold shares, sell another call
-            if cur_val <= entry_prem * PROFIT_TARGET_PCT and days_left > 0:
+            # Adaptive profit target — buy back early, hold shares, sell another call
+            if cur_val <= entry_prem * cycle["call_profit_target"] and days_left > 0:
                 pnl = (entry_prem - cur_val) * SHARES
                 cycle["all_premiums"] += entry_prem - cur_val
                 events.append({**cycle, "event": "call_early_exit",
@@ -202,11 +239,11 @@ def print_scavenger_report(events: list[dict], init_price: float,
     print(f"  Events:         {total_events}")
     print(f"  Puts sold:      {put_expired_cnt + put_early_cnt + put_assigned_cnt}")
     print(f"    ↳ expired worthless: {put_expired_cnt}")
-    print(f"    ↳ early exit (50%):  {put_early_cnt}")
+    print(f"    ↳ early exit (adaptive): {put_early_cnt}")
     print(f"    ↳ assigned:          {put_assigned_cnt}")
     print(f"  Calls sold:     {call_expired_cnt + call_early_cnt + called_away_cnt}")
     print(f"    ↳ expired worthless: {call_expired_cnt}")
-    print(f"    ↳ early exit (50%):  {call_early_cnt}")
+    print(f"    ↳ early exit (adaptive): {call_early_cnt}")
     print(f"    ↳ called away:       {called_away_cnt}")
     print(f"{'─'*55}")
     print(f"  Wheel P&L:      ${total_pnl:+.2f}")
