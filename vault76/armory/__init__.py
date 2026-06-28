@@ -1,1 +1,1 @@
-# Vault 76 Armory — perk card collection
+# Vault 76 Armory — role collection

@@ -1,5 +1,5 @@
 """
-Tests for armory/raider.py — The Raider perk card.
+Tests for armory/raider.py — The Raider role.
 
 Run: /Users/lincai/anaconda3/envs/gold-finger/bin/python -m pytest vault76/armory/test_raider.py -v
 """

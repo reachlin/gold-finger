@@ -1,5 +1,5 @@
 """
-The Scavenger — Vault 76 Perk Card #002
+The Scavenger — Vault 76 Role #002
 
 Patient survivor. Finds value in quiet corners of the Wasteland —
 generates income by selling options when nothing else is moving.
@@ -33,7 +33,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 import pandas as pd
-from vault76.armory.base import PerkCard
+from vault76.armory.base import Role
 from vault76.overseer import Overseer
 from schwab.options_pricer import (
     black_scholes_put, black_scholes_call,
@@ -52,7 +52,7 @@ RSI_NEUTRAL_HI   = 65     # RSI ceiling for put-selling (above = overbought)
 UNDERWATER_MAX   = 0.10   # don't sell call if price is > 10% below cost basis
 
 
-class Scavenger(PerkCard):
+class Scavenger(Role):
     codename        = "scavenger"
     name            = "The Scavenger"
     optimal_regimes = [Overseer.WASTELAND, Overseer.RECLAMATION]
@@ -91,7 +91,7 @@ class Scavenger(PerkCard):
             return base
 
         if regime is not None and not self.should_deploy(regime):
-            base["reason"] = f"perk card benched in {regime}"
+            base["reason"] = f"role benched in {regime}"
             return base
 
         last     = df.iloc[-1]

@@ -1,5 +1,5 @@
 """
-Tests for armory/scavenger.py — The Scavenger perk card (wheel strategy).
+Tests for armory/scavenger.py — The Scavenger role (wheel strategy).
 
 Run: /Users/lincai/anaconda3/envs/gold-finger/bin/python -m pytest vault76/armory/test_scavenger.py -v
 """

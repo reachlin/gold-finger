@@ -110,23 +110,23 @@ class TestOverseerWeaponSelection:
     def test_scavenger_recommended_in_wasteland(self):
         from vault76.overseer import Overseer
         o = Overseer()
-        cards = o.recommend_perk_cards(Overseer.WASTELAND)
+        cards = o.recommend_roles(Overseer.WASTELAND)
         assert "scavenger" in cards
 
     def test_scavenger_recommended_in_reclamation(self):
         from vault76.overseer import Overseer
         o = Overseer()
-        cards = o.recommend_perk_cards(Overseer.RECLAMATION)
+        cards = o.recommend_roles(Overseer.RECLAMATION)
         assert "scavenger" in cards
 
     def test_no_cards_in_nuked_zone(self):
         from vault76.overseer import Overseer
         o = Overseer()
-        cards = o.recommend_perk_cards(Overseer.NUKED_ZONE)
+        cards = o.recommend_roles(Overseer.NUKED_ZONE)
         assert cards == []
 
     def test_recommend_returns_list(self):
         from vault76.overseer import Overseer
         o = Overseer()
         for regime in (Overseer.RECLAMATION, Overseer.WASTELAND, Overseer.NUKED_ZONE):
-            assert isinstance(o.recommend_perk_cards(regime), list)
+            assert isinstance(o.recommend_roles(regime), list)

@@ -1,5 +1,5 @@
 """
-Backtest for The Scavenger perk card — wheel strategy.
+Backtest for The Scavenger role — wheel strategy.
 
 Simulates cash-secured put → covered call cycles on historical daily data.
 
@@ -26,6 +26,7 @@ import pandas as pd
 
 from trend_scanner import compute_indicators
 from vault76.armory.scavenger import Scavenger
+from vault76.overseer import Overseer
 from options_pricer import (black_scholes_put, black_scholes_call,
                             historical_vol, yang_zhang_vol)
 
@@ -75,39 +76,85 @@ def _entry_iv(snapshot: "pd.DataFrame") -> float:
 # Core simulation
 # ---------------------------------------------------------------------------
 
-def walk_forward_scavenger(df: pd.DataFrame, symbol: str) -> list[dict]:
+def _build_regime_lookup(spy_df: pd.DataFrame | None,
+                         vix_df: pd.DataFrame | None) -> tuple:
+    """
+    Pre-process SPY and VIX into fast per-date lookups.
+    Returns (overseer, spy_ind, spy_date_idx, vix_by_date).
+    Any of these may be None/empty if data is missing.
+    """
+    overseer = Overseer()
+    if spy_df is None:
+        return overseer, None, {}, {}
+
+    spy_ind = compute_indicators(spy_df).dropna().reset_index(drop=True)
+    spy_dates = pd.to_datetime(spy_ind["datetime"]).dt.date
+    spy_date_idx = {d: i for i, d in enumerate(spy_dates)}
+
+    vix_by_date = {}
+    if vix_df is not None:
+        col = "datetime" if "datetime" in vix_df.columns else "date"
+        dates = pd.to_datetime(vix_df[col]).dt.date
+        vix_by_date = dict(zip(dates, vix_df["close"]))
+
+    return overseer, spy_ind, spy_date_idx, vix_by_date
+
+
+def _get_regime(overseer: Overseer, cur_date, spy_ind, spy_date_idx: dict,
+                vix_by_date: dict) -> str:
+    """Classify regime at cur_date using pre-built lookups."""
+    if spy_ind is None:
+        return Overseer.WASTELAND   # no SPY data — default safe regime
+    spy_i = spy_date_idx.get(cur_date)
+    if spy_i is None or spy_i < MIN_HISTORY:
+        return Overseer.WASTELAND
+    vix = vix_by_date.get(cur_date, 20.0)
+    return overseer.classify(spy_ind.iloc[:spy_i + 1], vix)
+
+
+def walk_forward_scavenger(df: pd.DataFrame, symbol: str,
+                           spy_df: pd.DataFrame | None = None,
+                           vix_df: pd.DataFrame | None = None) -> list[dict]:
     """
     Simulate the wheel strategy on df.
+    spy_df / vix_df: if provided, the Overseer classifies regime at each bar.
+    NUKED_ZONE blocks opening new puts/calls; existing positions ride through.
     Returns list of trade events with P&L.
     """
     ind  = compute_indicators(df).dropna().reset_index(drop=True)
+    ind["_date"] = pd.to_datetime(ind["datetime"]).dt.date
     scav = Scavenger()
     n    = len(ind)
 
+    overseer, spy_ind, spy_date_idx, vix_by_date = _build_regime_lookup(spy_df, vix_df)
+
     events = []
     state  = FLAT
-    cycle: dict = {}   # tracks current position state
+    cycle: dict = {}
 
     i = MIN_HISTORY
     while i < n:
         row      = ind.iloc[i]
         snapshot = ind.iloc[: i + 1]
+        cur_date = row["_date"]
+        regime   = _get_regime(overseer, cur_date, spy_ind, spy_date_idx, vix_by_date)
 
         # ── FLAT: look for a put to sell ─────────────────────────────────────
         if state == FLAT:
-            res = scav.scan(symbol, snapshot)
+            res = scav.scan(symbol, snapshot, regime=regime)
             if res["signal"] == "SELL_PUT":
                 iv = _entry_iv(snapshot)
                 cycle = {
-                    "symbol":           symbol,
-                    "put_entry_i":      i,
-                    "put_strike":       res["strike"],
-                    "put_premium":      res["premium"],
-                    "put_expiry_i":     min(i + DTE_BARS, n - 1),
-                    "put_close":        float(row["close"]),
-                    "all_premiums":     res["premium"],
-                    "put_entry_iv":     iv,
+                    "symbol":            symbol,
+                    "put_entry_i":       i,
+                    "put_strike":        res["strike"],
+                    "put_premium":       res["premium"],
+                    "put_expiry_i":      min(i + DTE_BARS, n - 1),
+                    "put_close":         float(row["close"]),
+                    "all_premiums":      res["premium"],
+                    "put_entry_iv":      iv,
                     "put_profit_target": adaptive_profit_target(iv, DTE_BARS),
+                    "put_regime":        regime,
                 }
                 state = PUT_OPEN
                 i    += 1   # step into the holding period bar-by-bar
@@ -155,7 +202,8 @@ def walk_forward_scavenger(df: pd.DataFrame, symbol: str) -> list[dict]:
 
         # ── HOLDING: look for a call to sell ─────────────────────────────────
         elif state == HOLDING:
-            res = scav.scan(symbol, snapshot, cost_basis=cycle["cost_basis"])
+            res = scav.scan(symbol, snapshot, cost_basis=cycle["cost_basis"],
+                            regime=regime)
             if res["signal"] == "SELL_CALL":
                 iv = _entry_iv(snapshot)
                 cycle["call_entry_i"]        = i
@@ -165,6 +213,7 @@ def walk_forward_scavenger(df: pd.DataFrame, symbol: str) -> list[dict]:
                 cycle["call_expiry_i"]       = min(i + DTE_BARS, n - 1)
                 cycle["call_entry_iv"]       = iv
                 cycle["call_profit_target"]  = adaptive_profit_target(iv, DTE_BARS)
+                cycle["call_regime"]         = regime
                 state = CALL_OPEN
                 i    += 1   # step bar-by-bar
             else:
@@ -227,6 +276,8 @@ def print_scavenger_report(events: list[dict], init_price: float,
     call_expired_cnt  = sum(1 for e in events if e["event"] == "call_expired")
     call_early_cnt    = sum(1 for e in events if e["event"] == "call_early_exit")
     called_away_cnt   = sum(1 for e in events if e["event"] == "called_away")
+    nuked_put_cnt     = sum(1 for e in events if e.get("put_regime") == Overseer.NUKED_ZONE)
+    nuked_call_cnt    = sum(1 for e in events if e.get("call_regime") == Overseer.NUKED_ZONE)
     total_events      = len(events)
 
     total_pnl = sum(e["pnl"] for e in events)
@@ -246,6 +297,8 @@ def print_scavenger_report(events: list[dict], init_price: float,
     print(f"    ↳ early exit (adaptive): {call_early_cnt}")
     print(f"    ↳ called away:       {called_away_cnt}")
     print(f"{'─'*55}")
+    if nuked_put_cnt or nuked_call_cnt:
+        print(f"  Opened in NUKED_ZONE: {nuked_put_cnt} puts, {nuked_call_cnt} calls")
     print(f"  Wheel P&L:      ${total_pnl:+.2f}")
     print(f"  B&H P&L:        ${bnh_pnl:+.2f}  (buy {init_price:.2f} → {final_price:.2f})")
     print(f"{'─'*55}")
@@ -269,6 +322,11 @@ DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 def main():
     results = []
 
+    spy_path = os.path.join(DATA_DIR, "spy_history.csv")
+    vix_path = os.path.join(DATA_DIR, "vix_history.csv")
+    spy_df = pd.read_csv(spy_path, parse_dates=["datetime"]) if os.path.exists(spy_path) else None
+    vix_df = pd.read_csv(vix_path, parse_dates=["datetime"]) if os.path.exists(vix_path) else None
+
     for symbol in WATCHLIST:
         path = os.path.join(DATA_DIR, f"{symbol.lower()}_history.csv")
         if not os.path.exists(path):
@@ -280,7 +338,7 @@ def main():
             print(f"  [{symbol}] too little data — skip")
             continue
 
-        events = walk_forward_scavenger(df, symbol)
+        events = walk_forward_scavenger(df, symbol, spy_df=spy_df, vix_df=vix_df)
 
         ind = compute_indicators(df).dropna().reset_index(drop=True)
         init_price  = float(ind.iloc[MIN_HISTORY]["close"])

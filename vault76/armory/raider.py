@@ -1,5 +1,5 @@
 """
-The Raider — Vault 76 Perk Card #001
+The Raider — Vault 76 Role #001
 
 Aggressive opportunist. Attacks when the market shows weakness —
 enters on pullbacks in strong uptrends, rides the bounce hard.
@@ -23,7 +23,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 import pandas as pd
-from vault76.armory.base import PerkCard
+from vault76.armory.base import Role
 from vault76.overseer import Overseer
 from schwab.trend_scanner import (
     detect_trend, compute_levels,
@@ -36,7 +36,7 @@ ADX_MIN          = 20    # confirmed trend strength — Raiders pick strong targ
 USE_FIXED_STOP   = False # exit on trend-end only — ride the wave
 
 
-class Raider(PerkCard):
+class Raider(Role):
     codename        = "raider"
     name            = "The Raider"
     optimal_regimes = [Overseer.RECLAMATION, Overseer.WASTELAND]
@@ -90,7 +90,7 @@ class Raider(PerkCard):
         base["close"] = round(last["close"], 2)
 
         if regime is not None and not self.should_deploy(regime):
-            base["reason"] = f"perk card benched in {regime}"
+            base["reason"] = f"role benched in {regime}"
             return base
 
         if not detect_trend(df):

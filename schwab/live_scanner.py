@@ -302,7 +302,7 @@ def _print_startup(client, paper: bool, portfolio=None, price_fetcher=None):
         regime = Overseer.WASTELAND
 
     regime_label = _overseer.describe(regime)
-    cards        = _overseer.recommend_perk_cards(regime)
+    cards        = _overseer.recommend_roles(regime)
     cards_str    = ", ".join(c.upper() for c in cards) if cards else "NONE — stand down"
 
     pos_term, pos_slack = _position_lines(portfolio, price_fetcher)

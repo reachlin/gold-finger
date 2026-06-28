@@ -1,7 +1,7 @@
 """
-PerkCard — base class for all Vault 76 trading strategies.
+Role — base class for all Vault 76 trading strategies.
 
-Each weapon in the armory is a PerkCard with:
+Each role in the armory has:
   - A codename and human name
   - A declared list of optimal regimes
   - A scan() method that returns a signal dict
@@ -11,13 +11,13 @@ from abc import ABC, abstractmethod
 import pandas as pd
 
 
-class PerkCard(ABC):
+class Role(ABC):
     codename:        str        # machine identifier, e.g. "scavenger"
     name:            str        # human name, e.g. "The Scavenger"
-    optimal_regimes: list[str]  # regimes where this card performs best
+    optimal_regimes: list[str]  # regimes where this role performs best
 
     def should_deploy(self, regime: str) -> bool:
-        """True if this card is active in the given regime."""
+        """True if this role is active in the given regime."""
         return regime in self.optimal_regimes
 
     @abstractmethod

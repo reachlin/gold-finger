@@ -13,7 +13,7 @@ Reclamation Day to rebuild Appalachia.
 | Overall trading system | **Vault 76** | Vault-Tec's control vault, #76 — designed to release its dwellers on July 4, 2076 to rebuild society |
 | Market regime classifier | **The Overseer** | The person who runs the Vault; decides when dwellers deploy and which directives they follow |
 | Collection of strategies | **The Armory** | The weapon workshop inside the Vault — where you craft and store your tools of survival |
-| Individual trading strategy | **Perk Card** | Cards you equip to your character granting special abilities; each builds on a different playstyle |
+| Individual trading strategy | **Role** | Cards you equip to your character granting special abilities; each builds on a different playstyle |
 | The trader | **Dweller** | A person who lived in a Vault and emerges to face the Wasteland |
 
 ---
@@ -28,9 +28,9 @@ Reclamation Day to rebuild Appalachia.
 
 ---
 
-## Perk Cards (Strategies)
+## Roles
 
-### The Raider — Perk Card #001
+### The Raider — Role #001
 **Fallout 76:** Raiders are aggressive wastelanders who attack when targets are vulnerable.
 They raid settlements, strike fast, and retreat when outgunned.
 
@@ -40,7 +40,7 @@ They raid settlements, strike fast, and retreat when outgunned.
 - Deploy in: Reclamation Day (primary), The Wasteland (opportunistic)
 - Avoid: Nuked Zone — even Raiders know when to run
 
-### The Scavenger — Perk Card #002
+### The Scavenger — Role #002
 **Fallout 76:** Scavengers are patient survivors who find value in overlooked places.
 They forage through ruined buildings, extract useful components, and never rush.
 
@@ -91,7 +91,7 @@ Extracts premium from quiet markets others ignore.
 
 ---
 
-## Future Perk Cards (Planned)
+## Future Roles (Planned) 
 
 | Codename | Strategy | Optimal Regime |
 |---|---|---|

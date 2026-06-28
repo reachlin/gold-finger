@@ -82,6 +82,67 @@ class TestWalkForwardScavenger:
                                                     "put_assigned")
 
 
+class TestOverseerIntegration:
+    def _make_nuked_spy(self, n=150):
+        """SPY df where EMA50 is falling — WASTELAND, and VIX is spiked."""
+        close = np.linspace(100, 70, n)  # steady decline
+        return pd.DataFrame({
+            "datetime": pd.date_range("2024-01-01", periods=n, freq="B"),
+            "open":  close * 0.998,
+            "high":  close * 1.005,
+            "low":   close * 0.990,
+            "close": close,
+            "volume": np.ones(n) * 1e8,
+        })
+
+    def _make_vix_high(self, n=150, vix_level=35.0):
+        return pd.DataFrame({
+            "datetime": pd.date_range("2024-01-01", periods=n, freq="B"),
+            "open":  np.full(n, vix_level),
+            "high":  np.full(n, vix_level),
+            "low":   np.full(n, vix_level),
+            "close": np.full(n, vix_level),
+            "volume": np.zeros(n),
+        })
+
+    def test_nuked_zone_blocks_all_new_puts(self):
+        from backtest_scavenger import walk_forward_scavenger
+        df      = _make_df(n=200)
+        spy_df  = self._make_nuked_spy(n=200)
+        vix_df  = self._make_vix_high(n=200, vix_level=40.0)
+        events  = walk_forward_scavenger(df, "TEST", spy_df=spy_df, vix_df=vix_df)
+        # With VIX=40 throughout, no new puts should be opened
+        put_events = [e for e in events if "put" in e["event"]]
+        assert len(put_events) == 0, f"Expected 0 puts in NUKED_ZONE, got {len(put_events)}"
+
+    def test_no_spy_data_still_runs(self):
+        from backtest_scavenger import walk_forward_scavenger
+        df = _make_df(n=200)
+        events = walk_forward_scavenger(df, "TEST", spy_df=None, vix_df=None)
+        assert isinstance(events, list)
+
+    def test_regime_recorded_in_cycle(self):
+        from backtest_scavenger import walk_forward_scavenger
+        from vault76.overseer import Overseer
+        df  = _make_df(n=300)
+        # SPY in bull trend (rising prices)
+        spy_close = np.linspace(400, 600, 300)
+        spy_df = pd.DataFrame({
+            "datetime": pd.date_range("2024-01-01", periods=300, freq="B"),
+            "open":  spy_close * 0.999,
+            "high":  spy_close * 1.005,
+            "low":   spy_close * 0.995,
+            "close": spy_close,
+            "volume": np.ones(300) * 1e8,
+        })
+        events = walk_forward_scavenger(df, "TEST", spy_df=spy_df)
+        for e in events:
+            if "put_regime" in e:
+                assert e["put_regime"] in (Overseer.RECLAMATION,
+                                           Overseer.WASTELAND,
+                                           Overseer.NUKED_ZONE)
+
+
 class TestAdaptiveProfitTarget:
     def test_returns_float(self):
         from backtest_scavenger import adaptive_profit_target

@@ -1,7 +1,7 @@
 """
 The Overseer — Vault 76 market regime classifier.
 
-Reads the wasteland conditions and decides which perk cards to deploy.
+Reads the wasteland conditions and decides which roles to deploy.
 
 Regimes:
   RECLAMATION  — Bull market. SPY trending up, VIX calm. Rebuilding is possible.
@@ -27,11 +27,11 @@ class Overseer:
     _DESCRIPTIONS = {
         RECLAMATION: "Reclamation Day — bull market, rebuilding in progress",
         WASTELAND:   "The Wasteland — bear/sideways, survival mode engaged",
-        NUKED_ZONE:  "Nuked Zone — blast radius active, all cards benched",
+        NUKED_ZONE:  "Nuked Zone — blast radius active, all roles benched",
     }
 
-    # Which perk cards are active per regime
-    _PERK_CARDS = {
+    # Which roles are active per regime
+    _ROLES = {
         RECLAMATION: ["raider", "scavenger"],   # Raider attacks pullbacks; Scavenger sells puts on sideways stocks
         WASTELAND:   ["scavenger", "raider"],   # Scavenger primary for income; Raider opportunistic on any trending names
         NUKED_ZONE:  [],                        # Blast radius — all Dwellers stand down
@@ -67,9 +67,9 @@ class Overseer:
     def describe(self, regime: str) -> str:
         return self._DESCRIPTIONS.get(regime, regime)
 
-    def recommend_perk_cards(self, regime: str) -> list[str]:
-        """Return list of perk card codenames to deploy for this regime."""
-        return list(self._PERK_CARDS.get(regime, []))
+    def recommend_roles(self, regime: str) -> list[str]:
+        """Return list of role codenames to deploy for this regime."""
+        return list(self._ROLES.get(regime, []))
 
 
 # ---------------------------------------------------------------------------
@@ -97,15 +97,15 @@ def main():
 
     overseer = Overseer()
     regime   = overseer.classify(spy_df, vix=vix)
-    cards    = overseer.recommend_perk_cards(regime)
+    roles    = overseer.recommend_roles(regime)
 
     print(f"\n{'='*50}")
     print(f"  VAULT 76 — OVERSEER REPORT")
     print(f"{'='*50}")
     print(f"  VIX:     {vix:.1f}")
     print(f"  Regime:  {overseer.describe(regime)}")
-    if cards:
-        print(f"  Deploy:  {', '.join(cards)}")
+    if roles:
+        print(f"  Deploy:  {', '.join(roles)}")
     else:
         print(f"  Deploy:  NONE — stand down, Dweller")
     print(f"{'='*50}\n")
