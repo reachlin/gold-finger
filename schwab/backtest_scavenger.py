@@ -103,12 +103,14 @@ def _build_regime_lookup(spy_df: pd.DataFrame | None,
 def _get_regime(overseer: Overseer, cur_date, spy_ind, spy_date_idx: dict,
                 vix_by_date: dict) -> str:
     """Classify regime at cur_date using pre-built lookups."""
+    vix = vix_by_date.get(cur_date, 20.0)
+    if vix >= 30.0:
+        return Overseer.NUKED_ZONE  # VIX alone is sufficient — no SPY needed
     if spy_ind is None:
-        return Overseer.WASTELAND   # no SPY data — default safe regime
+        return Overseer.WASTELAND
     spy_i = spy_date_idx.get(cur_date)
     if spy_i is None or spy_i < MIN_HISTORY:
         return Overseer.WASTELAND
-    vix = vix_by_date.get(cur_date, 20.0)
     return overseer.classify(spy_ind.iloc[:spy_i + 1], vix)
 
 

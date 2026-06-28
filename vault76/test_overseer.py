@@ -119,11 +119,11 @@ class TestOverseerWeaponSelection:
         cards = o.recommend_roles(Overseer.RECLAMATION)
         assert "scavenger" in cards
 
-    def test_no_cards_in_nuked_zone(self):
+    def test_chemist_active_in_nuked_zone(self):
         from vault76.overseer import Overseer
         o = Overseer()
-        cards = o.recommend_roles(Overseer.NUKED_ZONE)
-        assert cards == []
+        roles = o.recommend_roles(Overseer.NUKED_ZONE)
+        assert "chemist" in roles
 
     def test_recommend_returns_list(self):
         from vault76.overseer import Overseer
