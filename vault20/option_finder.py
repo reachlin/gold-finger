@@ -27,6 +27,31 @@ RISK_FREE    = 0.05
 # Schwab client
 # ---------------------------------------------------------------------------
 
+def _import_schwab_lib():
+    """Import the installed schwab-py library.
+    The local schwab/ project folder shadows the installed package, so we
+    temporarily strip the project root from sys.path before importing.
+    """
+    project_root = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
+    saved = sys.path[:]
+    sys.path = [p for p in sys.path if os.path.normpath(p) != project_root]
+
+    # evict any locally cached schwab module
+    evicted = {k: v for k, v in sys.modules.items()
+               if k == "schwab" or k.startswith("schwab.")}
+    for k in evicted:
+        del sys.modules[k]
+    try:
+        import schwab
+        return schwab
+    finally:
+        sys.path = saved
+        # restore local schwab/* modules (not the top-level package)
+        for k, v in evicted.items():
+            if k != "schwab" and k not in sys.modules:
+                sys.modules[k] = v
+
+
 def _make_schwab_client():
     from dotenv import load_dotenv
     load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
@@ -34,7 +59,7 @@ def _make_schwab_client():
     client_secret = os.environ.get("SCHWAB_CLIENT_SECRET")
     if not (client_id and client_secret and os.path.exists(TOKEN_PATH)):
         raise RuntimeError("Schwab credentials not found — check .env and schwab_token.json")
-    import schwab as schwab_lib
+    schwab_lib = _import_schwab_lib()
     return schwab_lib.auth.client_from_token_file(TOKEN_PATH, client_id, client_secret)
 
 
@@ -165,12 +190,21 @@ def _parse_schwab_exp_map(exp_map: dict, strategy: str,
 def _fetch_chain(client, symbol: str, strategy: str,
                  min_dte: int, max_dte: int,
                  min_oi: int, min_otm_pct: float) -> tuple[float, list[dict]]:
-    import schwab as schwab_lib
-    C = schwab_lib.client.Client
+    schwab_lib = _import_schwab_lib()
 
-    contract_type = (C.Options.ContractType.CALL
+    # Re-import enum from the same schwab_lib instance to avoid type-identity mismatch
+    contract_type = (schwab_lib.client.Client.Options.ContractType.CALL
                      if strategy == "covered-call"
-                     else C.Options.ContractType.PUT)
+                     else schwab_lib.client.Client.Options.ContractType.PUT)
+
+    # Build a fresh client using the correctly-imported library
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
+    client = schwab_lib.auth.client_from_token_file(
+        TOKEN_PATH,
+        os.environ["SCHWAB_CLIENT_ID"],
+        os.environ["SCHWAB_CLIENT_SECRET"],
+    )
 
     from_date = datetime.now() + timedelta(days=min_dte)
     to_date   = datetime.now() + timedelta(days=max_dte)
