@@ -64,7 +64,8 @@ class TestWalkForwardScavenger:
 
     def test_event_types_are_valid(self):
         from backtest_scavenger import walk_forward_scavenger
-        valid = {"put_expired", "put_assigned", "call_expired", "called_away"}
+        valid = {"put_expired", "put_assigned", "put_early_exit",
+                 "call_expired", "called_away", "call_early_exit"}
         df = _make_df(n=200)
         events = walk_forward_scavenger(df, "TEST")
         for ev in events:

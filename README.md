@@ -1,4 +1,65 @@
-# Claude Trader
+# Gold Finger — Algorithmic Trading System
+
+## Vault 76 — US Options & Equity Trading (Schwab)
+
+A Fallout 76-themed trading arsenal for US equities and options, connected to
+Charles Schwab via their official API. Paper-trading first; real capital after
+4–6 weeks of validation.
+
+### Architecture
+
+| Component | File | Description |
+|---|---|---|
+| **The Overseer** | `vault76/overseer.py` | Market regime classifier (Reclamation Day / Wasteland / Nuked Zone) |
+| **The Raider** | `vault76/armory/raider.py` | Pullback-in-trend strategy (EMA/RSI/ADX) |
+| **The Scavenger** | `vault76/armory/scavenger.py` | Wheel strategy (cash-secured put → covered call) |
+| **Live Scanner** | `schwab/live_scanner.py` | Real-time scan loop with Vault 76 Daily Briefing to Slack |
+| **Vault 20** | `vault20/vault20.py` | Manual position tracker for any broker without API |
+| **Option Finder** | `vault20/option_finder.py` | Schwab option chain screener with real Greeks + IV rank |
+| **Backtest** | `schwab/backtest_scavenger.py` | Walk-forward wheel strategy backtest with early-exit |
+
+### Option Finder usage
+
+```bash
+# Find covered call candidates for INTC (real Greeks from Schwab API)
+python vault20/option_finder.py INTC covered-call
+
+# Target delta 0.30 (industry standard — ~70% probability of expiring worthless)
+python vault20/option_finder.py INTC covered-call --target-delta 0.30
+
+# Cash-secured puts, 21–45 DTE
+python vault20/option_finder.py INTC csp --min-dte 21 --max-dte 45
+
+# Scan all vault20 equity positions and post to Slack
+python vault20/option_finder.py --all --slack
+```
+
+### Vault 20 position tracker usage
+
+```bash
+python vault20/vault20.py add INTC 1000 20.08 --note "long stock"
+python vault20/vault20.py add INTC_CALL_130_20260821 -5 25.54 --note "short call"
+python vault20/vault20.py status     # live prices + P&L
+python vault20/vault20.py report     # status + Slack
+python vault20/vault20.py close INTC 195.00
+```
+
+### References & Credits
+
+Techniques borrowed from these open-source projects:
+
+| Repo | What we borrowed |
+|---|---|
+| [volatility-trading](https://github.com/jasonstrimpel/volatility-trading) | Yang-Zhang volatility estimator (handles overnight gaps + intraday range); volatility cones concept |
+| [wallstreet](https://github.com/mcdallas/wallstreet) | Implied volatility solver using `scipy.optimize.brentq` with analytical Jacobian |
+| [optopsy](https://github.com/goldspanlabs/optopsy) | 50% profit early-exit framework for short options; delta targeting (0.30 delta) for strike selection |
+| [OpenBB](https://github.com/OpenBB-finance/OpenBB) | IV rank concept; GEX/DEX metrics; volatility surface architecture |
+
+All four repos are cloned locally under `/Users/lincai/dev/private/` for reference.
+
+---
+
+## Claude Trader — China A-shares
 
 Trading signal bots for China A-shares. Five ML models — unsupervised K-Means clustering, supervised LSTM, LightGBM gradient-boosted trees, PPO reinforcement learning, and TD3 meta-judge — generate daily signals (strong\_buy, mild\_buy, hold, mild\_sell, strong\_sell) from technical indicators, then simulate trades with realistic A-share constraints (T+1, 100-share lots, commissions, stamp tax).
 

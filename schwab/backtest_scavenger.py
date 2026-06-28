@@ -5,9 +5,13 @@ Simulates cash-secured put → covered call cycles on historical daily data.
 
 State machine per symbol:
   FLAT       → scan for SELL_PUT signal
-  PUT_OPEN   → jump to expiry; assigned or expired
+  PUT_OPEN   → iterate bars; early-exit at 50% profit, or hold to expiry
   HOLDING    → scan for SELL_CALL signal
-  CALL_OPEN  → jump to expiry; called away or expired (→ HOLDING again)
+  CALL_OPEN  → iterate bars; early-exit at 50% profit, or hold to expiry
+
+Early exit (from optopsy): buy back the short option when its current B-S value
+falls to PROFIT_TARGET_PCT of the premium collected. Frees capital sooner and
+avoids gamma risk near expiry.
 
 Usage:
   /Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/backtest_scavenger.py
@@ -22,10 +26,13 @@ import pandas as pd
 
 from trend_scanner import compute_indicators
 from vault76.armory.scavenger import Scavenger
+from options_pricer import black_scholes_put, black_scholes_call, historical_vol
 
-DTE_BARS    = 30    # trading days to expiration
-SHARES      = 100   # 1 contract
-MIN_HISTORY = 60    # bars needed before scanning starts
+DTE_BARS           = 30    # trading days to expiration
+SHARES             = 100   # 1 contract
+MIN_HISTORY        = 60    # bars needed before scanning starts
+PROFIT_TARGET_PCT  = 0.50  # buy back when option value ≤ 50% of premium sold
+RISK_FREE          = 0.05
 
 FLAT       = "FLAT"
 PUT_OPEN   = "PUT_OPEN"
@@ -69,28 +76,48 @@ def walk_forward_scavenger(df: pd.DataFrame, symbol: str) -> list[dict]:
                     "all_premiums": res["premium"],
                 }
                 state = PUT_OPEN
-                i     = cycle["put_expiry_i"]   # jump directly to expiry bar
+                i    += 1   # step into the holding period bar-by-bar
             else:
                 i += 1
 
-        # ── PUT_OPEN: check assignment at expiry ──────────────────────────────
+        # ── PUT_OPEN: iterate bars; early exit or hold to expiry ──────────────
         elif state == PUT_OPEN:
-            close = float(row["close"])
-            cycle["put_expiry_close"] = close
+            close      = float(row["close"])
+            days_left  = max(cycle["put_expiry_i"] - i, 0)
+            T_left     = days_left / 365
+            hv         = historical_vol(snapshot["close"])
+            sigma      = hv if hv > 0 else 0.30
+            cur_val    = black_scholes_put(close, cycle["put_strike"], T_left,
+                                          RISK_FREE, sigma)
+            entry_prem = cycle["put_premium"]
 
-            if close <= cycle["put_strike"]:
-                # Assigned — effective cost basis = strike - premium
-                cycle["cost_basis"]  = cycle["put_strike"] - cycle["put_premium"]
-                cycle["assigned_i"]  = i
-                events.append({**cycle, "event": "put_assigned", "pnl": 0.0})
-                state = HOLDING
-            else:
-                # Put expired worthless — keep premium
-                pnl = cycle["put_premium"] * SHARES
-                events.append({**cycle, "event": "put_expired", "pnl": round(pnl, 2)})
+            # 50% profit target — buy back early
+            if cur_val <= entry_prem * PROFIT_TARGET_PCT and days_left > 0:
+                pnl = (entry_prem - cur_val) * SHARES
+                events.append({**cycle, "event": "put_early_exit",
+                               "pnl": round(pnl, 2), "exit_i": i,
+                               "exit_val": round(cur_val, 4)})
                 cycle = {}
                 state = FLAT
-            i += 1
+                i    += 1
+
+            elif i >= cycle["put_expiry_i"]:
+                # Reached expiry
+                cycle["put_expiry_close"] = close
+                if close <= cycle["put_strike"]:
+                    cycle["cost_basis"] = cycle["put_strike"] - entry_prem
+                    cycle["assigned_i"] = i
+                    events.append({**cycle, "event": "put_assigned", "pnl": 0.0})
+                    state = HOLDING
+                else:
+                    pnl = entry_prem * SHARES
+                    events.append({**cycle, "event": "put_expired",
+                                   "pnl": round(pnl, 2)})
+                    cycle = {}
+                    state = FLAT
+                i += 1
+            else:
+                i += 1
 
         # ── HOLDING: look for a call to sell ─────────────────────────────────
         elif state == HOLDING:
@@ -102,29 +129,50 @@ def walk_forward_scavenger(df: pd.DataFrame, symbol: str) -> list[dict]:
                 cycle["all_premiums"]  += res["premium"]
                 cycle["call_expiry_i"]  = min(i + DTE_BARS, n - 1)
                 state = CALL_OPEN
-                i     = cycle["call_expiry_i"]  # jump to expiry
+                i    += 1   # step bar-by-bar
             else:
                 i += 1
 
-        # ── CALL_OPEN: check if called away at expiry ─────────────────────────
+        # ── CALL_OPEN: iterate bars; early exit or hold to expiry ─────────────
         elif state == CALL_OPEN:
-            close = float(row["close"])
-            cycle["close_at_call_expiry"] = close
+            close     = float(row["close"])
+            days_left = max(cycle["call_expiry_i"] - i, 0)
+            T_left    = days_left / 365
+            hv        = historical_vol(snapshot["close"])
+            sigma     = hv if hv > 0 else 0.30
+            cur_val   = black_scholes_call(close, cycle["call_strike"], T_left,
+                                           RISK_FREE, sigma)
+            entry_prem = cycle["call_premium"]
 
-            if close >= cycle["call_strike"]:
-                # Called away — shares sold at call_strike
-                share_pnl = (cycle["call_strike"] - cycle["put_strike"]) * SHARES
-                prem_pnl  = cycle["all_premiums"] * SHARES
-                pnl       = share_pnl + prem_pnl
-                events.append({**cycle, "event": "called_away", "pnl": round(pnl, 2)})
-                cycle = {}
-                state = FLAT
+            # 50% profit target — buy back early, hold shares, sell another call
+            if cur_val <= entry_prem * PROFIT_TARGET_PCT and days_left > 0:
+                pnl = (entry_prem - cur_val) * SHARES
+                cycle["all_premiums"] += entry_prem - cur_val
+                events.append({**cycle, "event": "call_early_exit",
+                               "pnl": round(pnl, 2), "exit_i": i,
+                               "exit_val": round(cur_val, 4)})
+                state = HOLDING   # back to HOLDING to sell another call
+                i    += 1
+
+            elif i >= cycle["call_expiry_i"]:
+                # Reached expiry
+                cycle["close_at_call_expiry"] = close
+                if close >= cycle["call_strike"]:
+                    # Called away — shares sold at call_strike
+                    share_pnl = (cycle["call_strike"] - cycle["put_strike"]) * SHARES
+                    prem_pnl  = cycle["all_premiums"] * SHARES
+                    pnl       = share_pnl + prem_pnl
+                    events.append({**cycle, "event": "called_away", "pnl": round(pnl, 2)})
+                    cycle = {}
+                    state = FLAT
+                else:
+                    # Call expired worthless — keep premium, sell another call
+                    pnl = cycle["call_premium"] * SHARES
+                    events.append({**cycle, "event": "call_expired", "pnl": round(pnl, 2)})
+                    state = HOLDING
+                i += 1
             else:
-                # Call expired — keep premium, sell another call
-                pnl = cycle["call_premium"] * SHARES
-                events.append({**cycle, "event": "call_expired", "pnl": round(pnl, 2)})
-                state = HOLDING
-            i += 1
+                i += 1
 
     return events
 
@@ -136,11 +184,13 @@ def walk_forward_scavenger(df: pd.DataFrame, symbol: str) -> list[dict]:
 def print_scavenger_report(events: list[dict], init_price: float,
                            final_price: float, symbol: str = "") -> float:
     """Print a summary of all wheel-strategy events. Returns total P&L."""
-    put_expired_cnt  = sum(1 for e in events if e["event"] == "put_expired")
-    put_assigned_cnt = sum(1 for e in events if e["event"] == "put_assigned")
-    call_expired_cnt = sum(1 for e in events if e["event"] == "call_expired")
-    called_away_cnt  = sum(1 for e in events if e["event"] == "called_away")
-    total_events     = len(events)
+    put_expired_cnt   = sum(1 for e in events if e["event"] == "put_expired")
+    put_early_cnt     = sum(1 for e in events if e["event"] == "put_early_exit")
+    put_assigned_cnt  = sum(1 for e in events if e["event"] == "put_assigned")
+    call_expired_cnt  = sum(1 for e in events if e["event"] == "call_expired")
+    call_early_cnt    = sum(1 for e in events if e["event"] == "call_early_exit")
+    called_away_cnt   = sum(1 for e in events if e["event"] == "called_away")
+    total_events      = len(events)
 
     total_pnl = sum(e["pnl"] for e in events)
     bnh_pnl   = (final_price - init_price) * SHARES
@@ -150,11 +200,13 @@ def print_scavenger_report(events: list[dict], init_price: float,
     print(f"  THE SCAVENGER — Wheel Backtest{tag}")
     print(f"{'─'*55}")
     print(f"  Events:         {total_events}")
-    print(f"  Puts sold:      {put_expired_cnt + put_assigned_cnt}")
+    print(f"  Puts sold:      {put_expired_cnt + put_early_cnt + put_assigned_cnt}")
     print(f"    ↳ expired worthless: {put_expired_cnt}")
+    print(f"    ↳ early exit (50%):  {put_early_cnt}")
     print(f"    ↳ assigned:          {put_assigned_cnt}")
-    print(f"  Calls sold:     {call_expired_cnt + called_away_cnt}")
+    print(f"  Calls sold:     {call_expired_cnt + call_early_cnt + called_away_cnt}")
     print(f"    ↳ expired worthless: {call_expired_cnt}")
+    print(f"    ↳ early exit (50%):  {call_early_cnt}")
     print(f"    ↳ called away:       {called_away_cnt}")
     print(f"{'─'*55}")
     print(f"  Wheel P&L:      ${total_pnl:+.2f}")

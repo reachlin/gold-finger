@@ -1,9 +1,10 @@
 """
-Black-Scholes put option pricing utilities for backtesting.
+Black-Scholes option pricing, Greeks, and volatility utilities.
 """
 import numpy as np
 import pandas as pd
 from scipy.stats import norm
+from scipy.optimize import brentq
 
 RISK_FREE_RATE  = 0.05
 PUT_DTE         = 21          # days to expiry for paper puts
@@ -47,6 +48,68 @@ def historical_vol(prices: pd.Series, window: int = 20) -> float:
     log_ret = np.log(prices / prices.shift(1)).dropna()
     vol = log_ret.rolling(window).std().iloc[-1]
     return float(vol * np.sqrt(252)) if not np.isnan(vol) else 0.0
+
+
+def yang_zhang_vol(df: pd.DataFrame, window: int = 20,
+                   trading_periods: int = 252) -> float:
+    """
+    Yang-Zhang volatility estimator (annualized).
+    More accurate than close-only HV — accounts for overnight gaps and intraday range.
+    Requires OHLC columns: open, high, low, close.
+    Returns 0.0 if insufficient data.
+
+    Formula combines three components with weight k:
+      σ²_YZ = σ²_open + k·σ²_close + (1-k)·σ²_RS
+    where σ²_RS is the Rogers-Satchell estimator (no overnight gap assumption).
+    """
+    if len(df) < window + 1:
+        return 0.0
+    required = {"open", "high", "low", "close"}
+    if not required.issubset(df.columns):
+        return 0.0
+
+    log_ho = np.log(df["high"]  / df["open"])
+    log_lo = np.log(df["low"]   / df["open"])
+    log_co = np.log(df["close"] / df["open"])
+    log_oc = np.log(df["open"]  / df["close"].shift(1))
+    log_cc = np.log(df["close"] / df["close"].shift(1))
+
+    # Rogers-Satchell: intraday component (no overnight gap)
+    rs = log_ho * (log_ho - log_co) + log_lo * (log_lo - log_co)
+
+    open_var  = (log_oc ** 2).rolling(window).sum() / (window - 1)
+    close_var = (log_cc ** 2).rolling(window).sum() / (window - 1)
+    rs_var    = rs.rolling(window).mean()
+
+    k      = 0.34 / (1.34 + (window + 1) / (window - 1))
+    yz_var = open_var + k * close_var + (1 - k) * rs_var
+
+    last = yz_var.dropna()
+    if last.empty:
+        return 0.0
+    return float(np.sqrt(last.iloc[-1] * trading_periods))
+
+
+def implied_vol(market_price: float, S: float, K: float, T: float, r: float,
+                option_type: str = "call") -> float | None:
+    """
+    Back-solve implied volatility from a market price using Brent's method.
+    Returns None if the price implies no real solution (e.g. zero/negative price).
+    option_type: 'call' or 'put'
+    """
+    if market_price <= 0 or T <= 0:
+        return None
+
+    pricer = black_scholes_call if option_type == "call" else black_scholes_put
+
+    def objective(sigma):
+        return pricer(S, K, T, r, sigma) - market_price
+
+    try:
+        # Brentq guarantees convergence when the function changes sign on [lo, hi]
+        return float(brentq(objective, 1e-4, 10.0, xtol=1e-6, maxiter=200))
+    except ValueError:
+        return None
 
 
 def atm_strike(price: float, step: float = 5.0) -> float:

@@ -166,3 +166,79 @@ class TestSimulatePutTrade:
         for k in ("exit_reason", "hold_days", "entry_put_price",
                   "exit_put_price", "pnl_dollar", "pnl_pct"):
             assert k in result
+
+
+class TestYangZhangVol:
+    def _make_ohlc(self, n=60, daily_vol=0.02, seed=42):
+        np.random.seed(seed)
+        closes = 100 * np.exp(np.cumsum(np.random.randn(n) * daily_vol))
+        opens  = closes * np.exp(np.random.randn(n) * 0.005)
+        highs  = np.maximum(opens, closes) * np.exp(np.abs(np.random.randn(n) * 0.003))
+        lows   = np.minimum(opens, closes) * np.exp(-np.abs(np.random.randn(n) * 0.003))
+        return pd.DataFrame({"open": opens, "high": highs, "low": lows, "close": closes})
+
+    def test_returns_float(self):
+        from options_pricer import yang_zhang_vol
+        df  = self._make_ohlc()
+        vol = yang_zhang_vol(df)
+        assert isinstance(vol, float)
+
+    def test_annualized_reasonable(self):
+        from options_pricer import yang_zhang_vol
+        # daily_vol=2% → annualized ~32%
+        vol = yang_zhang_vol(self._make_ohlc(daily_vol=0.02))
+        assert 0.10 < vol < 0.80
+
+    def test_higher_vol_series_gives_higher_vol(self):
+        from options_pricer import yang_zhang_vol
+        lo = yang_zhang_vol(self._make_ohlc(daily_vol=0.01, seed=1))
+        hi = yang_zhang_vol(self._make_ohlc(daily_vol=0.04, seed=1))
+        assert hi > lo
+
+    def test_needs_minimum_bars(self):
+        from options_pricer import yang_zhang_vol
+        short = pd.DataFrame({"open": [100]*5, "high": [101]*5,
+                               "low": [99]*5,  "close": [100]*5})
+        assert yang_zhang_vol(short) == 0.0
+
+    def test_different_from_close_only_vol(self):
+        from options_pricer import yang_zhang_vol, historical_vol
+        df  = self._make_ohlc(daily_vol=0.02)
+        yz  = yang_zhang_vol(df)
+        hv  = historical_vol(df["close"])
+        # They should be in the same ballpark but not identical
+        assert abs(yz - hv) < 0.30
+
+
+class TestImpliedVol:
+    def test_roundtrip_call(self):
+        from options_pricer import black_scholes_call, implied_vol
+        S, K, T, r, sigma = 100.0, 100.0, 30/365, 0.05, 0.30
+        price = black_scholes_call(S, K, T, r, sigma)
+        iv    = implied_vol(price, S, K, T, r, option_type="call")
+        assert abs(iv - sigma) < 1e-4
+
+    def test_roundtrip_put(self):
+        from options_pricer import black_scholes_put, implied_vol
+        S, K, T, r, sigma = 100.0, 95.0, 21/365, 0.05, 0.45
+        price = black_scholes_put(S, K, T, r, sigma)
+        iv    = implied_vol(price, S, K, T, r, option_type="put")
+        assert abs(iv - sigma) < 1e-4
+
+    def test_high_iv_call(self):
+        from options_pricer import black_scholes_call, implied_vol
+        S, K, T, r, sigma = 128.0, 130.0, 26/365, 0.05, 0.90
+        price = black_scholes_call(S, K, T, r, sigma)
+        iv    = implied_vol(price, S, K, T, r, option_type="call")
+        assert abs(iv - sigma) < 1e-3
+
+    def test_zero_price_returns_none(self):
+        from options_pricer import implied_vol
+        iv = implied_vol(0.0, 100.0, 200.0, 1/365, 0.05, option_type="call")
+        assert iv is None
+
+    def test_returns_float_or_none(self):
+        from options_pricer import black_scholes_put, implied_vol
+        price = black_scholes_put(100.0, 100.0, 30/365, 0.05, 0.25)
+        iv    = implied_vol(price, 100.0, 100.0, 30/365, 0.05, option_type="put")
+        assert isinstance(iv, float)

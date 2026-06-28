@@ -132,16 +132,54 @@ def format_candidates(rows: list[dict], top: int = 10) -> list[dict]:
 # Schwab option chain fetch
 # ---------------------------------------------------------------------------
 
+def _iv_rank(symbol: str, current_iv: float) -> float | None:
+    """
+    IV rank: where current IV sits in its 52-week range (0–100).
+    Uses Yang-Zhang HV over rolling 30-day windows as IV proxy.
+    Returns None if insufficient data.
+    """
+    try:
+        import contextlib, io, yfinance as yf
+        with contextlib.redirect_stderr(io.StringIO()):
+            df = yf.download(symbol, period="1y", interval="1d",
+                             progress=False, auto_adjust=True,
+                             multi_level_index=False)
+        if len(df) < 60:
+            return None
+
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "schwab"))
+        from options_pricer import yang_zhang_vol
+
+        # Rolling 30-day YZ vol series
+        hv_series = [
+            yang_zhang_vol(df.iloc[max(0, i-30):i], window=20)
+            for i in range(30, len(df) + 1)
+        ]
+        hv_series = [v for v in hv_series if v > 0]
+        if not hv_series:
+            return None
+        lo, hi = min(hv_series), max(hv_series)
+        if hi <= lo:
+            return None
+        return round((current_iv - lo) / (hi - lo) * 100, 1)
+    except Exception:
+        return None
+
+
 def _parse_schwab_exp_map(exp_map: dict, strategy: str,
                           stock_price: float, min_oi: int,
-                          min_otm_pct: float) -> list[dict]:
-    """Parse Schwab callExpDateMap / putExpDateMap into candidate rows."""
+                          min_otm_pct: float,
+                          target_delta: float | None = None,
+                          delta_range: float = 0.10) -> list[dict]:
+    """Parse Schwab callExpDateMap / putExpDateMap into candidate rows.
+    If target_delta is set, only keeps options with |delta| in
+    [target_delta - delta_range, target_delta + delta_range].
+    """
     score_fn  = score_covered_call if strategy == "covered-call" else score_csp
     is_call   = strategy == "covered-call"
     candidates = []
 
     for exp_key, strikes in exp_map.items():
-        # exp_key: "2026-07-24:26"
         exp_str = exp_key.split(":")[0]
         dte     = int(exp_key.split(":")[1])
 
@@ -167,6 +205,12 @@ def _parse_schwab_exp_map(exp_map: dict, strategy: str,
             if not is_call and strike > stock_price * (1 - min_otm_pct / 100):
                 continue
 
+            # Delta filter: use |delta| since puts have negative delta
+            abs_delta = abs(delta)
+            if target_delta is not None:
+                if not (target_delta - delta_range <= abs_delta <= target_delta + delta_range):
+                    continue
+
             scores = score_fn(strike, bid, stock_price, dte)
             candidates.append({
                 "expiry":            exp_str,
@@ -181,6 +225,7 @@ def _parse_schwab_exp_map(exp_map: dict, strategy: str,
                 "gamma":             round(gamma, 4),
                 "theta":             round(theta, 3),
                 "vega":              round(vega, 3),
+                "delta_diff":        round(abs(abs_delta - (target_delta or abs_delta)), 4),
                 **scores,
             })
 
@@ -189,7 +234,9 @@ def _parse_schwab_exp_map(exp_map: dict, strategy: str,
 
 def _fetch_chain(client, symbol: str, strategy: str,
                  min_dte: int, max_dte: int,
-                 min_oi: int, min_otm_pct: float) -> tuple[float, list[dict]]:
+                 min_oi: int, min_otm_pct: float,
+                 target_delta: float | None = None,
+                 delta_range: float = 0.10) -> tuple[float, list[dict], float | None]:
     schwab_lib = _import_schwab_lib()
 
     # Re-import enum from the same schwab_lib instance to avoid type-identity mismatch
@@ -221,10 +268,22 @@ def _fetch_chain(client, symbol: str, strategy: str,
 
     stock_price = float(data["underlying"]["last"])
     exp_map_key = "callExpDateMap" if strategy == "covered-call" else "putExpDateMap"
-    candidates  = _parse_schwab_exp_map(
-        data.get(exp_map_key, {}), strategy, stock_price, min_oi, min_otm_pct
+
+    # Use the chain's average IV for IV rank (median across near-ATM options)
+    all_ivs = []
+    for strikes in data.get(exp_map_key, {}).values():
+        for opts in strikes.values():
+            v = float(opts[0].get("volatility", 0) or 0)
+            if v > 0:
+                all_ivs.append(v / 100)
+    avg_iv   = float(np.median(all_ivs)) if all_ivs else 0.0
+    iv_rank  = _iv_rank(symbol, avg_iv)
+
+    candidates = _parse_schwab_exp_map(
+        data.get(exp_map_key, {}), strategy, stock_price, min_oi, min_otm_pct,
+        target_delta=target_delta, delta_range=delta_range,
     )
-    return stock_price, candidates
+    return stock_price, candidates, iv_rank
 
 
 # ---------------------------------------------------------------------------
@@ -236,15 +295,21 @@ def _strategy_label(strategy: str) -> str:
 
 
 def _print_candidates(symbol: str, strategy: str, stock_price: float,
-                      candidates: list[dict], shares: int = 0):
+                      candidates: list[dict], shares: int = 0,
+                      iv_rank: float | None = None):
     label = _strategy_label(strategy)
     now   = datetime.now().strftime("%Y-%m-%d %H:%M")
-    sep   = "=" * 90
+    sep   = "=" * 92
 
     print(f"\n{sep}")
     print(f"  {symbol} — {label} Candidates  (price: ${stock_price:.2f})  {now}")
     if shares:
         print(f"  You hold {shares} shares → up to {shares // 100} contracts")
+    if iv_rank is not None:
+        iv_signal = ("🔥 HIGH — good time to sell premium"   if iv_rank >= 50 else
+                     "⚠ LOW  — thin premium, consider waiting" if iv_rank < 25 else
+                     "  MID  — fair premium")
+        print(f"  IV Rank (52w): {iv_rank:.0f}/100  {iv_signal}")
     print(sep)
 
     if not candidates:
@@ -255,7 +320,7 @@ def _print_candidates(symbol: str, strategy: str, stock_price: float,
     print(f"  {'Expiry':<12} {'Strike':>7} {'Bid':>6} {'Ask':>6} "
           f"{'DTE':>4}  {'Yield/mo':>9}  {'OTM%':>6}  "
           f"{'Delta':>6}  {'Theta':>6}  {'Vega':>6}  {'IV':>6}  {'OI':>7}")
-    print(f"  {'-'*86}")
+    print(f"  {'-'*88}")
     for c in candidates:
         print(
             f"  {c['expiry']:<12} "
@@ -320,14 +385,19 @@ def main():
                         help="Ticker symbol (e.g. INTC). Omit with --all.")
     parser.add_argument("strategy", nargs="?", default="covered-call",
                         choices=["covered-call", "cc", "csp", "put"])
-    parser.add_argument("--min-dte",  type=int,   default=21)
-    parser.add_argument("--max-dte",  type=int,   default=60)
-    parser.add_argument("--min-oi",   type=int,   default=100)
-    parser.add_argument("--min-otm",  type=float, default=1.0,
+    parser.add_argument("--min-dte",      type=int,   default=21)
+    parser.add_argument("--max-dte",      type=int,   default=60)
+    parser.add_argument("--min-oi",       type=int,   default=100)
+    parser.add_argument("--min-otm",      type=float, default=1.0,
                         help="Min OTM%% (default 1%%)")
-    parser.add_argument("--top",      type=int,   default=8)
-    parser.add_argument("--slack",    action="store_true")
-    parser.add_argument("--all",      action="store_true",
+    parser.add_argument("--target-delta", type=float, default=None,
+                        help="Target |delta| e.g. 0.30 (industry standard). "
+                             "When set, overrides --min-otm as primary filter.")
+    parser.add_argument("--delta-range",  type=float, default=0.10,
+                        help="±delta tolerance around --target-delta (default 0.10)")
+    parser.add_argument("--top",          type=int,   default=8)
+    parser.add_argument("--slack",        action="store_true")
+    parser.add_argument("--all",          action="store_true",
                         help="Scan all vault20 equity positions")
     args     = parser.parse_args()
     strategy = "csp" if args.strategy in ("csp", "put") else "covered-call"
@@ -359,18 +429,20 @@ def main():
     for symbol, shares in equities:
         print(f"\nFetching {symbol} option chain from Schwab…", end=" ", flush=True)
         try:
-            stock_price, candidates = _fetch_chain(
+            stock_price, candidates, iv_rank = _fetch_chain(
                 client, symbol, strategy,
                 min_dte=args.min_dte, max_dte=args.max_dte,
                 min_oi=args.min_oi, min_otm_pct=args.min_otm,
+                target_delta=args.target_delta, delta_range=args.delta_range,
             )
         except Exception as exc:
             print(f"error: {exc}")
             continue
 
         ranked = format_candidates(candidates, top=args.top)
-        print(f"done — {len(ranked)} candidates")
-        _print_candidates(symbol, strategy, stock_price, ranked, shares=shares)
+        print(f"done — {len(ranked)} candidates  (IV rank: {iv_rank:.0f}/100)" if iv_rank is not None else f"done — {len(ranked)} candidates")
+        _print_candidates(symbol, strategy, stock_price, ranked,
+                          shares=shares, iv_rank=iv_rank)
 
         if args.slack:
             all_slack.append(_slack_candidates(symbol, strategy, stock_price, ranked))
