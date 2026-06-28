@@ -15,13 +15,22 @@ PUT_BUDGET      = 300         # max USD to spend on put premium
 NEW_HIGH_PCT    = 0.03        # exit put if stock rises 3% above entry
 
 
+def _safe_sigma(sigma: float) -> float:
+    """Coerce sigma to a safe positive float — guards against 0, nan, inf, subnormals."""
+    s = float(sigma)
+    return s if (s > 1e-8 and np.isfinite(s)) else 0.0
+
+
 def black_scholes_put(S: float, K: float, T: float,
                       r: float, sigma: float) -> float:
     """European put price via Black-Scholes."""
     if T <= 0:
         return float(max(K - S, 0.0))
-    if sigma <= 0:
-        return float(max(K - S * np.exp(-r * T), 0.0))
+    sigma = _safe_sigma(sigma)
+    if sigma == 0.0:
+        return float(max(K * np.exp(-r * T) - S, 0.0))
+    if K <= 0 or S <= 0:
+        return float(max(K - S, 0.0))
     d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
     d2 = d1 - sigma * np.sqrt(T)
     price = K * np.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
@@ -33,8 +42,11 @@ def black_scholes_call(S: float, K: float, T: float,
     """European call price via Black-Scholes."""
     if T <= 0:
         return float(max(S - K, 0.0))
-    if sigma <= 0:
-        return float(max(S * np.exp(r * T) - K, 0.0))
+    sigma = _safe_sigma(sigma)
+    if sigma == 0.0:
+        return float(max(S - K * np.exp(-r * T), 0.0))
+    if K <= 0 or S <= 0:
+        return float(max(S - K, 0.0))
     d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
     d2 = d1 - sigma * np.sqrt(T)
     price = S * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)

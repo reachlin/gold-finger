@@ -127,8 +127,11 @@ class Scavenger(Role):
             base["reason"] = f"HV {hv*100:.1f}% below minimum {MIN_HV*100:.0f}% — premium too thin"
             return base
 
-        strike  = round(close * (1 - OTM_PUT_PCT), 0)
+        strike  = round(close * (1 - OTM_PUT_PCT), 2)  # 2dp — avoids rounding to 0 on sub-$1 prices
         T       = SELL_DTE / 365
+        if strike <= 0:
+            base["reason"] = f"close ${close:.2f} too low — OTM strike rounds to zero"
+            return base
         premium = black_scholes_put(close, strike, T, RISK_FREE_RATE, hv)
 
         if premium / close < MIN_PREMIUM_PCT:
@@ -165,8 +168,11 @@ class Scavenger(Role):
         # the backtest has no share-exit path, so holding naked produces no P&L.
         otm_pct = OTM_CALL_PCT_RECLAMATION if adx >= ADX_CALL_WIDE else OTM_CALL_PCT
         reference = max(close, cost_basis)
-        strike    = round(reference * (1 + otm_pct), 0)
+        strike    = round(reference * (1 + otm_pct), 2)
         T         = SELL_DTE / 365
+        if strike <= 0:
+            base["reason"] = f"close ${close:.2f} too low — OTM call strike rounds to zero"
+            return base
         premium   = black_scholes_call(close, strike, T, RISK_FREE_RATE, hv)
 
         if premium / close < MIN_PREMIUM_PCT:
