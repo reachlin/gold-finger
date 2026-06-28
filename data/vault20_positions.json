@@ -1,0 +1,50 @@
+{
+  "open": [
+    {
+      "symbol": "INTC",
+      "shares": 1000.0,
+      "entry": 20.08,
+      "entry_date": "2026-06-28",
+      "target": null,
+      "stop": null,
+      "note": "long stock"
+    },
+    {
+      "symbol": "IONQ",
+      "shares": 200.0,
+      "entry": 54.26,
+      "entry_date": "2026-06-28",
+      "target": null,
+      "stop": null,
+      "note": "long stock"
+    },
+    {
+      "symbol": "SPCX",
+      "shares": 200.0,
+      "entry": 170.97,
+      "entry_date": "2026-06-28",
+      "target": null,
+      "stop": null,
+      "note": "long stock"
+    },
+    {
+      "symbol": "INTC_CALL_130_20260821",
+      "shares": -5.0,
+      "entry": 25.54,
+      "entry_date": "2026-06-28",
+      "target": null,
+      "stop": null,
+      "note": "short call INTC 130C 08/21"
+    },
+    {
+      "symbol": "SPCX_CALL_180_20260731",
+      "shares": -2.0,
+      "entry": 8.6,
+      "entry_date": "2026-06-28",
+      "target": null,
+      "stop": null,
+      "note": "short call SPCX 180C 07/31"
+    }
+  ],
+  "closed": []
+}
