@@ -57,6 +57,17 @@ PAPER_TRADES_PATH = os.path.join(
 OPTION_LEDGER_PATH = os.path.join(
     os.path.dirname(__file__), "..", "data", "paper_options_ledger.csv"
 )
+FAST_RISKOFF_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "data", "fast_riskoff.json"
+)
+
+# FinRL fast risk-off thresholds — imported from strategy_params so they stay
+# in sync with the backtest. Edit strategy_params.py to tune them.
+from strategy_params import (
+    FAST_RISKOFF_DROP     as FAST_RISKOFF_THRESHOLD,
+    FAST_RISKOFF_COOLDOWN as FAST_RISKOFF_DAYS,
+    FAST_RISKOFF_LOOKBACK,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -118,22 +129,79 @@ _raider    = Raider()
 _scavenger = Scavenger()
 
 
-def _fetch_regime(client) -> str:
-    """Fetch SPY + VIX and return the current Overseer regime string."""
-    df = _fetch_history(client, "SPY")
-    if df is None or len(df) < 60:
-        return Overseer.RECLAMATION   # can't determine — don't block
-
+def _fetch_regime_and_spy(client) -> tuple[str, "pd.DataFrame | None"]:
+    """Fetch SPY + VIX, return (regime, spy_df). spy_df is reused for fast risk-off + ranking."""
+    spy_df = _fetch_history(client, "SPY")
+    if spy_df is None or len(spy_df) < 60:
+        return Overseer.RECLAMATION, spy_df
     try:
         from signal_verifier import fetch_vix
         vix = fetch_vix()
     except Exception:
         vix = 20.0
+    return _overseer.classify(spy_df, vix=vix), spy_df
 
-    return _overseer.classify(df, vix=vix)
+
+def _fetch_regime(client) -> str:
+    """Thin wrapper kept for _print_startup compatibility."""
+    regime, _ = _fetch_regime_and_spy(client)
+    return regime
 
 
-def _scan_all(client, regime: str = Overseer.RECLAMATION) -> list[dict]:
+def _check_fast_riskoff(spy_df: "pd.DataFrame | None") -> tuple[bool, str]:
+    """
+    FinRL-style fast risk-off gate (Enhancement #1).
+
+    Checks two conditions in order:
+      1. Are we still within FAST_RISKOFF_DAYS cooldown from a past trigger?
+         State is persisted in FAST_RISKOFF_PATH (JSON) so it survives restarts.
+      2. Did SPY just drop more than FAST_RISKOFF_THRESHOLD over FAST_RISKOFF_LOOKBACK days?
+         If yes, write a new trigger file and start the cooldown.
+
+    Returns (is_active, human-readable message).
+    When is_active=True, all new SELL_PUT signals are suppressed.
+
+    Tune thresholds in strategy_params.py:
+      FAST_RISKOFF_DROP     — e.g. -0.02 for more sensitive, -0.05 for less
+      FAST_RISKOFF_LOOKBACK — days to measure the drop over (default 3)
+      FAST_RISKOFF_COOLDOWN — days to block new puts after trigger (default 10)
+    """
+    import json
+
+    # Check if still in cooldown from a previous trigger
+    if os.path.exists(FAST_RISKOFF_PATH):
+        with open(FAST_RISKOFF_PATH) as f:
+            state = json.load(f)
+        triggered = datetime.fromisoformat(state["triggered_at"]).date()
+        elapsed   = (datetime.now().date() - triggered).days
+        if elapsed < FAST_RISKOFF_DAYS:
+            days_left = FAST_RISKOFF_DAYS - elapsed
+            return True, (f"fast risk-off active — {days_left}d left "
+                          f"(triggered {triggered}, SPY {state['spy_return_3d']:.1%} "
+                          f"in {FAST_RISKOFF_LOOKBACK}d)")
+
+    # Measure SPY return over the last FAST_RISKOFF_LOOKBACK trading days
+    lookback = FAST_RISKOFF_LOOKBACK + 1   # +1 because we compare close[0] vs close[-1]
+    if spy_df is None or len(spy_df) < lookback:
+        return False, ""
+    closes = spy_df["close"].values
+    ret = (closes[-1] - closes[-lookback]) / closes[-lookback]
+
+    if ret <= FAST_RISKOFF_THRESHOLD:
+        # Trigger: write state file so cooldown persists across scanner restarts
+        state = {"triggered_at": datetime.now().isoformat(), "spy_return_3d": float(ret)}
+        with open(FAST_RISKOFF_PATH, "w") as f:
+            json.dump(state, f, indent=2)
+        return True, (f"fast risk-off TRIGGERED — SPY {ret:.1%} in {FAST_RISKOFF_LOOKBACK}d "
+                      f"(threshold {FAST_RISKOFF_THRESHOLD:.0%})")
+
+    return False, ""
+
+
+
+
+def _scan_all(client, regime: str = Overseer.RECLAMATION,
+              spy_df: "pd.DataFrame | None" = None) -> list[dict]:
     signals = []
     for symbol in WATCHLIST:
         df_ind = _fetch_with_indicators(client, symbol)
@@ -526,9 +594,14 @@ def main():
             continue
 
         scan_count += 1
-        regime     = _fetch_regime(client)
-        regime_str = _overseer.describe(regime)
+        regime, spy_df = _fetch_regime_and_spy(client)
+        regime_str     = _overseer.describe(regime)
         print(f"\n[{now}] Scan #{scan_count} — {regime_str} — scanning {len(WATCHLIST)} symbols...")
+
+        # Fast risk-off check (FinRL #1): suppress new puts if SPY -3% in 3 days
+        riskoff_active, riskoff_msg = _check_fast_riskoff(spy_df)
+        if riskoff_active:
+            print(f"  ⚡ {riskoff_msg}")
 
         # Paper mode: check existing positions against current prices
         if portfolio:
@@ -542,7 +615,7 @@ def main():
                           f"  exit ${ex['exit']:.2f}")
 
         # Scan for new signals
-        signals = _scan_all(client, regime=regime)
+        signals = _scan_all(client, regime=regime, spy_df=spy_df)
 
         if portfolio:
             portfolio.log_scan(
@@ -557,6 +630,17 @@ def main():
             print(f"  {len(signals)} signal(s) found.")
             for s in signals:
                 _print_signal(s, paper=args.paper)
+
+                # Fast risk-off gate — suppress new puts when SPY shocked
+                if riskoff_active and s["signal"] == "SELL_PUT":
+                    print(f"\n  ⚡ {riskoff_msg} — skipping {s['symbol']} SELL_PUT")
+                    if args.paper:
+                        s["reason"] = f"fast risk-off: {riskoff_msg}"
+                        _log_option_trade(s, verdict="RISKOFF_BLOCK")
+                    print(f"\n{VERDICT_SKIP}")
+                    print(f"SKIPPED: {s['symbol']} {s['signal']} — fast risk-off")
+                    print(VERDICT_SKIP)
+                    continue
 
                 # Budget check — auto-skip if collateral exceeds available cash
                 cash = portfolio.cash if portfolio else 10_000.0

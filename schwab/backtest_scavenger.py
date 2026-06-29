@@ -24,20 +24,26 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pandas as pd
 
+import numpy as np
+
 from trend_scanner import compute_indicators
 from vault76.armory.scavenger import Scavenger
 from vault76.overseer import Overseer
 from options_pricer import (black_scholes_put, black_scholes_call,
                             historical_vol, yang_zhang_vol)
+from strategy_params import (
+    FAST_RISKOFF_DROP, FAST_RISKOFF_LOOKBACK, FAST_RISKOFF_COOLDOWN,
+    SCAV_PROFIT_TARGET_MIN, SCAV_PROFIT_TARGET_MAX,
+)
 
 DTE_BARS    = 30    # trading days to expiration
 SHARES      = 100   # 1 contract
 MIN_HISTORY = 60    # bars needed before scanning starts
 RISK_FREE   = 0.05
 
-# Adaptive profit target bounds
-_TARGET_MIN = 0.35
-_TARGET_MAX = 0.65
+# Adaptive profit target bounds — from strategy_params.py
+_TARGET_MIN = SCAV_PROFIT_TARGET_MIN
+_TARGET_MAX = SCAV_PROFIT_TARGET_MAX
 
 FLAT       = "FLAT"
 PUT_OPEN   = "PUT_OPEN"
@@ -114,6 +120,21 @@ def _get_regime(overseer: Overseer, cur_date, spy_ind, spy_date_idx: dict,
     return overseer.classify(spy_ind.iloc[:spy_i + 1], vix)
 
 
+def _spy_lookback_return(spy_ind: pd.DataFrame, spy_i: int) -> float:
+    """
+    SPY return over FAST_RISKOFF_LOOKBACK trading days ending at spy_i.
+    Used to detect fast risk-off conditions.
+    Returns 0.0 if insufficient history.
+    """
+    if spy_i < FAST_RISKOFF_LOOKBACK:
+        return 0.0
+    closes = spy_ind["close"].values
+    return float((closes[spy_i] - closes[spy_i - FAST_RISKOFF_LOOKBACK])
+                 / closes[spy_i - FAST_RISKOFF_LOOKBACK])
+
+
+
+
 def walk_forward_scavenger(df: pd.DataFrame, symbol: str,
                            spy_df: pd.DataFrame | None = None,
                            vix_df: pd.DataFrame | None = None) -> list[dict]:
@@ -121,6 +142,11 @@ def walk_forward_scavenger(df: pd.DataFrame, symbol: str,
     Simulate the wheel strategy on df.
     spy_df / vix_df: if provided, the Overseer classifies regime at each bar.
     NUKED_ZONE blocks opening new puts/calls; existing positions ride through.
+
+    FinRL enhancement applied at each FLAT bar before put entry:
+      #1 Fast risk-off: if SPY dropped FAST_RISKOFF_DROP% in FAST_RISKOFF_LOOKBACK
+         days, suppress new puts for FAST_RISKOFF_COOLDOWN bars.
+
     Returns list of trade events with P&L.
     """
     ind  = compute_indicators(df).dropna().reset_index(drop=True)
@@ -133,6 +159,10 @@ def walk_forward_scavenger(df: pd.DataFrame, symbol: str,
     events = []
     state  = FLAT
     cycle: dict = {}
+
+    # Fast risk-off cooldown tracker: bar index until which new puts are blocked.
+    # Starts at -1 (no cooldown active). Updated whenever a SPY shock is detected.
+    riskoff_until_i = -1
 
     i = MIN_HISTORY
     while i < n:
@@ -147,6 +177,21 @@ def walk_forward_scavenger(df: pd.DataFrame, symbol: str,
             if "scavenger" not in overseer.recommend_roles(regime, row):
                 i += 1
                 continue
+
+            # FinRL #1 — Fast risk-off gate
+            # Check if SPY just dropped hard enough to (re-)trigger a cooldown.
+            # We re-check even if a cooldown is active so a deeper drop resets the clock.
+            if spy_ind is not None:
+                spy_i = spy_date_idx.get(cur_date)
+                if spy_i is not None:
+                    ret = _spy_lookback_return(spy_ind, spy_i)
+                    if ret <= FAST_RISKOFF_DROP:
+                        # Extend cooldown from today
+                        riskoff_until_i = i + FAST_RISKOFF_COOLDOWN
+            if i <= riskoff_until_i:
+                i += 1
+                continue
+
             res = scav.scan(symbol, snapshot, regime=regime)
             if res["signal"] == "SELL_PUT":
                 iv = _entry_iv(snapshot)

@@ -99,6 +99,7 @@ def run(symbols: list[str], role: str,
         if end > global_end:
             global_end = end
 
+        print(f"  {symbol}...", flush=True)
         scav_events = walk_forward_scavenger(df, symbol, spy_df, vix_df) if run_scav else []
         raid_events = walk_forward_raider(   df, symbol, spy_df, vix_df) if run_raid else []
         chem_events = walk_forward_chemist(  df, symbol, spy_df, vix_df) if run_chem else []
