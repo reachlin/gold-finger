@@ -1,0 +1,6 @@
+date,symbol,signal,close,strike,premium_sh,premium_ct,premium_pct,dte,hv,adx,regime,verdict,reason
+2026-06-29 21:57:08,NVDA,SELL_PUT,193.33,183.66,5.73,573.0,2.96,30,47.0,16.9,,BUDGET_BLOCK,sideways stock — sell 5% OTM put for income (The Scavenger)
+2026-06-29 21:57:08,META,SELL_PUT,568.16,539.75,16.37,1637.0,2.88,30,46.2,18.5,,BUDGET_BLOCK,sideways stock — sell 5% OTM put for income (The Scavenger)
+2026-06-29 21:57:08,IBM,SELL_PUT,272.31,258.69,11.07,1107.0,4.06,30,57.6,19.6,,BUDGET_BLOCK,sideways stock — sell 5% OTM put for income (The Scavenger)
+2026-06-29 21:57:38,KO,SELL_PUT,83.29,79.13,0.71,71.0,0.85,30,24.6,15.0,,APPROVED,sideways stock — sell 5% OTM put for income (The Scavenger)
+2026-06-29 21:57:38,PG,SELL_PUT,147.76,140.37,1.33,133.0,0.9,30,25.2,17.4,,BUDGET_BLOCK,sideways stock — sell 5% OTM put for income (The Scavenger)

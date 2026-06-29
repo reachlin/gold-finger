@@ -33,3 +33,12 @@
 {"event": "SCAN", "scan_num": 33, "symbols_scanned": 10, "signals_found": 0, "cash": 10000.0, "open_positions": 0, "ts": "2026-06-27T03:56:16"}
 {"event": "SCAN", "scan_num": 33, "symbols_scanned": 0, "signals_found": 0, "cash": 10000.0, "open_positions": 0, "ts": "2026-06-27T04:01:16"}
 {"event": "SCAN", "scan_num": 0, "symbols_scanned": 0, "signals_found": 0, "cash": 10000.0, "open_positions": 0, "ts": "2026-06-27T04:01:17"}
+{"event": "SCAN", "scan_num": 1, "symbols_scanned": 14, "signals_found": 5, "cash": 10000.0, "open_positions": 0, "ts": "2026-06-29T21:39:11"}
+{"event": "SCAN", "scan_num": 1, "symbols_scanned": 14, "signals_found": 5, "cash": 10000.0, "open_positions": 0, "ts": "2026-06-29T21:44:15"}
+{"event": "SCAN", "scan_num": 1, "symbols_scanned": 14, "signals_found": 5, "cash": 10000.0, "open_positions": 0, "ts": "2026-06-29T21:44:29"}
+{"event": "SCAN", "scan_num": 1, "symbols_scanned": 14, "signals_found": 5, "cash": 10000.0, "open_positions": 0, "ts": "2026-06-29T21:46:19"}
+{"event": "SCAN", "scan_num": 1, "symbols_scanned": 14, "signals_found": 5, "cash": 10000.0, "open_positions": 0, "ts": "2026-06-29T21:46:42"}
+{"event": "SCAN", "scan_num": 1, "symbols_scanned": 14, "signals_found": 5, "cash": 10000.0, "open_positions": 0, "ts": "2026-06-29T21:47:13"}
+{"event": "SCAN", "scan_num": 1, "symbols_scanned": 14, "signals_found": 5, "cash": 10000.0, "open_positions": 0, "ts": "2026-06-29T21:47:57"}
+{"event": "SCAN", "scan_num": 2, "symbols_scanned": 14, "signals_found": 5, "cash": 10000.0, "open_positions": 0, "ts": "2026-06-29T21:54:43"}
+{"event": "SCAN", "scan_num": 1, "symbols_scanned": 14, "signals_found": 5, "cash": 10000.0, "open_positions": 0, "ts": "2026-06-29T21:57:08"}

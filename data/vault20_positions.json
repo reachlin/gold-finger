@@ -28,15 +28,6 @@
       "note": "long stock"
     },
     {
-      "symbol": "INTC_CALL_130_20260821",
-      "shares": -5.0,
-      "entry": 25.54,
-      "entry_date": "2026-06-28",
-      "target": null,
-      "stop": null,
-      "note": "short call INTC 130C 08/21"
-    },
-    {
       "symbol": "SPCX_CALL_180_20260731",
       "shares": -2.0,
       "entry": 8.6,
@@ -44,7 +35,30 @@
       "target": null,
       "stop": null,
       "note": "short call SPCX 180C 07/31"
+    },
+    {
+      "symbol": "INTC_CALL_135_20260717",
+      "shares": -5.0,
+      "entry": 5.5,
+      "entry_date": "2026-06-29",
+      "target": null,
+      "stop": null,
+      "note": "rolled from 130C 8/21 \u2014 sell open 135C 7/17 @ 5.50"
     }
   ],
-  "closed": []
+  "closed": [
+    {
+      "symbol": "INTC_CALL_130_20260821",
+      "shares": -5.0,
+      "entry": 25.54,
+      "entry_date": "2026-06-28",
+      "target": null,
+      "stop": null,
+      "note": "short call INTC 130C 08/21",
+      "exit": 14.8,
+      "exit_date": "2026-06-29",
+      "pnl_dollar": 53.7,
+      "pnl_pct": -42.052
+    }
+  ]
 }

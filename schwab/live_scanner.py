@@ -36,7 +36,7 @@ from vault76.armory.scavenger import Scavenger
 SCAN_INTERVAL_MIN = 5
 MARKET_OPEN_ET    = 9
 MARKET_CLOSE_ET   = 16
-BUDGET_PER_TRADE  = 600     # USD per paper trade
+BUDGET_PER_TRADE  = 600     # USD per Raider BUY trade
 
 SIGNAL_START = "===SIGNAL_START==="
 SIGNAL_END   = "===SIGNAL_END==="
@@ -53,6 +53,9 @@ WATCHLIST = [
 
 PAPER_TRADES_PATH = os.path.join(
     os.path.dirname(__file__), "..", "data", "paper_trades.json"
+)
+OPTION_LEDGER_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "data", "paper_options_ledger.csv"
 )
 
 
@@ -199,10 +202,12 @@ def _print_signal(s: dict, paper: bool = False):
         print(f"EMA20:   ${s.get('ema20', '?')}  EMA50: ${s.get('ema50', '?')}")
 
     elif sig == "SELL_PUT":
+        collateral = float(s.get("strike", 0)) * 100
         print(f"STRIKE:  ${s['strike']}  ({s.get('otm_pct', '5')}% OTM)")
         print(f"PREMIUM: ${s['premium']}/sh  (${s['premium']*100:.0f}/contract)  "
               f"+{s['premium_pct']:.2f}% yield")
         print(f"DTE:     {s['dte']} days")
+        print(f"COLLAT:  ${collateral:,.0f}/contract (cash-secured, no margin)")
         print(f"MAX LOSS:${s.get('max_loss', '?')}/contract if assigned")
         print(f"HV:      {s.get('hv', '?')}%  ADX: {s.get('adx', '?')}")
 
@@ -230,6 +235,99 @@ def _wait_for_verdict() -> str:
         return ans
     except (EOFError, KeyboardInterrupt):
         return "q"
+
+
+# ---------------------------------------------------------------------------
+# Options ledger (paper trading — CSV, one row per trade)
+# ---------------------------------------------------------------------------
+
+def _log_option_trade(s: dict, verdict: str):
+    """Append one row to the CSV options ledger."""
+    import csv
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    row = {
+        "date":        now,
+        "symbol":      s["symbol"],
+        "signal":      s["signal"],
+        "close":       s.get("close", ""),
+        "strike":      s.get("strike", ""),
+        "premium_sh":  s.get("premium", ""),
+        "premium_ct":  round(s.get("premium", 0) * 100, 2),
+        "premium_pct": s.get("premium_pct", ""),
+        "dte":         s.get("dte", ""),
+        "hv":          s.get("hv", ""),
+        "adx":         s.get("adx", ""),
+        "regime":      s.get("regime", ""),
+        "verdict":     verdict,
+        "reason":      s.get("reason", ""),
+    }
+    fieldnames = list(row.keys())
+    write_header = not os.path.exists(OPTION_LEDGER_PATH)
+    with open(OPTION_LEDGER_PATH, "a", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        if write_header:
+            w.writeheader()
+        w.writerow(row)
+
+
+# ---------------------------------------------------------------------------
+# Collateral / budget check (no naked contracts, no margin)
+# ---------------------------------------------------------------------------
+
+def _committed_collateral() -> float:
+    """
+    Sum collateral already committed by open paper puts in the options ledger.
+    A SELL_PUT that was APPROVED and not yet closed locks up strike × 100.
+    Closed positions have a matching CLOSED row; open ones only have APPROVED.
+    """
+    import csv
+    if not os.path.exists(OPTION_LEDGER_PATH):
+        return 0.0
+    committed = 0.0
+    with open(OPTION_LEDGER_PATH, newline="") as f:
+        rows = list(csv.DictReader(f))
+    # Find APPROVED puts and subtract any that have been CLOSED
+    open_puts: dict[str, float] = {}  # symbol+date → collateral
+    for r in rows:
+        if r["signal"] != "SELL_PUT":
+            continue
+        key = f"{r['symbol']}_{r['date']}"
+        if r["verdict"] == "APPROVED":
+            try:
+                open_puts[key] = float(r["strike"]) * 100
+            except (ValueError, KeyError):
+                pass
+        elif r["verdict"] == "CLOSED":
+            open_puts.pop(key, None)
+    committed = sum(open_puts.values())
+    return committed
+
+
+def _collateral_required(s: dict) -> float:
+    """Return cash collateral required for a signal. 0 for non-cash-securing signals."""
+    if s.get("signal") == "SELL_PUT":
+        return float(s.get("strike", 0)) * 100
+    return 0.0
+
+
+def _budget_check(s: dict, portfolio_cash: float) -> tuple[bool, str]:
+    """
+    Returns (ok, message).
+    ok=False means auto-skip — not enough cash to cover without margin.
+    """
+    required = _collateral_required(s)
+    if required == 0:
+        return True, ""
+    committed = _committed_collateral()
+    available = portfolio_cash - committed
+    if required > available:
+        msg = (f"BUDGET BLOCK: need ${required:,.0f} collateral "
+               f"(strike ${s.get('strike')} × 100), "
+               f"only ${available:,.0f} free "
+               f"(${portfolio_cash:,.0f} cash − ${committed:,.0f} committed). "
+               f"No margin / no naked contracts.")
+        return False, msg
+    return True, f"Collateral OK: ${required:,.0f} of ${available:,.0f} available"
 
 
 # ---------------------------------------------------------------------------
@@ -383,7 +481,19 @@ def main():
                         help="Paper trading mode — track fake buys/sells, show P&L")
     args = parser.parse_args()
 
+    # Load the pip schwab-py package without being shadowed by the local schwab/ directory.
+    # vault76/overseer.py already cached the local schwab package in sys.modules['schwab'];
+    # temporarily swap it out, import the pip package, then restore.
+    _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    _removed = [p for p in sys.path if os.path.abspath(p) == _project_root]
+    for p in _removed:
+        sys.path.remove(p)
+    _local_schwab = sys.modules.pop("schwab", None)
     import schwab as schwab_lib
+    sys.modules["schwab"] = _local_schwab  # restore local package for vault76 imports
+    for p in _removed:
+        sys.path.insert(0, p)
+
     CLIENT_ID     = os.environ["SCHWAB_CLIENT_ID"]
     CLIENT_SECRET = os.environ["SCHWAB_CLIENT_SECRET"]
     TOKEN_PATH    = os.path.join(os.path.dirname(__file__), "schwab_token.json")
@@ -442,37 +552,31 @@ def main():
             )
 
         if not signals:
-            print(f"  No BUY signals.")
+            print(f"  No signals.")
         else:
             print(f"  {len(signals)} signal(s) found.")
             for s in signals:
                 _print_signal(s, paper=args.paper)
+
+                # Budget check — auto-skip if collateral exceeds available cash
+                cash = portfolio.cash if portfolio else 10_000.0
+                budget_ok, budget_msg = _budget_check(s, cash)
+                if not budget_ok:
+                    print(f"\n  ⛔ {budget_msg}")
+                    if args.paper:
+                        _log_option_trade(s, verdict="BUDGET_BLOCK")
+                    print(f"\n{VERDICT_SKIP}")
+                    print(f"SKIPPED: {s['symbol']} {s['signal']} — budget block")
+                    print(VERDICT_SKIP)
+                    continue
+
+                if budget_msg:
+                    print(f"  ✓ {budget_msg}")
+
                 verdict = _wait_for_verdict()
-                shares  = max(1, int(BUDGET_PER_TRADE / s["entry"]))
+                sig = s["signal"]
 
-                if verdict == "y":
-                    print(f"\n{VERDICT_OK}")
-                    print(f"APPROVED: {s['symbol']} @ ${s['entry']}")
-                    if portfolio:
-                        pos = portfolio.open_position(
-                            s["symbol"], s["entry"], s["target"], s["stop"], shares
-                        )
-                        portfolio.log_signal(
-                            s["symbol"], s["entry"], s["target"], s["stop"],
-                            s["rsi"], s["adx"], verdict="APPROVED",
-                        )
-                        if pos:
-                            print(f"  [PAPER] BUY {pos['shares']} sh @ ${pos['entry']:.2f}"
-                                  f"  tgt ${pos['target']:.2f}  stp ${pos['stop']:.2f}"
-                                  f"  cost ${pos['cost']:.2f}  cash left ${portfolio.cash:.2f}")
-                        else:
-                            print("  [PAPER] Insufficient cash — trade not recorded.")
-                    else:
-                        print(f"  Suggested: BUY {shares} shares @ market")
-                        print(f"  Target ${s['target']}  |  Stop ${s['stop']}")
-                    print(VERDICT_OK)
-
-                elif verdict == "q":
+                if verdict == "q":
                     if portfolio:
                         print("\nFinal portfolio status:")
                         cur_prices = _get_current_prices(portfolio, price_fetcher)
@@ -480,14 +584,49 @@ def main():
                     print("Exiting scanner.")
                     sys.exit(0)
 
-                else:
-                    if portfolio:
-                        portfolio.log_signal(
-                            s["symbol"], s["entry"], s["target"], s["stop"],
-                            s["rsi"], s["adx"], verdict="SKIPPED",
-                        )
+                elif verdict == "y":
+                    print(f"\n{VERDICT_OK}")
+                    if sig == "BUY":
+                        shares = max(1, int(BUDGET_PER_TRADE / s["entry"]))
+                        print(f"APPROVED: {s['symbol']} BUY @ ${s['entry']}")
+                        if portfolio:
+                            pos = portfolio.open_position(
+                                s["symbol"], s["entry"], s["target"], s["stop"], shares
+                            )
+                            portfolio.log_signal(
+                                s["symbol"], s["entry"], s["target"], s["stop"],
+                                s["rsi"], s["adx"], verdict="APPROVED",
+                            )
+                            if pos:
+                                print(f"  [PAPER] BUY {pos['shares']} sh @ ${pos['entry']:.2f}"
+                                      f"  tgt ${pos['target']:.2f}  stp ${pos['stop']:.2f}"
+                                      f"  cost ${pos['cost']:.2f}  cash left ${portfolio.cash:.2f}")
+                            else:
+                                print("  [PAPER] Insufficient cash — trade not recorded.")
+                        else:
+                            print(f"  Suggested: BUY {shares} shares @ market")
+                    elif sig in ("SELL_PUT", "SELL_CALL"):
+                        print(f"APPROVED: {s['symbol']} {sig} strike=${s['strike']} "
+                              f"premium=${s['premium']}/sh (${s['premium']*100:.0f}/contract)")
+                        if args.paper:
+                            _log_option_trade(s, verdict="APPROVED")
+                            print(f"  [PAPER] Logged to {OPTION_LEDGER_PATH}")
+                        else:
+                            print(f"  Suggested: {sig} {s['symbol']} ${s['strike']} strike, "
+                                  f"${s['dte']}d DTE — collect ${s['premium']*100:.0f}/contract")
+                    print(VERDICT_OK)
+
+                else:  # skip
                     print(f"\n{VERDICT_SKIP}")
-                    print(f"SKIPPED: {s['symbol']}")
+                    print(f"SKIPPED: {s['symbol']} {sig}")
+                    if sig == "BUY" and portfolio:
+                        portfolio.log_signal(
+                            s["symbol"], s.get("entry", 0), s.get("target", 0),
+                            s.get("stop", 0), s.get("rsi", 0), s.get("adx", 0),
+                            verdict="SKIPPED",
+                        )
+                    elif sig in ("SELL_PUT", "SELL_CALL") and args.paper:
+                        _log_option_trade(s, verdict="SKIPPED")
                     print(VERDICT_SKIP)
 
         # Show portfolio status at end of each scan
