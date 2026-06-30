@@ -71,6 +71,83 @@ from strategy_params import (
 
 
 # ---------------------------------------------------------------------------
+# Kronos range cache
+# ---------------------------------------------------------------------------
+
+def _load_kronos_cache(symbols: list[str]) -> dict:
+    """
+    Load the Kronos foundation model and run 30-day range predictions for all
+    symbols. Returns a dict keyed by symbol:
+      { "support": float, "resistance": float, "range_pct": float, "buf_pct": float }
+
+    Cached for the trading session — predictions are 30-day so no need to refresh
+    every scan cycle. Returns {} if Kronos is unavailable (scanner still works).
+    """
+    try:
+        import sys as _sys
+        _sys.path.insert(0, "/Users/lincai/dev/private/Kronos")
+        from model import Kronos, KronosTokenizer, KronosPredictor
+        import kronos_range as kr
+        print("Loading Kronos model (this takes ~30s on first run)...", flush=True)
+        tokenizer = KronosTokenizer.from_pretrained("NeoQuasar/Kronos-Tokenizer-base")
+        model     = Kronos.from_pretrained("NeoQuasar/Kronos-small")
+        predictor = KronosPredictor(model, tokenizer)
+        print(f"  Kronos ready on {predictor.device}", flush=True)
+        cache = {}
+        for sym in symbols:
+            path = os.path.join(os.path.dirname(__file__), "..", "data",
+                                f"{sym.lower()}_history.csv")
+            if not os.path.exists(path):
+                continue
+            try:
+                import pandas as _pd
+                df = _pd.read_csv(path)
+                result = kr.predict_range(df, predictor)
+                strike = result["current_price"] * (1 - 0.05)
+                buf    = (strike - result["support"]) / result["current_price"] * 100
+                cache[sym] = {
+                    "support":    result["support"],
+                    "resistance": result["resistance"],
+                    "range_pct":  result["range_pct"],
+                    "buf_pct":    buf,
+                }
+            except Exception as e:
+                print(f"  [Kronos] {sym}: {e}")
+        print(f"  Kronos cache ready: {len(cache)}/{len(symbols)} symbols", flush=True)
+        return cache
+    except Exception as exc:
+        print(f"  [Kronos] unavailable — scanner will run without range filter ({exc})")
+        return {}
+
+
+def _kronos_advisory(s: dict, kronos_cache: dict) -> tuple[bool, str]:
+    """
+    Return (warn, message) for a SELL_PUT signal vs Kronos predicted support.
+
+    warn=True  → our 5% OTM strike is above the predicted floor (assignment risk)
+    warn=False → strike stays below predicted support (safer entry)
+    Returns ("", False) for non-SELL_PUT signals or missing cache entry.
+    """
+    if s.get("signal") != "SELL_PUT":
+        return False, ""
+    sym   = s["symbol"]
+    entry = kronos_cache.get(sym)
+    if not entry:
+        return False, ""
+    support    = entry["support"]
+    resistance = entry["resistance"]
+    range_pct  = entry["range_pct"]
+    buf        = entry["buf_pct"]
+    strike     = float(s.get("strike", 0))
+    warn       = strike > support     # strike above predicted floor = assignment risk
+
+    flag = "WARN" if warn else "OK"
+    msg  = (f"Kronos 30d range: support ${support:.2f}  resist ${resistance:.2f}"
+            f"  ({range_pct:.1f}%)  strike buf {buf:+.1f}%  [{flag}]")
+    return warn, msg
+
+
+# ---------------------------------------------------------------------------
 # Market hours
 # ---------------------------------------------------------------------------
 
@@ -250,7 +327,7 @@ def _make_price_fetcher(client):
 # Signal display + verdict prompt
 # ---------------------------------------------------------------------------
 
-def _print_signal(s: dict, paper: bool = False):
+def _print_signal(s: dict, paper: bool = False, kronos_cache: dict | None = None):
     now      = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     mode_tag = " [PAPER]" if paper else ""
     sig      = s["signal"]
@@ -278,6 +355,10 @@ def _print_signal(s: dict, paper: bool = False):
         print(f"COLLAT:  ${collateral:,.0f}/contract (cash-secured, no margin)")
         print(f"MAX LOSS:${s.get('max_loss', '?')}/contract if assigned")
         print(f"HV:      {s.get('hv', '?')}%  ADX: {s.get('adx', '?')}")
+        if kronos_cache is not None:
+            _, k_msg = _kronos_advisory(s, kronos_cache)
+            if k_msg:
+                print(f"KRONOS:  {k_msg}")
 
     elif sig == "SELL_CALL":
         print(f"STRIKE:  ${s['strike']}  ({s.get('otm_pct', '8')}% OTM)")
@@ -650,7 +731,8 @@ def main():
         from paper_portfolio import PaperPortfolio
         portfolio = PaperPortfolio(PAPER_TRADES_PATH)
 
-    price_fetcher = _make_price_fetcher(client)
+    price_fetcher  = _make_price_fetcher(client)
+    kronos_cache   = _load_kronos_cache(WATCHLIST)
     _print_startup(client, paper=args.paper, portfolio=portfolio,
                    price_fetcher=price_fetcher)
     scan_count = 0
@@ -707,7 +789,7 @@ def main():
         else:
             print(f"  {len(signals)} signal(s) found.")
             for s in signals:
-                _print_signal(s, paper=args.paper)
+                _print_signal(s, paper=args.paper, kronos_cache=kronos_cache)
 
                 # Fast risk-off gate — suppress new puts when SPY shocked
                 if riskoff_active and s["signal"] == "SELL_PUT":
@@ -719,6 +801,12 @@ def main():
                     print(f"SKIPPED: {s['symbol']} {s['signal']} — fast risk-off")
                     print(VERDICT_SKIP)
                     continue
+
+                # Kronos advisory — warn if put strike is above predicted 30d support
+                k_warn, k_msg = _kronos_advisory(s, kronos_cache)
+                if k_warn:
+                    print(f"\n  ⚠  {k_msg}")
+                    print(f"  ⚠  Strike above Kronos support floor — assignment risk elevated.")
 
                 # Budget check — auto-skip if collateral exceeds available cash
                 cash = portfolio.cash if portfolio else 10_000.0
