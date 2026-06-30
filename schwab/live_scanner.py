@@ -49,6 +49,8 @@ WATCHLIST = [
     "IBM", "INTC", "IONQ", "KO",
     # Scavenger prime targets — high % time sideways
     "MMM", "PG", "XOM",
+    # Top backtest candidates — wheel strategy
+    "UNH",
 ]
 
 PAPER_TRADES_PATH = os.path.join(
