@@ -402,6 +402,74 @@ def _budget_check(s: dict, portfolio_cash: float) -> tuple[bool, str]:
 # Startup banner
 # ---------------------------------------------------------------------------
 
+def _open_options_lines() -> tuple[list[str], list[str]]:
+    """
+    Read open option positions from the paper ledger and return formatted lines.
+    An option is "open" if it has an APPROVED row with no matching CLOSED row.
+    Returns (terminal_lines, slack_lines).
+    """
+    import csv
+    from datetime import date, timedelta
+
+    if not os.path.exists(OPTION_LEDGER_PATH):
+        return ["  Options:         none"], ["*Options:* none"]
+
+    with open(OPTION_LEDGER_PATH, newline="") as f:
+        rows = list(csv.DictReader(f))
+
+    # Collect open positions keyed by symbol+open_date
+    open_opts: dict[str, dict] = {}
+    for r in rows:
+        key = f"{r['symbol']}_{r['date']}"
+        if r["verdict"] == "APPROVED":
+            open_opts[key] = r
+        elif r["verdict"] == "CLOSED":
+            open_opts.pop(key, None)
+
+    if not open_opts:
+        return ["  Options:         none"], ["*Options:* none"]
+
+    today = date.today()
+    term  = [f"  Options ({len(open_opts)} open):"]
+    slack = [f"*Options ({len(open_opts)} open):*"]
+
+    for r in open_opts.values():
+        sym    = r["symbol"]
+        sig    = r["signal"]          # SELL_PUT or SELL_CALL
+        strike = r.get("strike", "?")
+        prem   = r.get("premium_ct", r.get("premium_usd", "?"))
+        dte    = r.get("dte", "?")
+        opened = r["date"][:10]
+
+        # Estimate expiry from open date + DTE
+        try:
+            exp = (date.fromisoformat(opened) + timedelta(days=int(float(dte)))).isoformat()
+            days_left = (date.fromisoformat(exp) - today).days
+            exp_str = f"exp {exp} ({days_left}d left)"
+        except Exception:
+            exp_str = f"{dte} DTE at open"
+
+        try:
+            collat = f"${float(strike) * 100:,.0f}"
+        except Exception:
+            collat = "?"
+
+        try:
+            prem_str = f"${float(prem):.0f}"
+        except Exception:
+            prem_str = str(prem)
+
+        term.append(
+            f"    {sym:<6} {sig}  strike ${strike}  prem {prem_str}  "
+            f"collat {collat}  {exp_str}  [opened {opened}]"
+        )
+        slack.append(
+            f"  • {sym} {sig} ${strike} | prem {prem_str} | collat {collat} | {exp_str}"
+        )
+
+    return term, slack
+
+
 def _send_slack(message: str):
     try:
         import sys as _sys
@@ -471,7 +539,8 @@ def _print_startup(client, paper: bool, portfolio=None, price_fetcher=None):
     cards        = _overseer.recommend_roles(regime)
     cards_str    = ", ".join(c.upper() for c in cards) if cards else "NONE — stand down"
 
-    pos_term, pos_slack = _position_lines(portfolio, price_fetcher)
+    pos_term,  pos_slack  = _position_lines(portfolio, price_fetcher)
+    opts_term, opts_slack = _open_options_lines()
 
     # ── Terminal banner ──────────────────────────────────────────────────────
     sep = "=" * 62
@@ -486,6 +555,8 @@ def _print_startup(client, paper: bool, portfolio=None, price_fetcher=None):
     if portfolio:
         print(f"  Cash:            ${portfolio.cash:,.2f}")
     for line in pos_term:
+        print(line)
+    for line in opts_term:
         print(line)
     if paper:
         print(f"  Paper trades:    {PAPER_TRADES_PATH}")
@@ -504,6 +575,7 @@ def _print_startup(client, paper: bool, portfolio=None, price_fetcher=None):
     if portfolio:
         slack_lines.append(f"*Cash:* ${portfolio.cash:,.2f}")
     slack_lines += pos_slack
+    slack_lines += opts_slack
     _send_slack("\n".join(slack_lines))
 
 
@@ -519,7 +591,11 @@ def _print_eod(portfolio, price_fetcher, scan_count: int):
     if portfolio:
         portfolio.print_status(cur_prices)
 
-    pos_term, pos_slack = _position_lines(portfolio, price_fetcher)
+    pos_term,  pos_slack  = _position_lines(portfolio, price_fetcher)
+    opts_term, opts_slack = _open_options_lines()
+
+    for line in opts_term:
+        print(line)
 
     if portfolio:
         s = portfolio.summary(cur_prices)
@@ -532,9 +608,11 @@ def _print_eod(portfolio, price_fetcher, scan_count: int):
             f"*P&L:* {pnl_sign}${s['total_pnl_dollar']:,.2f} ({pnl_sign}{s['total_pnl_pct']:.2f}%)",
             f"*Realized:* ${s['realized_pnl_dollar']:+,.2f}  |  "
             f"*Unrealized:* ${s['unrealized_pnl_dollar']:+,.2f}",
-        ] + pos_slack
+        ] + pos_slack + opts_slack
     else:
-        slack_lines = [f"*VAULT 76 — End of Day* {now_str}  (scans: {scan_count})"]
+        slack_lines = [
+            f"*VAULT 76 — End of Day* {now_str}  (scans: {scan_count})",
+        ] + opts_slack
 
     _send_slack("\n".join(slack_lines))
 
