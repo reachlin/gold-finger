@@ -14,7 +14,7 @@ MAX_HOLD_DAYS = 30
 
 class PaperPortfolio:
 
-    def __init__(self, path: str, starting_capital: float = 10_000.0):
+    def __init__(self, path: str, starting_capital: float = 30_000.0):
         self.path     = path
         self.log_path = path.replace(".json", ".log")
         self._load(starting_capital)
@@ -23,7 +23,7 @@ class PaperPortfolio:
     # Persistence
     # ------------------------------------------------------------------
 
-    def _load(self, starting_capital: float = 10_000.0):
+    def _load(self, starting_capital: float = 30_000.0):
         if os.path.exists(self.path):
             with open(self.path) as f:
                 data = json.load(f)

@@ -809,7 +809,7 @@ def main():
                     print(f"  ⚠  Strike above Kronos support floor — assignment risk elevated.")
 
                 # Budget check — auto-skip if collateral exceeds available cash
-                cash = portfolio.cash if portfolio else 10_000.0
+                cash = portfolio.cash if portfolio else 30_000.0
                 budget_ok, budget_msg = _budget_check(s, cash)
                 if not budget_ok:
                     print(f"\n  ⛔ {budget_msg}")
