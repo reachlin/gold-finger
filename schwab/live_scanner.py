@@ -215,6 +215,7 @@ _decision_fn       = None   # callable(signal: dict) -> "y" | "n" | "q"
 _current_portfolio = None   # populated in main() after PaperPortfolio init
 _current_kronos_cache: dict = {}  # populated in main() after _load_kronos_cache()
 _current_client    = None   # populated in main() after Schwab auth
+_slack_prefix      = ""     # e.g. "(deepseek) " — set by auto_overseer
 
 
 def set_decision_fn(fn):
@@ -573,7 +574,7 @@ def _send_slack(message: str):
         import sys as _sys
         _sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from notify_slack import send
-        send(message)
+        send(f"{_slack_prefix}{message}" if _slack_prefix else message)
     except Exception as exc:
         print(f"  [Slack] failed to send: {exc}")
 

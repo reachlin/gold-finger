@@ -267,6 +267,7 @@ def main():
 
     import live_scanner as scanner
     scanner.set_decision_fn(overseer.decide)
+    scanner._slack_prefix = f"({overseer.llm.provider}) "
     scanner.main()
 
 
