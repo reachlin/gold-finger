@@ -1,0 +1,44 @@
+services:
+  auto-overseer:
+    build: .
+    image: vault76-auto-overseer:latest
+    container_name: vault76-overseer
+    restart: unless-stopped
+    environment:
+      # LLM provider — pick one block below
+      LLM_PROVIDER: anthropic
+      LLM_MODEL: claude-haiku-4-5-20251001
+      # ANTHROPIC_API_KEY: set in .env or override here
+
+      # OpenAI alternative:
+      # LLM_PROVIDER: openai
+      # LLM_MODEL: gpt-4o-mini
+      # OPENAI_API_KEY: sk-...
+
+      # DeepSeek alternative:
+      # LLM_PROVIDER: deepseek
+      # LLM_MODEL: deepseek-chat
+      # DEEPSEEK_API_KEY: sk-...
+
+      # Ollama / local model:
+      # LLM_PROVIDER: openai_compatible
+      # LLM_MODEL: llama3
+      # LLM_BASE_URL: http://host.docker.internal:11434/v1
+      # LLM_API_KEY: ollama
+
+      # Schwab credentials (required)
+      SCHWAB_CLIENT_ID: ${SCHWAB_CLIENT_ID}
+      SCHWAB_CLIENT_SECRET: ${SCHWAB_CLIENT_SECRET}
+
+      # Safety gate for real orders — uncomment ONLY when ready
+      # REALLY_REAL: "true"
+
+      PYTHONUNBUFFERED: "1"
+    env_file:
+      - .env
+    volumes:
+      # Persistent state
+      - ./data:/app/data
+      # Schwab OAuth token (must be pre-authenticated)
+      - ./schwab/schwab_token.json:/app/schwab/schwab_token.json
+    command: ["python", "schwab/auto_overseer.py", "--paper"]

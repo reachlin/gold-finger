@@ -207,6 +207,21 @@ _overseer  = Overseer()
 _raider    = Raider()
 _scavenger = Scavenger()
 
+# ---------------------------------------------------------------------------
+# AutoOverseer hook — set by auto_overseer.py to replace interactive input
+# ---------------------------------------------------------------------------
+
+_decision_fn       = None   # callable(signal: dict) -> "y" | "n" | "q"
+_current_portfolio = None   # populated in main() after PaperPortfolio init
+_current_kronos_cache: dict = {}  # populated in main() after _load_kronos_cache()
+_current_client    = None   # populated in main() after Schwab auth
+
+
+def set_decision_fn(fn):
+    """Replace the interactive y/n prompt with an automated decision function."""
+    global _decision_fn
+    _decision_fn = fn
+
 
 def _fetch_regime_and_spy(client) -> tuple[str, "pd.DataFrame | None"]:
     """Fetch SPY + VIX, return (regime, spy_df). spy_df is reused for fast risk-off + ranking."""
@@ -728,13 +743,23 @@ def main():
     TOKEN_PATH    = os.path.join(os.path.dirname(__file__), "schwab_token.json")
     client = schwab_lib.auth.client_from_token_file(TOKEN_PATH, CLIENT_ID, CLIENT_SECRET)
 
+    global _current_client
+    _current_client = client
+
     portfolio = None
     if args.paper:
         from paper_portfolio import PaperPortfolio
         portfolio = PaperPortfolio(PAPER_TRADES_PATH)
 
-    price_fetcher  = _make_price_fetcher(client)
-    kronos_cache   = _load_kronos_cache(WATCHLIST)
+    global _current_portfolio
+    _current_portfolio = portfolio
+
+    price_fetcher = _make_price_fetcher(client)
+    kronos_cache  = _load_kronos_cache(WATCHLIST)
+
+    global _current_kronos_cache
+    _current_kronos_cache = kronos_cache
+
     _print_startup(client, paper=args.paper, portfolio=portfolio,
                    price_fetcher=price_fetcher)
     scan_count = 0
@@ -825,7 +850,7 @@ def main():
                 if budget_msg:
                     print(f"  ✓ {budget_msg}")
 
-                verdict = _wait_for_verdict()
+                verdict = _decision_fn(s) if _decision_fn is not None else _wait_for_verdict()
                 sig = s["signal"]
 
                 if verdict == "q":
