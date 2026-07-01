@@ -37,8 +37,16 @@ services:
     env_file:
       - .env
     volumes:
-      # Persistent state
+      # Persistent state — ledger, trades, fast_riskoff, stdout log
       - ./data:/app/data
       # Schwab OAuth token (must be pre-authenticated)
       - ./schwab/schwab_token.json:/app/schwab/schwab_token.json
-    command: ["python", "schwab/auto_overseer.py", "--paper"]
+    # Tee stdout+stderr to data/overseer.log (survives container removal)
+    command: >
+      sh -c "python -u schwab/auto_overseer.py --paper
+             2>&1 | tee -a /app/data/overseer.log"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
