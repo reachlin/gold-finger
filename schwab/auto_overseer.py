@@ -223,6 +223,48 @@ class AutoOverseer:
 
 
 # ---------------------------------------------------------------------------
+# Market-open check
+# ---------------------------------------------------------------------------
+
+MARKET_CHECK_SYSTEM = """You are a US stock market calendar expert.
+Answer ONLY with valid JSON: {"open": true, "reason": "brief reason"}
+or {"open": false, "reason": "brief reason"}
+No other text."""
+
+
+def _check_market_open(llm: "LLMClient", send_slack) -> bool:
+    """
+    Ask the LLM whether the US stock market is open today.
+    Sends a Slack notification and returns False if closed so the overseer exits early.
+    Returns True if market is open (or if check fails — fail open so scanner decides).
+    """
+    from datetime import date
+    today = date.today()
+    weekday = today.strftime("%A")
+    prompt = (f"Today is {today.isoformat()} ({weekday}). "
+              f"Is the US stock market (NYSE/NASDAQ) open for regular trading today? "
+              f"Consider weekends and all US public holidays.")
+    raw = llm.chat(system=MARKET_CHECK_SYSTEM, user=prompt)
+    if not raw:
+        print("  [MarketCheck] LLM unavailable — proceeding anyway")
+        return True
+    try:
+        import json as _json
+        parsed  = _json.loads(raw.strip())
+        is_open = bool(parsed.get("open", True))
+        reason  = parsed.get("reason", "")
+    except Exception:
+        print(f"  [MarketCheck] Could not parse response: {raw!r} — proceeding anyway")
+        return True
+
+    status = "OPEN" if is_open else "CLOSED"
+    print(f"  [MarketCheck] {today} ({weekday}): market {status} — {reason}")
+    if not is_open:
+        send_slack(f"*Market closed today* ({today}, {weekday}): {reason}\nOverseer will not scan.")
+    return is_open
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -267,7 +309,13 @@ def main():
 
     import live_scanner as scanner
     scanner.set_decision_fn(overseer.decide)
-    scanner._slack_prefix = f"({overseer.llm.provider}) "
+    provider_tag = overseer.llm.provider
+    scanner._slack_prefix = f"`({provider_tag})`\n"
+
+    # Market-open check via LLM before starting the scan loop
+    if not _check_market_open(overseer.llm, scanner._send_slack):
+        return
+
     scanner.main()
 
 
