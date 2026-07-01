@@ -238,10 +238,12 @@ def _check_market_open(llm: "LLMClient", send_slack) -> bool:
     Sends a Slack notification and returns False if closed so the overseer exits early.
     Returns True if market is open (or if check fails — fail open so scanner decides).
     """
-    from datetime import date
-    today = date.today()
-    weekday = today.strftime("%A")
-    prompt = (f"Today is {today.isoformat()} ({weekday}). "
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    now_et  = datetime.now(ZoneInfo("America/New_York"))
+    today   = now_et.date()
+    weekday = now_et.strftime("%A")
+    prompt = (f"Today in US Eastern Time is {today.isoformat()} ({weekday}). "
               f"Is the US stock market (NYSE/NASDAQ) open for regular trading today? "
               f"Consider weekends and all US public holidays.")
     raw = llm.chat(system=MARKET_CHECK_SYSTEM, user=prompt)

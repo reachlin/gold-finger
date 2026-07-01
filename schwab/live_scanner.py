@@ -153,13 +153,19 @@ def _kronos_advisory(s: dict, kronos_cache: dict) -> tuple[bool, str]:
 # Market hours
 # ---------------------------------------------------------------------------
 
+def _now_et():
+    """Current datetime in US/Eastern — DST-aware, timezone-independent."""
+    from zoneinfo import ZoneInfo
+    return datetime.now(ZoneInfo("America/New_York"))
+
+
 def _et_hour() -> float:
-    now_utc = datetime.now(timezone.utc)
-    return (now_utc.hour - 4) % 24 + now_utc.minute / 60
+    now = _now_et()
+    return now.hour + now.minute / 60
 
 
 def _is_weekday() -> bool:
-    return datetime.now(timezone.utc).weekday() < 5
+    return _now_et().weekday() < 5   # Mon=0 … Fri=4 in ET, not UTC
 
 
 def _is_market_hours() -> bool:
