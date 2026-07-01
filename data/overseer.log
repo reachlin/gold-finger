@@ -1,0 +1,185 @@
+  [AutoOverseer] LLM: LLMClient(provider='deepseek', model='deepseek-chat')  paper=True
+  [MarketCheck] 2026-07-01 (Wednesday): market OPEN — Wednesday, July 1, 2026, is a regular trading day with no holidays.
+Loading Kronos model (this takes ~30s on first run)...
+  Kronos ready on mps
+  Kronos cache ready: 15/15 symbols
+
+==============================================================
+  VAULT 76 — DAILY BRIEFING  2026-07-01 21:56:45
+==============================================================
+  Mode:            📄  PAPER TRADING
+  Regime:          Reclamation Day — bull market, rebuilding in progress
+  Active cards:    RAIDER, SCAVENGER
+  Watchlist (15):   NVDA, AMD, AAPL, AMZN, META, MSFT, GOOGL, IBM, INTC, IONQ, KO, MMM, PG, XOM, UNH
+  Scan interval:   5 min  |  Budget: $600/trade
+  Cash:            $30,000.00
+  Positions:       none
+  Options (3 open):
+    KO     SELL_PUT  strike $79.13  prem $71  collat $7,913  exp 2026-07-29 (28d left)  [opened 2026-06-29]
+    KO     SELL_PUT  strike $77.26  prem $74  collat $7,726  exp 2026-07-31 (30d left)  [opened 2026-07-01]
+    PG     SELL_PUT  strike $138.63  prem $116  collat $13,863  exp 2026-07-31 (30d left)  [opened 2026-07-01]
+  Paper trades:    /Users/lincai/dev/private/gold-finger/schwab/../data/paper_trades.json
+  Monitor:         /schwab watch
+==============================================================
+
+[21:56:48] Scan #1 — Reclamation Day — bull market, rebuilding in progress — scanning 15 symbols...
+  6 signal(s) found.
+
+===SIGNAL_START===
+TIME:    2026-07-01 21:56:56 [PAPER]
+SYMBOL:  NVDA  [SCAVENGER]
+ACTION:  SELL_PUT
+CLOSE:   $194.63
+STRIKE:  $184.9  (5% OTM)
+PREMIUM: $4.99/sh  ($499/contract)  +2.56% yield
+DTE:     30 days
+COLLAT:  $18,490/contract (cash-secured, no margin)
+MAX LOSS:$17991.04/contract if assigned
+HV:      43.0%  ADX: 17.6
+KRONOS:  Kronos 30d range: support $185.63  resist $203.87  (9.5%)  strike buf -1.4%  [OK]
+REASON:  sideways stock — sell 5% OTM put for income (The Scavenger)
+===SIGNAL_END===
+
+>>> Waiting for Claude verification... (yes=approve / n=skip / q=quit)
+Proceed? [yes/N]: 
+  ⛔ BUDGET BLOCK: need $18,490 collateral (strike $184.9 × 100), only $498 free ($30,000 cash − $29,502 committed). No margin / no naked contracts.
+
+===SKIPPED===
+SKIPPED: NVDA SELL_PUT — budget block
+===SKIPPED===
+
+===SIGNAL_START===
+TIME:    2026-07-01 21:56:56 [PAPER]
+SYMBOL:  META  [SCAVENGER]
+ACTION:  SELL_PUT
+CLOSE:   $603.9
+STRIKE:  $573.7  (5% OTM)
+PREMIUM: $19.25/sh  ($1925/contract)  +3.19% yield
+DTE:     30 days
+COLLAT:  $57,370/contract (cash-secured, no margin)
+MAX LOSS:$55444.58/contract if assigned
+HV:      49.2%  ADX: 18.1
+KRONOS:  Kronos 30d range: support $545.32  resist $676.78  (23.9%)  strike buf -4.1%  [WARN]
+REASON:  sideways stock — sell 5% OTM put for income (The Scavenger)
+===SIGNAL_END===
+
+>>> Waiting for Claude verification... (yes=approve / n=skip / q=quit)
+Proceed? [yes/N]: 
+  ⚠  Kronos 30d range: support $545.32  resist $676.78  (23.9%)  strike buf -4.1%  [WARN]
+  ⚠  Strike above Kronos support floor — assignment risk elevated.
+
+  ⛔ BUDGET BLOCK: need $57,370 collateral (strike $573.7 × 100), only $498 free ($30,000 cash − $29,502 committed). No margin / no naked contracts.
+
+===SKIPPED===
+SKIPPED: META SELL_PUT — budget block
+===SKIPPED===
+
+===SIGNAL_START===
+TIME:    2026-07-01 21:56:56 [PAPER]
+SYMBOL:  GOOGL  [SCAVENGER]
+ACTION:  SELL_PUT
+CLOSE:   $357.17
+STRIKE:  $339.31  (5% OTM)
+PREMIUM: $6.33/sh  ($633/contract)  +1.77% yield
+DTE:     30 days
+COLLAT:  $33,931/contract (cash-secured, no margin)
+MAX LOSS:$33297.78/contract if assigned
+HV:      35.0%  ADX: 18.1
+KRONOS:  Kronos 30d range: support $294.40  resist $342.90  (14.4%)  strike buf +7.7%  [WARN]
+REASON:  sideways stock — sell 5% OTM put for income (The Scavenger)
+===SIGNAL_END===
+
+>>> Waiting for Claude verification... (yes=approve / n=skip / q=quit)
+Proceed? [yes/N]: 
+  ⚠  Kronos 30d range: support $294.40  resist $342.90  (14.4%)  strike buf +7.7%  [WARN]
+  ⚠  Strike above Kronos support floor — assignment risk elevated.
+
+  ⛔ BUDGET BLOCK: need $33,931 collateral (strike $339.31 × 100), only $498 free ($30,000 cash − $29,502 committed). No margin / no naked contracts.
+
+===SKIPPED===
+SKIPPED: GOOGL SELL_PUT — budget block
+===SKIPPED===
+
+===SIGNAL_START===
+TIME:    2026-07-01 21:56:56 [PAPER]
+SYMBOL:  IONQ  [SCAVENGER]
+ACTION:  SELL_PUT
+CLOSE:   $53.67
+STRIKE:  $50.99  (5% OTM)
+PREMIUM: $4.53/sh  ($453/contract)  +8.44% yield
+DTE:     30 days
+COLLAT:  $5,099/contract (cash-secured, no margin)
+MAX LOSS:$4645.88/contract if assigned
+HV:      98.5%  ADX: 19.1
+KRONOS:  Kronos 30d range: support $33.79  resist $53.06  (39.1%)  strike buf +26.5%  [WARN]
+REASON:  sideways stock — sell 5% OTM put for income (The Scavenger)
+===SIGNAL_END===
+
+>>> Waiting for Claude verification... (yes=approve / n=skip / q=quit)
+Proceed? [yes/N]: 
+  ⚠  Kronos 30d range: support $33.79  resist $53.06  (39.1%)  strike buf +26.5%  [WARN]
+  ⚠  Strike above Kronos support floor — assignment risk elevated.
+
+  ⛔ BUDGET BLOCK: need $5,099 collateral (strike $50.99 × 100), only $498 free ($30,000 cash − $29,502 committed). No margin / no naked contracts.
+
+===SKIPPED===
+SKIPPED: IONQ SELL_PUT — budget block
+===SKIPPED===
+
+===SIGNAL_START===
+TIME:    2026-07-01 21:56:56 [PAPER]
+SYMBOL:  KO  [SCAVENGER]
+ACTION:  SELL_PUT
+CLOSE:   $81.8
+STRIKE:  $77.71  (5% OTM)
+PREMIUM: $0.75/sh  ($75/contract)  +0.91% yield
+DTE:     30 days
+COLLAT:  $7,771/contract (cash-secured, no margin)
+MAX LOSS:$7696.49/contract if assigned
+HV:      25.4%  ADX: 14.1
+KRONOS:  Kronos 30d range: support $68.45  resist $78.43  (12.1%)  strike buf +12.2%  [WARN]
+REASON:  sideways stock — sell 5% OTM put for income (The Scavenger)
+===SIGNAL_END===
+
+>>> Waiting for Claude verification... (yes=approve / n=skip / q=quit)
+Proceed? [yes/N]: 
+  ⚠  Kronos 30d range: support $68.45  resist $78.43  (12.1%)  strike buf +12.2%  [WARN]
+  ⚠  Strike above Kronos support floor — assignment risk elevated.
+
+  ⛔ BUDGET BLOCK: need $7,771 collateral (strike $77.71 × 100), only $498 free ($30,000 cash − $29,502 committed). No margin / no naked contracts.
+
+===SKIPPED===
+SKIPPED: KO SELL_PUT — budget block
+===SKIPPED===
+
+===SIGNAL_START===
+TIME:    2026-07-01 21:56:56 [PAPER]
+SYMBOL:  PG  [SCAVENGER]
+ACTION:  SELL_PUT
+CLOSE:   $146.69
+STRIKE:  $139.36  (5% OTM)
+PREMIUM: $1.16/sh  ($116/contract)  +0.79% yield
+DTE:     30 days
+COLLAT:  $13,936/contract (cash-secured, no margin)
+MAX LOSS:$13820.3/contract if assigned
+HV:      23.9%  ADX: 17.2
+KRONOS:  Kronos 30d range: support $143.84  resist $155.39  (7.8%)  strike buf -1.5%  [OK]
+REASON:  sideways stock — sell 5% OTM put for income (The Scavenger)
+===SIGNAL_END===
+
+>>> Waiting for Claude verification... (yes=approve / n=skip / q=quit)
+Proceed? [yes/N]: 
+  ⛔ BUDGET BLOCK: need $13,936 collateral (strike $139.36 × 100), only $498 free ($30,000 cash − $29,502 committed). No margin / no naked contracts.
+
+===SKIPPED===
+SKIPPED: PG SELL_PUT — budget block
+===SKIPPED===
+
+  ┌─ Paper Portfolio ────────────────────────────────────────
+  │ Capital:    $ 30,000.00  starting
+  │ Cash:       $ 30,000.00  available
+  │ Invested:   $      0.00  in 0 position(s)
+  │ Total:      $ 30,000.00
+  │ P&L:        $+     0.00  (+0.00%)  [realized $+0.00 / unrealized $+0.00]
+  └─────────────────────────────────────────────────────────
+  Next scan in 5 min.
