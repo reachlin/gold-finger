@@ -27,6 +27,10 @@ with Claude Code as the live signal verification layer.
 | `trend_scanner.py` | Core signal logic — `detect_trend`, `detect_pullback`, `detect_entry` |
 | `backtest_strategy.py` | Walk-forward backtest on historical NVDA data |
 | `live_scanner.py` | **Live loop** — runs in tmux, pauses on signals for Claude verification |
+| `options_ledger.py` | Paper options lifecycle — expiry, assignment, covered calls, adaptive early exit; wheel holdings in `data/paper_wheel_holdings.json` |
+| `chain_quotes.py` | Re-quotes Scavenger signals against the real Schwab chain (mid price, real IV/delta); falls back to Black-Scholes |
+| `assignment_risk.py` | LGBM advisory — per-symbol P(>5% drop within 30 trading days), shown to the LLM, never gates |
+| `compare_wheel_versions.py` | Backtest: puts-only-hold-to-expiry (old live behavior) vs full wheel (current) |
 | `signal_verifier.py` | Data utilities — VIX, earnings proximity, headlines (used by Claude during live review) |
 | `daily_signal.py` | One-shot daily scan + Slack notification |
 | `market_intel.py` | News sentiment + technical analysis helpers |

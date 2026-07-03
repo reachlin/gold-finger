@@ -29,6 +29,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 from trend_scanner import compute_indicators
+from options_pricer import historical_vol
+import options_ledger as ol
+import assignment_risk
+from chain_quotes import requote_signal
 from vault76.overseer import Overseer
 from vault76.armory.raider import Raider
 from vault76.armory.scavenger import Scavenger
@@ -59,6 +63,9 @@ PAPER_TRADES_PATH = os.path.join(
 OPTION_LEDGER_PATH = os.path.join(
     os.path.dirname(__file__), "..", "data", "paper_options_ledger.csv"
 )
+WHEEL_HOLDINGS_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "data", "paper_wheel_holdings.json"
+)
 FAST_RISKOFF_PATH = os.path.join(
     os.path.dirname(__file__), "..", "data", "fast_riskoff.json"
 )
@@ -87,7 +94,8 @@ def _load_kronos_cache(symbols: list[str]) -> dict:
     """
     try:
         import sys as _sys
-        _sys.path.insert(0, "/Users/lincai/dev/private/Kronos")
+        _sys.path.insert(0, os.environ.get("KRONOS_PATH",
+                                           "/Users/lincai/dev/private/Kronos"))
         from model import Kronos, KronosTokenizer, KronosPredictor
         import kronos_range as kr
         print("Loading Kronos model (this takes ~30s on first run)...", flush=True)
@@ -159,6 +167,21 @@ def _now_et():
     return datetime.now(ZoneInfo("America/New_York"))
 
 
+def _display_now() -> str:
+    """
+    Human-readable timestamp for banners/signals/Slack: market time (ET)
+    plus the machine's current local time. The local zone is read from the
+    system at call time, so it follows the machine wherever it travels —
+    nothing is hardcoded. Ledger/state files always store pure ET.
+    """
+    et    = _now_et()
+    local = datetime.now().astimezone()
+    text  = et.strftime("%Y-%m-%d %H:%M:%S ET")
+    if local.utcoffset() != et.utcoffset():
+        text += local.strftime(" (local %H:%M %Z)")
+    return text
+
+
 def _et_hour() -> float:
     now = _now_et()
     return now.hour + now.minute / 60
@@ -212,6 +235,10 @@ def _fetch_with_indicators(client, symbol: str) -> pd.DataFrame | None:
 _overseer  = Overseer()
 _raider    = Raider()
 _scavenger = Scavenger()
+
+# LGBM assignment-risk models — trained at startup in main(), advisory only
+_assign_models: dict = {}
+DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 
 # ---------------------------------------------------------------------------
 # AutoOverseer hook — set by auto_overseer.py to replace interactive input
@@ -274,7 +301,7 @@ def _check_fast_riskoff(spy_df: "pd.DataFrame | None") -> tuple[bool, str]:
         with open(FAST_RISKOFF_PATH) as f:
             state = json.load(f)
         triggered = datetime.fromisoformat(state["triggered_at"]).date()
-        elapsed   = (datetime.now().date() - triggered).days
+        elapsed   = (_now_et().date() - triggered).days
         if elapsed < FAST_RISKOFF_DAYS:
             days_left = FAST_RISKOFF_DAYS - elapsed
             return True, (f"fast risk-off active — {days_left}d left "
@@ -290,7 +317,7 @@ def _check_fast_riskoff(spy_df: "pd.DataFrame | None") -> tuple[bool, str]:
 
     if ret <= FAST_RISKOFF_THRESHOLD:
         # Trigger: write state file so cooldown persists across scanner restarts
-        state = {"triggered_at": datetime.now().isoformat(), "spy_return_3d": float(ret)}
+        state = {"triggered_at": _now_et().isoformat(), "spy_return_3d": float(ret)}
         with open(FAST_RISKOFF_PATH, "w") as f:
             json.dump(state, f, indent=2)
         return True, (f"fast risk-off TRIGGERED — SPY {ret:.1%} in {FAST_RISKOFF_LOOKBACK}d "
@@ -303,7 +330,8 @@ def _check_fast_riskoff(spy_df: "pd.DataFrame | None") -> tuple[bool, str]:
 
 def _scan_all(client, regime: str = Overseer.RECLAMATION,
               spy_df: "pd.DataFrame | None" = None) -> list[dict]:
-    signals = []
+    signals  = []
+    holdings = ol.load_holdings(WHEEL_HOLDINGS_PATH)
     for symbol in WATCHLIST:
         df_ind = _fetch_with_indicators(client, symbol)
         if df_ind is None:
@@ -312,11 +340,63 @@ def _scan_all(client, regime: str = Overseer.RECLAMATION,
         r = _raider.scan(symbol, df_ind, regime=regime)
         if r["signal"] != "NONE":
             signals.append(r)
-        # The Scavenger: sell options on sideways stocks
+        # The Scavenger: sell options on sideways stocks.
+        # Model signals are re-quoted against the real Schwab chain — real
+        # strike/premium/IV/delta, or dropped if the real premium is too thin.
         s = _scavenger.scan(symbol, df_ind, regime=regime)
         if s["signal"] != "NONE":
-            signals.append(s)
+            s = requote_signal(client, s)
+            if s is not None:
+                # LGBM advisory: P(>5% drop within 30 trading days).
+                # Never gates — shown to Claude/LLM next to Kronos.
+                risk = assignment_risk.advise(_assign_models, symbol, df_ind)
+                if risk is not None:
+                    s["assign_risk_pct"] = risk
+                signals.append(s)
+        # Wheel phase 2: assigned shares → sell covered calls
+        if symbol in holdings:
+            c = _scavenger.scan(symbol, df_ind, regime=regime,
+                                cost_basis=holdings[symbol]["cost_basis"])
+            if c["signal"] != "NONE":
+                c = requote_signal(client, c)
+                if c is not None:
+                    signals.append(c)
     return signals
+
+
+def _make_quote_fetcher(client):
+    """Returns fetch_quote(symbol) → {"close", "hv"} for the ledger processor."""
+    def fetch_quote(symbol: str) -> dict:
+        df_ind = _fetch_with_indicators(client, symbol)
+        if df_ind is None:
+            raise RuntimeError(f"No data for {symbol}")
+        return {
+            "close": float(df_ind.iloc[-1]["close"]),
+            "hv":    historical_vol(df_ind["close"]),
+        }
+    return fetch_quote
+
+
+def _process_option_ledger(client) -> list[dict]:
+    """
+    Settle whatever is due in the paper options ledger: expiries, assignments,
+    called-away shares, and adaptive-profit-target early exits.
+    Prints and Slacks each settlement event.
+    """
+    events = ol.process_expirations(OPTION_LEDGER_PATH, WHEEL_HOLDINGS_PATH,
+                                    _make_quote_fetcher(client))
+    if not events:
+        return []
+    print(f"\n  [WHEEL] {len(events)} option settlement(s):")
+    slack_lines = ["*VAULT 76 — Wheel settlements*"]
+    for ev in events:
+        icon = "+" if ev["pnl"] >= 0 else "-"
+        line = (f"{ev['symbol']:<6} {ev['action']:<13} "
+                f"{icon}${abs(ev['pnl']):.2f}  {ev['detail']}")
+        print(f"    {line}")
+        slack_lines.append(f"  • {line}")
+    _send_slack("\n".join(slack_lines))
+    return events
 
 
 def _get_current_prices(portfolio, price_fetcher) -> dict:
@@ -352,7 +432,7 @@ def _make_price_fetcher(client):
 # ---------------------------------------------------------------------------
 
 def _print_signal(s: dict, paper: bool = False, kronos_cache: dict | None = None):
-    now      = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now      = _display_now()
     mode_tag = " [PAPER]" if paper else ""
     sig      = s["signal"]
     card     = s.get("card", "?")
@@ -379,6 +459,15 @@ def _print_signal(s: dict, paper: bool = False, kronos_cache: dict | None = None
         print(f"COLLAT:  ${collateral:,.0f}/contract (cash-secured, no margin)")
         print(f"MAX LOSS:${s.get('max_loss', '?')}/contract if assigned")
         print(f"HV:      {s.get('hv', '?')}%  ADX: {s.get('adx', '?')}")
+        if s.get("quote_source") == "schwab_chain":
+            print(f"QUOTE:   real chain — exp {s.get('expiry', '?')}  "
+                  f"IV {s.get('iv', '?')}%  delta {s.get('delta', '?')}  "
+                  f"bid/ask ${s.get('bid', '?')}/${s.get('ask', '?')}")
+        else:
+            print(f"QUOTE:   model (Black-Scholes on HV) — chain unavailable")
+        if s.get("assign_risk_pct") is not None:
+            print(f"LGBM:    {s['assign_risk_pct']}% chance of >5% drop "
+                  f"within 30 trading days (advisory)")
         if kronos_cache is not None:
             _, k_msg = _kronos_advisory(s, kronos_cache)
             if k_msg:
@@ -392,6 +481,12 @@ def _print_signal(s: dict, paper: bool = False, kronos_cache: dict | None = None
         print(f"DTE:     {s['dte']} days")
         print(f"MAX GAIN:${s.get('max_gain', '?')}/contract if called away")
         print(f"HV:      {s.get('hv', '?')}%  ADX: {s.get('adx', '?')}")
+        if s.get("quote_source") == "schwab_chain":
+            print(f"QUOTE:   real chain — exp {s.get('expiry', '?')}  "
+                  f"IV {s.get('iv', '?')}%  delta {s.get('delta', '?')}  "
+                  f"bid/ask ${s.get('bid', '?')}/${s.get('ask', '?')}")
+        else:
+            print(f"QUOTE:   model (Black-Scholes on HV) — chain unavailable")
 
     print(f"REASON:  {s['reason']}")
     print(f"{SIGNAL_END}")
@@ -416,9 +511,8 @@ def _wait_for_verdict() -> str:
 
 def _log_option_trade(s: dict, verdict: str):
     """Append one row to the CSV options ledger."""
-    import csv
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    row = {
+    now = _now_et().strftime("%Y-%m-%d %H:%M:%S")
+    ol.append_row(OPTION_LEDGER_PATH, {
         "date":        now,
         "symbol":      s["symbol"],
         "signal":      s["signal"],
@@ -433,14 +527,7 @@ def _log_option_trade(s: dict, verdict: str):
         "regime":      s.get("regime", ""),
         "verdict":     verdict,
         "reason":      s.get("reason", ""),
-    }
-    fieldnames = list(row.keys())
-    write_header = not os.path.exists(OPTION_LEDGER_PATH)
-    with open(OPTION_LEDGER_PATH, "a", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames)
-        if write_header:
-            w.writeheader()
-        w.writerow(row)
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -449,31 +536,10 @@ def _log_option_trade(s: dict, verdict: str):
 
 def _committed_collateral() -> float:
     """
-    Sum collateral already committed by open paper puts in the options ledger.
-    A SELL_PUT that was APPROVED and not yet closed locks up strike × 100.
-    Closed positions have a matching CLOSED row; open ones only have APPROVED.
+    Cash locked by short puts in the options ledger: open puts plus assigned
+    puts whose shares are still held. See options_ledger.committed_collateral.
     """
-    import csv
-    if not os.path.exists(OPTION_LEDGER_PATH):
-        return 0.0
-    committed = 0.0
-    with open(OPTION_LEDGER_PATH, newline="") as f:
-        rows = list(csv.DictReader(f))
-    # Find APPROVED puts and subtract any that have been CLOSED
-    open_puts: dict[str, float] = {}  # symbol+date → collateral
-    for r in rows:
-        if r["signal"] != "SELL_PUT":
-            continue
-        key = f"{r['symbol']}_{r['date']}"
-        if r["verdict"] == "APPROVED":
-            try:
-                open_puts[key] = float(r["strike"]) * 100
-            except (ValueError, KeyError):
-                pass
-        elif r["verdict"] == "CLOSED":
-            open_puts.pop(key, None)
-    committed = sum(open_puts.values())
-    return committed
+    return ol.committed_collateral(ol.read_rows(OPTION_LEDGER_PATH))
 
 
 def _collateral_required(s: dict) -> float:
@@ -509,70 +575,11 @@ def _budget_check(s: dict, portfolio_cash: float) -> tuple[bool, str]:
 
 def _open_options_lines() -> tuple[list[str], list[str]]:
     """
-    Read open option positions from the paper ledger and return formatted lines.
-    An option is "open" if it has an APPROVED row with no matching CLOSED row.
+    Formatted lines for open option positions + wheel holdings.
     Returns (terminal_lines, slack_lines).
     """
-    import csv
-    from datetime import date, timedelta
-
-    if not os.path.exists(OPTION_LEDGER_PATH):
-        return ["  Options:         none"], ["*Options:* none"]
-
-    with open(OPTION_LEDGER_PATH, newline="") as f:
-        rows = list(csv.DictReader(f))
-
-    # Collect open positions keyed by symbol+open_date
-    open_opts: dict[str, dict] = {}
-    for r in rows:
-        key = f"{r['symbol']}_{r['date']}"
-        if r["verdict"] == "APPROVED":
-            open_opts[key] = r
-        elif r["verdict"] == "CLOSED":
-            open_opts.pop(key, None)
-
-    if not open_opts:
-        return ["  Options:         none"], ["*Options:* none"]
-
-    today = date.today()
-    term  = [f"  Options ({len(open_opts)} open):"]
-    slack = [f"*Options ({len(open_opts)} open):*"]
-
-    for r in open_opts.values():
-        sym    = r["symbol"]
-        sig    = r["signal"]          # SELL_PUT or SELL_CALL
-        strike = r.get("strike", "?")
-        prem   = r.get("premium_ct", r.get("premium_usd", "?"))
-        dte    = r.get("dte", "?")
-        opened = r["date"][:10]
-
-        # Estimate expiry from open date + DTE
-        try:
-            exp = (date.fromisoformat(opened) + timedelta(days=int(float(dte)))).isoformat()
-            days_left = (date.fromisoformat(exp) - today).days
-            exp_str = f"exp {exp} ({days_left}d left)"
-        except Exception:
-            exp_str = f"{dte} DTE at open"
-
-        try:
-            collat = f"${float(strike) * 100:,.0f}"
-        except Exception:
-            collat = "?"
-
-        try:
-            prem_str = f"${float(prem):.0f}"
-        except Exception:
-            prem_str = str(prem)
-
-        term.append(
-            f"    {sym:<6} {sig}  strike ${strike}  prem {prem_str}  "
-            f"collat {collat}  {exp_str}  [opened {opened}]"
-        )
-        slack.append(
-            f"  • {sym} {sig} ${strike} | prem {prem_str} | collat {collat} | {exp_str}"
-        )
-
-    return term, slack
+    return ol.position_lines(ol.read_rows(OPTION_LEDGER_PATH),
+                             ol.load_holdings(WHEEL_HOLDINGS_PATH))
 
 
 def _send_slack(message: str):
@@ -631,7 +638,7 @@ def _position_lines(portfolio, price_fetcher=None) -> tuple[list[str], list[str]
 
 def _print_startup(client, paper: bool, portfolio=None, price_fetcher=None):
     """Print the daily startup banner and post it to Slack."""
-    now_str  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_str  = _display_now()
     mode     = "PAPER TRADING" if paper else "LIVE"
     mode_ico = "📄" if paper else "💰"
 
@@ -686,7 +693,7 @@ def _print_startup(client, paper: bool, portfolio=None, price_fetcher=None):
 
 def _print_eod(portfolio, price_fetcher, scan_count: int):
     """Print end-of-day summary and post it to Slack."""
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_str = _display_now()
 
     cur_prices = _get_current_prices(portfolio, price_fetcher) if portfolio else {}
 
@@ -762,17 +769,38 @@ def main():
     _current_portfolio = portfolio
 
     price_fetcher = _make_price_fetcher(client)
+
+    # Train LGBM assignment-risk models from local history (seconds/symbol)
+    global _assign_models
+    try:
+        _assign_models = assignment_risk.load_models(WATCHLIST, DATA_DIR)
+        aucs = {s: m.holdout_auc for s, m in _assign_models.items()
+                if m.holdout_auc is not None}
+        print(f"  [AssignRisk] models ready for {len(_assign_models)}/"
+              f"{len(WATCHLIST)} symbols"
+              + (f"  (median holdout AUC {sorted(aucs.values())[len(aucs)//2]:.2f})"
+                 if aucs else ""))
+    except Exception as exc:
+        print(f"  [AssignRisk] disabled ({exc})")
+        _assign_models = {}
+
     kronos_cache  = _load_kronos_cache(WATCHLIST)
 
     global _current_kronos_cache
     _current_kronos_cache = kronos_cache
+
+    # Settle overnight expiries/assignments before the briefing
+    try:
+        _process_option_ledger(client)
+    except Exception as exc:
+        print(f"  [WHEEL] ledger processing failed: {exc}")
 
     _print_startup(client, paper=args.paper, portfolio=portfolio,
                    price_fetcher=price_fetcher)
     scan_count = 0
 
     while True:
-        now = datetime.now().strftime("%H:%M:%S")
+        now = _now_et().strftime("%H:%M:%S ET")
 
         if _market_closed_for_today():
             _print_eod(portfolio, price_fetcher, scan_count)
@@ -807,6 +835,13 @@ def main():
                     print(f"    {ex['symbol']:<6} CLOSED  {icon}${abs(ex['pnl_dollar']):.2f}"
                           f"  ({ex['pnl_pct']:+.1f}%)  [{ex['exit_reason']}]"
                           f"  exit ${ex['exit']:.2f}")
+
+        # Wheel bookkeeping: settle expiries/assignments/early exits in the
+        # options ledger. Assignments feed covered-call scans via holdings.
+        try:
+            _process_option_ledger(client)
+        except Exception as exc:
+            print(f"  [WHEEL] ledger processing failed: {exc}")
 
         # Scan for new signals
         signals = _scan_all(client, regime=regime, spy_df=spy_df)

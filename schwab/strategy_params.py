@@ -2,7 +2,13 @@
 Vault 76 — strategy parameter config.
 
 Edit these values to tune signal generation, regime gates, and risk filters.
-All modules import from here so changes take effect everywhere at once.
+
+NOTE: not every module imports from here yet. The FAST_RISKOFF_* and
+SCAV_PROFIT_TARGET_* values are live (live_scanner, backtest_scavenger,
+options_pricer). The SCAV_* and OVERSEER_* blocks below currently document
+the same values that are hardcoded in vault76/armory/scavenger.py and
+vault76/overseer.py — if you tune one, change both until those modules are
+wired to import from here.
 
 Units and rationale are documented inline. When changing a number, also update
 the comment — future-you will thank present-you.
@@ -80,6 +86,11 @@ OVERSEER_ADX_RUNNER = 28
 # ---------------------------------------------------------------------------
 # FinRL fast risk-off filter (#1)
 #
+# Of the three FinRL-Trading enhancements evaluated for the wheel strategy,
+# this is the ONLY one that survived backtesting. #2 (adaptive position
+# rotation) and #3 (residual momentum, documented below) were both tried and
+# rejected — neither improved wheel P&L in the walk-forward backtest.
+#
 # If SPY drops more than FAST_RISKOFF_DROP over FAST_RISKOFF_LOOKBACK trading
 # days, all new SELL_PUT entries are suppressed for FAST_RISKOFF_COOLDOWN days.
 #
@@ -99,22 +110,18 @@ FAST_RISKOFF_COOLDOWN = 10      # trading days to suppress new SELL_PUT after tr
 
 
 # ---------------------------------------------------------------------------
-# FinRL residual momentum filter (#3)
+# FinRL residual momentum filter (#3) — TRIED AND REJECTED, kept for reference
 #
-# Before selling a put, require the stock's beta-adjusted return vs SPY to be
-# positive over the last RESID_MOM_WINDOW trading days.
+# Idea: before selling a put, require the stock's beta-adjusted return vs SPY
+# to be positive over the last RESID_MOM_WINDOW trading days.
+#   Residual momentum = Σ(stock_daily_ret - beta × spy_daily_ret) over window
 #
-# Residual momentum = Σ(stock_daily_ret - beta × spy_daily_ret) over window
-# Positive → stock is generating alpha vs market → underlying is relatively
-#            strong → put assignment risk is lower than for a laggard stock.
-#
-# Rationale: we're indifferent between two sideways stocks (both pass ADX/RSI
-# checks), but the one outperforming SPY is less likely to gap down and assign.
-#
-# Tune:
-#   - Longer window (e.g. 40): slower signal, misses short-term strength
-#   - Shorter window (e.g. 10): noisier, reacts faster to recent moves
-#   - RESID_MOM_MIN_PCT: raise to require stronger positive momentum
+# STATUS (2026-07): implemented experimentally alongside fast risk-off (#1),
+# but the walk-forward wheel backtest did NOT support it — the filter cut the
+# number of put entries without improving P&L or reducing assignments, so it
+# was removed from the pipeline. Only fast risk-off (#1) survived backtesting.
+# These constants stay so the experiment can be re-run if conditions change;
+# nothing imports them.
 # ---------------------------------------------------------------------------
 
 RESID_MOM_WINDOW  = 20      # lookback window in trading days
@@ -127,6 +134,8 @@ RESID_MOM_MIN_PCT = 0.0     # minimum residual return to allow a put entry (0 = 
 
 # Scavenger exits a short put/call early when its mark-to-market value falls
 # to TARGET_MIN–TARGET_MAX of the entry premium (50% rule in tastyworks parlance).
-# The exact threshold scales with entry IV and DTE — see adaptive_profit_target().
+# The exact threshold scales with entry IV and DTE — see
+# options_pricer.adaptive_profit_target() (used by both backtest_scavenger.py
+# and the live ledger processor in options_ledger.py).
 SCAV_PROFIT_TARGET_MIN = 0.35   # exit at 35% of premium captured (thin/short trades)
 SCAV_PROFIT_TARGET_MAX = 0.65   # exit at 65% of premium captured (fat/long trades)

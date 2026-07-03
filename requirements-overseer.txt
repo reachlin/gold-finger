@@ -8,3 +8,6 @@ httpx>=0.24.0
 ta>=0.10.0
 yfinance>=0.2.0
 schwab-py>=1.4.0
+scipy>=1.10.0
+pandas-market-calendars>=4.0
+lightgbm>=4.0.0
