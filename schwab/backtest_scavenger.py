@@ -30,7 +30,8 @@ from trend_scanner import compute_indicators
 from vault76.armory.scavenger import Scavenger
 from vault76.overseer import Overseer
 from options_pricer import (black_scholes_put, black_scholes_call,
-                            historical_vol, yang_zhang_vol)
+                            historical_vol, yang_zhang_vol,
+                            adaptive_profit_target)
 from strategy_params import (
     FAST_RISKOFF_DROP, FAST_RISKOFF_LOOKBACK, FAST_RISKOFF_COOLDOWN,
     SCAV_PROFIT_TARGET_MIN, SCAV_PROFIT_TARGET_MAX,
@@ -45,37 +46,18 @@ RISK_FREE   = 0.05
 _TARGET_MIN = SCAV_PROFIT_TARGET_MIN
 _TARGET_MAX = SCAV_PROFIT_TARGET_MAX
 
-FLAT       = "FLAT"
-PUT_OPEN   = "PUT_OPEN"
-HOLDING    = "HOLDING"
-CALL_OPEN  = "CALL_OPEN"
-
-
-# ---------------------------------------------------------------------------
-# Adaptive profit target
-# ---------------------------------------------------------------------------
-
-def adaptive_profit_target(entry_iv: float, entry_dte: int) -> float:
-    """
-    Self-adjusting exit threshold in [35%, 65%]:
-    - Higher IV  → higher target (fat premium is worth waiting for more decay)
-    - Longer DTE → higher target (more time to collect full theta decay)
-
-    Calibration anchors:
-      iv=0.20, dte=15 → ~35%  (thin premium, exit fast)
-      iv=0.60, dte=45 → ~50%  (standard tastyworks rule)
-      iv=1.00, dte=75 → ~65%  (high-IV, long-dated — hold for bigger capture)
-    """
-    iv_factor  = min(max((entry_iv - 0.20) / 0.80, 0.0), 1.0)
-    dte_factor = min(max((entry_dte - 15)  / 60,   0.0), 1.0)
-    score      = 0.6 * iv_factor + 0.4 * dte_factor
-    return _TARGET_MIN + (_TARGET_MAX - _TARGET_MIN) * score
+FLAT        = "FLAT"
+PUT_OPEN    = "PUT_OPEN"
+HOLDING     = "HOLDING"
+CALL_OPEN   = "CALL_OPEN"
+ROUTER_HOLD = "ROUTER_HOLD"   # wheel-vs-hold router: own shares uncapped
 
 
 def _entry_iv(snapshot: "pd.DataFrame") -> float:
     """Yang-Zhang vol at entry; falls back to close-only HV."""
-    iv = yang_zhang_vol(snapshot) if "open" in snapshot.columns else 0.0
-    return iv if iv > 0 else (historical_vol(snapshot["close"]) or 0.30)
+    tail = snapshot.iloc[-22:]
+    iv = yang_zhang_vol(tail) if "open" in tail.columns else 0.0
+    return iv if iv > 0 else (historical_vol(tail["close"]) or 0.30)
 
 
 # ---------------------------------------------------------------------------
@@ -108,16 +90,20 @@ def _build_regime_lookup(spy_df: pd.DataFrame | None,
 
 def _get_regime(overseer: Overseer, cur_date, spy_ind, spy_date_idx: dict,
                 vix_by_date: dict) -> str:
-    """Classify regime at cur_date using pre-built lookups."""
+    """Classify regime at cur_date using pre-built lookups (O(1) per call)."""
     vix = vix_by_date.get(cur_date, 20.0)
     if vix >= 30.0:
-        return Overseer.NUKED_ZONE  # VIX alone is sufficient — no SPY needed
+        return Overseer.NUKED_ZONE
     if spy_ind is None:
         return Overseer.WASTELAND
     spy_i = spy_date_idx.get(cur_date)
     if spy_i is None or spy_i < MIN_HISTORY:
         return Overseer.WASTELAND
-    return overseer.classify(spy_ind.iloc[:spy_i + 1], vix)
+    # spy_ind already has indicators computed — read rows directly instead of
+    # re-running compute_indicators on a growing slice (avoids O(n²) per symbol)
+    last = spy_ind.iloc[spy_i]
+    prev = spy_ind.iloc[spy_i - 5]  # 5 bars back, matches Overseer.classify
+    return overseer.classify_row(last, prev, vix)
 
 
 def _spy_lookback_return(spy_ind: pd.DataFrame, spy_i: int) -> float:
@@ -137,7 +123,11 @@ def _spy_lookback_return(spy_ind: pd.DataFrame, spy_i: int) -> float:
 
 def walk_forward_scavenger(df: pd.DataFrame, symbol: str,
                            spy_df: pd.DataFrame | None = None,
-                           vix_df: pd.DataFrame | None = None) -> list[dict]:
+                           vix_df: pd.DataFrame | None = None,
+                           early_exit: bool = True,
+                           sell_calls: bool = True,
+                           router_probs: "np.ndarray | None" = None,
+                           router_threshold: float = 0.60) -> list[dict]:
     """
     Simulate the wheel strategy on df.
     spy_df / vix_df: if provided, the Overseer classifies regime at each bar.
@@ -146,6 +136,16 @@ def walk_forward_scavenger(df: pd.DataFrame, symbol: str,
     FinRL enhancement applied at each FLAT bar before put entry:
       #1 Fast risk-off: if SPY dropped FAST_RISKOFF_DROP% in FAST_RISKOFF_LOOKBACK
          days, suppress new puts for FAST_RISKOFF_COOLDOWN bars.
+
+    early_exit / sell_calls: set both False to reproduce the pre-wheel live
+    scanner behavior — puts held to expiry, assignments liquidated at the
+    expiry close, no covered-call phase. Used by compare_wheel_versions.py.
+
+    router_probs: optional wheel-vs-hold router (see wheel_router.py) —
+    per-bar P(>8% rally in 30d) aligned to THIS function's post-dropna
+    indicator frame. When P >= router_threshold: in FLAT buy-and-hold
+    100 shares (ROUTER_HOLD) instead of selling a put; in HOLDING skip
+    the covered call so the rally isn't capped. NaN never routes.
 
     Returns list of trade events with P&L.
     """
@@ -160,6 +160,11 @@ def walk_forward_scavenger(df: pd.DataFrame, symbol: str,
     state  = FLAT
     cycle: dict = {}
 
+    def _router_hot(bar_i: int) -> bool:
+        return (router_probs is not None and bar_i < len(router_probs)
+                and not np.isnan(router_probs[bar_i])
+                and router_probs[bar_i] >= router_threshold)
+
     # Fast risk-off cooldown tracker: bar index until which new puts are blocked.
     # Starts at -1 (no cooldown active). Updated whenever a SPY shock is detected.
     riskoff_until_i = -1
@@ -173,6 +178,19 @@ def walk_forward_scavenger(df: pd.DataFrame, symbol: str,
 
         # ── FLAT: look for a put to sell ─────────────────────────────────────
         if state == FLAT:
+            # Wheel-vs-hold router: predicted runner → own shares uncapped
+            # instead of wheeling. Checked before the role gate on purpose —
+            # runners get routed to the Raider and would never enter here.
+            if (_router_hot(i) and regime != Overseer.NUKED_ZONE
+                    and i > riskoff_until_i):
+                cycle = {"symbol":          symbol,
+                         "hold_entry_i":     i,
+                         "hold_entry_close": float(row["close"]),
+                         "hold_regime":      regime}
+                state = ROUTER_HOLD
+                i    += 1
+                continue
+
             # Overseer gates entry: route by this stock's own ADX
             if "scavenger" not in overseer.recommend_roles(regime, row):
                 i += 1
@@ -217,14 +235,15 @@ def walk_forward_scavenger(df: pd.DataFrame, symbol: str,
             close      = float(row["close"])
             days_left  = max(cycle["put_expiry_i"] - i, 0)
             T_left     = days_left / 365
-            hv         = historical_vol(snapshot["close"])
+            hv         = historical_vol(snapshot["close"].iloc[-22:])
             sigma      = hv if hv > 0 else 0.30
             cur_val    = black_scholes_put(close, cycle["put_strike"], T_left,
                                           RISK_FREE, sigma)
             entry_prem = cycle["put_premium"]
 
             # Adaptive profit target — buy back early
-            if cur_val <= entry_prem * cycle["put_profit_target"] and days_left > 0:
+            if (early_exit and days_left > 0
+                    and cur_val <= entry_prem * cycle["put_profit_target"]):
                 pnl = (entry_prem - cur_val) * SHARES
                 events.append({**cycle, "event": "put_early_exit",
                                "pnl": round(pnl, 2), "exit_i": i,
@@ -237,6 +256,16 @@ def walk_forward_scavenger(df: pd.DataFrame, symbol: str,
                 # Reached expiry
                 cycle["put_expiry_close"] = close
                 if close <= cycle["put_strike"]:
+                    if not sell_calls:
+                        # Pre-wheel behavior: liquidate assigned shares at the
+                        # expiry close instead of selling covered calls.
+                        pnl = (close - cycle["put_strike"] + entry_prem) * SHARES
+                        events.append({**cycle, "event": "put_assigned_liquidated",
+                                       "pnl": round(pnl, 2)})
+                        cycle = {}
+                        state = FLAT
+                        i += 1
+                        continue
                     cycle["cost_basis"] = cycle["put_strike"] - entry_prem
                     cycle["assigned_i"] = i
                     events.append({**cycle, "event": "put_assigned", "pnl": 0.0})
@@ -251,8 +280,24 @@ def walk_forward_scavenger(df: pd.DataFrame, symbol: str,
             else:
                 i += 1
 
+        # ── ROUTER_HOLD: own shares uncapped until the router cools ──────────
+        elif state == ROUTER_HOLD:
+            if (not _router_hot(i)) or regime == Overseer.NUKED_ZONE \
+                    or i >= n - 1:
+                close = float(row["close"])
+                pnl   = (close - cycle["hold_entry_close"]) * SHARES
+                events.append({**cycle, "event": "router_hold_exit",
+                               "pnl": round(pnl, 2), "exit_i": i,
+                               "hold_exit_close": close})
+                cycle = {}
+                state = FLAT
+            i += 1
+
         # ── HOLDING: look for a call to sell ─────────────────────────────────
         elif state == HOLDING:
+            if _router_hot(i):
+                i += 1   # predicted runner — don't cap it with a covered call
+                continue
             res = scav.scan(symbol, snapshot, cost_basis=cycle["cost_basis"],
                             regime=regime)
             if res["signal"] == "SELL_CALL":
@@ -275,14 +320,15 @@ def walk_forward_scavenger(df: pd.DataFrame, symbol: str,
             close     = float(row["close"])
             days_left = max(cycle["call_expiry_i"] - i, 0)
             T_left    = days_left / 365
-            hv        = historical_vol(snapshot["close"])
+            hv        = historical_vol(snapshot["close"].iloc[-22:])
             sigma     = hv if hv > 0 else 0.30
             cur_val   = black_scholes_call(close, cycle["call_strike"], T_left,
                                            RISK_FREE, sigma)
             entry_prem = cycle["call_premium"]
 
             # Adaptive profit target — buy back early, hold shares, sell another call
-            if cur_val <= entry_prem * cycle["call_profit_target"] and days_left > 0:
+            if (early_exit and days_left > 0
+                    and cur_val <= entry_prem * cycle["call_profit_target"]):
                 pnl = (entry_prem - cur_val) * SHARES
                 cycle["all_premiums"] += entry_prem - cur_val
                 events.append({**cycle, "event": "call_early_exit",

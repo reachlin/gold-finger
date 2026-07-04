@@ -92,7 +92,7 @@ class Chemist(Role):
         close = float(last["close"])
         rsi   = float(last["rsi"])
         ema50 = float(last["ema50"])
-        hv    = historical_vol(df["close"])
+        hv    = historical_vol(df["close"].iloc[-22:])
 
         base["close"] = round(close, 2)
         base["rsi"]   = round(rsi, 1)

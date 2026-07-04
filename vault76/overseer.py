@@ -57,6 +57,22 @@ class Overseer:
 
         last = ind.iloc[-1]
         prev = ind.iloc[-6] if len(ind) > 6 else ind.iloc[0]
+        return self.classify_row(last, prev, vix)
+
+    def classify_row(self, last, prev, vix: float = 20.0) -> str:
+        """
+        Fast-path regime classification from precomputed indicator rows.
+
+        last : indicator row for the current bar (needs close, ema50)
+        prev : indicator row 5 bars earlier (needs ema50)
+
+        Walk-forward backtests precompute indicators once over the full
+        series and call this per bar instead of classify(), which re-runs
+        compute_indicators on a growing slice. The regime rule lives ONLY
+        here so live and backtest classification cannot drift apart.
+        """
+        if vix >= VIX_NUKED:
+            return self.NUKED_ZONE
 
         above_ema50  = last["close"] > last["ema50"]
         ema50_rising = last["ema50"] > prev["ema50"]

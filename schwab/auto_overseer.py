@@ -25,6 +25,7 @@ Environment variables (alternative to CLI flags):
 import os
 import sys
 import json
+import time
 import argparse
 
 from dotenv import load_dotenv
@@ -45,7 +46,14 @@ Approve or reject each SELL_PUT signal. Goal: capture steady premium income whil
 
 ## Hard rules (auto-skip — do not override)
 - Budget check already confirmed collateral is available — you do not need to recheck
-- Fast risk-off and duplicate positions are already filtered — trust the pre-screening
+- Fast risk-off conditions are already filtered — trust the pre-screening
+
+## Duplicate positions
+Multiple open positions on the same symbol are ALLOWED — the budget check
+guarantees cash covers every contract. Do not reject a signal merely because
+a position on the symbol already exists. The prompt lists existing open
+positions on this symbol; use them only to judge concentration risk (e.g.
+several near-strike puts stacked before the same expiry on a volatile name).
 
 ## Soft rules (use your judgment)
 - SKIP if HV > 60% (too volatile for premium selling — gamma risk too high)
@@ -53,6 +61,41 @@ Approve or reject each SELL_PUT signal. Goal: capture steady premium income whil
 - SKIP if Kronos buffer < -2% (stock predicted to fall below strike — elevated assignment risk)
 - SKIP if yield/DTE < 0.02% per day (not enough premium for the capital tie-up)
 - APPROVE if HV 15–50%, ADX < 22, yield > 0.03%/day, quality company
+
+## Router signals: HOLD_SHARES / RESUME_WHEEL
+These come from the backtested wheel-vs-hold router: when the TimesFM 30d
+forecast crosses the threshold, the scanner proposes holding shares uncapped
+instead of wheeling (HOLD_SHARES), or selling the held shares and resuming
+the wheel (RESUME_WHEEL). This mechanical policy is the validated one
+(2015-2026 and 2024+ backtests) — the default is APPROVE. Veto ONLY for
+context the models cannot see: earnings within ~5 trading days, pending
+corporate action or trading halt, or an obvious macro shock today. Do not
+veto merely because the forecast seems optimistic — that judgment is
+already priced into the threshold.
+
+## Signal field guide
+- quote_source: "schwab_chain" = real premium/IV/delta from the live chain
+  (trust these numbers); "model" = Black-Scholes estimate on historical vol
+  (treat premium as approximate)
+- assign_risk_pct: on SELL_PUT — LGBM probability (%) of a >5% drop within
+  30 trading days, trained per symbol on daily history. Advisory. Weigh it
+  together with the Kronos buffer: both bearish → lean SKIP; if they
+  disagree, judge from IV/ADX/context. Above ~50% is elevated.
+- drop_risk_pct: on BUY — same drop model. A pullback entry with high drop
+  risk may be a breakdown, not a dip → lean SKIP above ~50%.
+- called_away_pct: on SELL_CALL — LGBM probability (%) of a >8% rally within
+  30 trading days, i.e. shares called away at the strike. Being called away
+  locks in the wheel profit, so moderate values are fine; very high values
+  mean the call likely caps a strong run — prefer SKIP if cost basis is far
+  below the strike and the trend is strong.
+- model_auc: chronological holdout AUC of the LGBM model behind the field
+  above (0.5 = coin flip). Discount the advisory when AUC is below ~0.6;
+  trust it more above ~0.7.
+- timesfm_30d_pct: TimesFM (zero-shot foundation model) forecast of the
+  SMA5 change over the next 30 trading days, in %. Independent second
+  opinion next to Kronos: both bearish on a SELL_PUT → stronger SKIP;
+  strongly positive on a SELL_CALL → shares likely called away / upside
+  capped. Treat as a trend hint, not a price target.
 
 ## Response format — ONLY valid JSON, no other text
 {"decision": "yes", "reason": "brief reason under 15 words"}
@@ -64,7 +107,8 @@ or
 # Prompt builder
 # ---------------------------------------------------------------------------
 
-def build_prompt(signal: dict, portfolio_state: dict, kronos: dict) -> str:
+def build_prompt(signal: dict, portfolio_state: dict, kronos: dict,
+                 open_positions: list[dict] | None = None) -> str:
     lines = ["## Signal"]
     for k, v in signal.items():
         lines.append(f"  {k}: {v}")
@@ -72,6 +116,17 @@ def build_prompt(signal: dict, portfolio_state: dict, kronos: dict) -> str:
     lines.append("\n## Portfolio state")
     lines.append(f"  Cash available for collateral: ${portfolio_state.get('available', 0):,.0f}")
     lines.append(f"  Collateral required:           ${portfolio_state.get('required', 0):,.0f}")
+
+    sym = signal.get("symbol", "?")
+    if open_positions:
+        lines.append(f"\n## Existing open positions on {sym} ({len(open_positions)})")
+        for p in open_positions:
+            lines.append(f"  {p.get('signal', '?')} strike ${p.get('strike', '?')}"
+                         f"  premium ${p.get('premium_ct', '?')}/ct"
+                         f"  opened {str(p.get('date', '?'))[:10]}"
+                         f"  {p.get('dte', '?')} DTE at open")
+    else:
+        lines.append(f"\n## Existing open positions on {sym}: none")
 
     if kronos:
         lines.append("\n## Kronos 30-day AI price prediction")
@@ -156,7 +211,17 @@ class AutoOverseer:
                 "warn":       warn,
             }
 
-        prompt   = build_prompt(s, portfolio_state, kronos)
+        # Existing open positions on this symbol — duplicates are allowed,
+        # the LLM just sees them for concentration-risk judgment
+        try:
+            import options_ledger as ol
+            open_positions = ol.open_options(
+                ol.read_rows(scanner.OPTION_LEDGER_PATH), symbol=sym)
+        except Exception:
+            open_positions = []
+
+        prompt   = build_prompt(s, portfolio_state, kronos,
+                                open_positions=open_positions)
         raw      = self.llm.chat(system=OVERSEER_SYSTEM, user=prompt)
         decision, reason = parse_llm_response(raw) if raw else ("no", "LLM returned empty response")
 
@@ -175,6 +240,12 @@ class AutoOverseer:
         Place a real Schwab options SELL_TO_OPEN order.
         Requires REALLY_REAL=true env var as a hard safety gate.
         """
+        if s.get("signal") not in ("SELL_PUT", "SELL_CALL"):
+            # Router/equity signals are strategy-state changes, not options
+            # orders — the scanner prints the suggested share trade instead.
+            print(f"  [AutoOverseer] {s.get('signal')} — no automated real "
+                  f"order; manage the share trade manually")
+            return
         if os.environ.get("REALLY_REAL", "").lower() != "true":
             print("  [AutoOverseer] Real order suppressed — set REALLY_REAL=true to enable")
             return
@@ -186,19 +257,18 @@ class AutoOverseer:
             return
 
         try:
-            # Build OCC option symbol:  {ROOT:<6}{YYMMDD}{C/P}{strike*1000:08d}
             from datetime import date, timedelta
-            sym        = s["symbol"].ljust(6)
-            exp_date   = date.today() + timedelta(days=int(s.get("dte", 30)))
-            exp_str    = exp_date.strftime("%y%m%d")
-            strike_int = int(float(s["strike"]) * 1000)
-            occ_sym    = f"{sym}{exp_str}P{strike_int:08d}"
+            exp_date = date.today() + timedelta(days=int(s.get("dte", 30)))
+            occ_sym  = build_occ_symbol(s["symbol"], exp_date,
+                                        s.get("signal", "SELL_PUT"),
+                                        float(s["strike"]))
 
             # Schwab order spec for SELL_TO_OPEN limit
             from schwab.orders.options import option_sell_to_open_limit
             from schwab.orders.common import Duration, Session
             premium = float(s.get("premium", 0))
-            limit   = round(premium * 0.95, 2)  # 5% below mid to ensure fill
+            # 5% below the signal's theoretical premium to improve fill odds
+            limit   = round(premium * 0.95, 2)
 
             order = (
                 option_sell_to_open_limit(occ_sym, 1, limit)
@@ -223,8 +293,62 @@ class AutoOverseer:
 
 
 # ---------------------------------------------------------------------------
+# OCC option symbol
+# ---------------------------------------------------------------------------
+
+def build_occ_symbol(symbol: str, exp_date, signal: str, strike: float) -> str:
+    """
+    OCC option symbol: {ROOT:<6}{YYMMDD}{C|P}{strike*1000:08d}
+    signal: SELL_PUT → P, SELL_CALL → C.
+    """
+    root     = symbol.ljust(6)
+    exp_str  = exp_date.strftime("%y%m%d")
+    put_call = "C" if signal == "SELL_CALL" else "P"
+    return f"{root}{exp_str}{put_call}{int(strike * 1000):08d}"
+
+
+# ---------------------------------------------------------------------------
 # Market-open check
 # ---------------------------------------------------------------------------
+
+def market_open_on(day) -> "bool | None":
+    """
+    Deterministic NYSE calendar check via pandas_market_calendars.
+    Returns True/False, or None when the library is unavailable
+    (caller falls back to the LLM check).
+    """
+    try:
+        import pandas_market_calendars as mcal
+    except ImportError:
+        return None
+    try:
+        nyse  = mcal.get_calendar("NYSE")
+        sched = nyse.schedule(start_date=day, end_date=day)
+        return not sched.empty
+    except Exception:
+        return None
+
+
+def seconds_until_market_check(now_et) -> float:
+    """
+    Seconds until the next 09:00 ET. On a closed day the overseer sleeps
+    this long before exiting — otherwise the container's restart policy
+    hot-loops the process every few seconds, re-sending the "market
+    closed" Slack notification on every cycle (observed 2026-07-04).
+    """
+    from datetime import timedelta
+    target = now_et.replace(hour=9, minute=0, second=0, microsecond=0)
+    if now_et >= target:
+        target += timedelta(days=1)
+    return (target - now_et).total_seconds()
+
+
+def _sleep_until_next_check(now_et) -> None:
+    sleep_s = seconds_until_market_check(now_et)
+    print(f"  [MarketCheck] sleeping {sleep_s / 3600:.1f}h until the next "
+          f"09:00 ET calendar check")
+    time.sleep(sleep_s)
+
 
 MARKET_CHECK_SYSTEM = """You are a US stock market calendar expert.
 Answer ONLY with valid JSON: {"open": true, "reason": "brief reason"}
@@ -234,15 +358,28 @@ No other text."""
 
 def _check_market_open(llm: "LLMClient", send_slack) -> bool:
     """
-    Ask the LLM whether the US stock market is open today.
+    Check whether the US stock market is open today — deterministic NYSE
+    calendar first, LLM fallback when the calendar library is unavailable.
     Sends a Slack notification and returns False if closed so the overseer exits early.
-    Returns True if market is open (or if check fails — fail open so scanner decides).
+    Returns True if market is open (or if all checks fail — fail open so scanner decides).
     """
     from datetime import datetime
     from zoneinfo import ZoneInfo
     now_et  = datetime.now(ZoneInfo("America/New_York"))
     today   = now_et.date()
     weekday = now_et.strftime("%A")
+
+    # Deterministic calendar check — cheap and cannot hallucinate
+    cal_open = market_open_on(today)
+    if cal_open is not None:
+        status = "OPEN" if cal_open else "CLOSED"
+        print(f"  [MarketCheck] {today} ({weekday}): market {status} (NYSE calendar)")
+        if not cal_open:
+            send_slack(f"*Market closed today* ({today}, {weekday}): NYSE calendar."
+                       f"\nOverseer will not scan.")
+            _sleep_until_next_check(now_et)
+        return cal_open
+
     prompt = (f"Today in US Eastern Time is {today.isoformat()} ({weekday}). "
               f"Is the US stock market (NYSE/NASDAQ) open for regular trading today? "
               f"Consider weekends and all US public holidays.")
@@ -263,6 +400,7 @@ def _check_market_open(llm: "LLMClient", send_slack) -> bool:
     print(f"  [MarketCheck] {today} ({weekday}): market {status} — {reason}")
     if not is_open:
         send_slack(f"*Market closed today* ({today}, {weekday}): {reason}\nOverseer will not scan.")
+        _sleep_until_next_check(now_et)
     return is_open
 
 

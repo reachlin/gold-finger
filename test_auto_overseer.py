@@ -41,6 +41,135 @@ def test_build_prompt_portfolio_state():
     assert "12,345" in prompt or "12345" in prompt
 
 
+def test_build_prompt_lists_open_positions_on_symbol():
+    from schwab.auto_overseer import build_prompt
+    signal = {"symbol": "KO", "signal": "SELL_PUT", "strike": "79.13"}
+    open_positions = [
+        {"signal": "SELL_PUT", "strike": "80.00", "premium_ct": "75.0",
+         "date": "2026-06-20 10:00:00", "dte": "30"},
+        {"signal": "SELL_PUT", "strike": "78.50", "premium_ct": "68.0",
+         "date": "2026-06-25 10:00:00", "dte": "30"},
+    ]
+    prompt = build_prompt(signal, {"available": 30000, "required": 7913}, {},
+                          open_positions=open_positions)
+    assert "Existing open positions on KO (2)" in prompt
+    assert "80.00" in prompt
+    assert "78.50" in prompt
+
+
+def test_build_prompt_says_none_when_no_open_positions():
+    from schwab.auto_overseer import build_prompt
+    signal = {"symbol": "KO", "signal": "SELL_PUT", "strike": "79.13"}
+    prompt = build_prompt(signal, {"available": 30000, "required": 7913}, {})
+    assert "Existing open positions on KO: none" in prompt
+
+
+def test_overseer_system_allows_duplicates():
+    """The system prompt must not claim duplicates are pre-filtered."""
+    from schwab.auto_overseer import OVERSEER_SYSTEM
+    assert "duplicate positions are already filtered" not in OVERSEER_SYSTEM
+    assert "ALLOWED" in OVERSEER_SYSTEM
+
+
+def test_overseer_system_documents_lgbm_advisories():
+    """Field guide must cover every LGBM field the scanner can attach."""
+    from schwab.auto_overseer import OVERSEER_SYSTEM
+    for field in ("assign_risk_pct", "called_away_pct", "drop_risk_pct",
+                  "model_auc", "timesfm_30d_pct"):
+        assert field in OVERSEER_SYSTEM, f"missing field guide for {field}"
+
+
+def test_overseer_system_documents_router_signals():
+    """Router signals: default approve (backtested policy), veto on context."""
+    from schwab.auto_overseer import OVERSEER_SYSTEM
+    assert "HOLD_SHARES" in OVERSEER_SYSTEM
+    assert "RESUME_WHEEL" in OVERSEER_SYSTEM
+    assert "default is APPROVE" in OVERSEER_SYSTEM
+
+
+def test_real_order_skipped_for_router_signals(monkeypatch, capsys):
+    """Router signals are strategy-state changes, not options orders —
+    real mode must never try to build an OCC order from them."""
+    from schwab.auto_overseer import AutoOverseer
+    monkeypatch.setenv("REALLY_REAL", "true")
+    ao = AutoOverseer.__new__(AutoOverseer)          # skip LLM init
+    for sig in ("HOLD_SHARES", "RESUME_WHEEL"):
+        ao._place_real_order({"signal": sig, "symbol": "NVDA"})
+        assert "no automated real order" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# Tests for OCC option symbol builder
+# ---------------------------------------------------------------------------
+
+def test_build_occ_symbol_put():
+    from datetime import date
+    from schwab.auto_overseer import build_occ_symbol
+    # KO $79.13 put expiring 2026-07-31
+    occ = build_occ_symbol("KO", date(2026, 7, 31), "SELL_PUT", 79.13)
+    assert occ == "KO    260731P00079130"
+
+
+def test_build_occ_symbol_call():
+    """SELL_CALL must produce a C contract — not a hardcoded P."""
+    from datetime import date
+    from schwab.auto_overseer import build_occ_symbol
+    occ = build_occ_symbol("NVDA", date(2026, 8, 21), "SELL_CALL", 250.0)
+    assert occ == "NVDA  260821C00250000"
+
+
+# ---------------------------------------------------------------------------
+# Tests for deterministic market calendar
+# ---------------------------------------------------------------------------
+
+def test_market_open_regular_weekday():
+    from datetime import date
+    from schwab.auto_overseer import market_open_on
+    assert market_open_on(date(2026, 7, 1)) is True     # Wednesday
+
+def test_market_closed_weekend():
+    from datetime import date
+    from schwab.auto_overseer import market_open_on
+    assert market_open_on(date(2026, 7, 5)) is False    # Sunday
+
+def test_market_closed_independence_day_observed():
+    from datetime import date
+    from schwab.auto_overseer import market_open_on
+    # July 4 2026 is a Saturday → NYSE observes the holiday on Friday July 3
+    assert market_open_on(date(2026, 7, 3)) is False
+
+
+def test_seconds_until_market_check_before_9am():
+    """Before 9am ET → sleep until 9am today."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from schwab.auto_overseer import seconds_until_market_check
+    now = datetime(2026, 7, 4, 5, 0, tzinfo=ZoneInfo("America/New_York"))
+    assert seconds_until_market_check(now) == 4 * 3600
+
+
+def test_seconds_until_market_check_after_9am():
+    """At/after 9am ET → sleep until 9am tomorrow (no hot restart loop)."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from schwab.auto_overseer import seconds_until_market_check
+    now = datetime(2026, 7, 4, 12, 0, tzinfo=ZoneInfo("America/New_York"))
+    assert seconds_until_market_check(now) == 21 * 3600
+
+
+def test_check_market_open_sleeps_when_closed(monkeypatch):
+    """A closed day must sleep instead of returning immediately — the
+    container restart policy would otherwise hot-loop and spam Slack."""
+    import schwab.auto_overseer as ao
+    naps, slacks = [], []
+    monkeypatch.setattr(ao.time, "sleep", lambda s: naps.append(s))
+    monkeypatch.setattr(ao, "market_open_on", lambda d: False)
+    result = ao._check_market_open(llm=None, send_slack=slacks.append)
+    assert result is False
+    assert len(naps) == 1 and naps[0] > 60      # slept until next check
+    assert len(slacks) == 1                     # exactly one notification
+
+
 # ---------------------------------------------------------------------------
 # Tests for parse_llm_response
 # ---------------------------------------------------------------------------

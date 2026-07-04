@@ -1,0 +1,67 @@
+  NVDA...
+Loading TimesFM 2.5 (200M, zero-shot)...
+  TimesFM ready
+    predictor series in 69s
+  AMD...
+    predictor series in 66s
+  AAPL...
+    predictor series in 67s
+  AMZN...
+    predictor series in 66s
+  META...
+    predictor series in 66s
+  MSFT...
+    predictor series in 74s
+  GOOGL...
+    predictor series in 73s
+  IBM...
+    predictor series in 73s
+  INTC...
+    predictor series in 73s
+  IONQ...
+    predictor series in 33s
+  KO...
+  MMM...
+    predictor series in 73s
+  XOM...
+    predictor series in 73s
+  PG...
+    predictor series in 73s
+  TSLA...
+    predictor series in 73s
+  UNH...
+    predictor series in 73s
+  HD...
+    predictor series in 71s
+  ABT...
+    predictor series in 67s
+
+════════════════════════════════════════════════════════════════════════════════════════════════════
+  WHEEL-vs-HOLD ROUTER  —  predictor: TIMESFM  —  Scavenger book only, edge vs B&H
+  Router: hold shares uncapped while walk-forward TimesFM 30d SMA5 forecast % >= threshold
+════════════════════════════════════════════════════════════════════════════════════════════════════
+  Symbol          B&H   base edge   edge@2.00   edge@4.00   edge@6.00  holds@4.00
+  ────────────────────────────────────────────────────────────────────────────────────────────────
+  AMD         +51,926     -23,877     -28,817     -23,494     -24,069          37
+  MSFT        +33,288     -14,423     -10,361     -11,753     -10,319          22
+  GOOGL       +31,000     -13,699     -13,995     -12,499     -13,837          22
+  HD          +26,344     -13,333     -23,297     -13,825     -14,435          21
+  PG           +9,049      -6,580      -9,170      -7,228      -6,692          13
+  AAPL        +25,503      -5,970      -6,332      -2,345      -4,200          23
+  KO           +5,427      -4,569      -4,251      -4,115      -4,456          11
+  META        +46,881      -4,526      -8,441     -12,169     -17,107          36
+  INTC        +10,355      -4,498      -3,032      -4,618      -2,880          15
+  NVDA        +19,201      -4,157      -3,002      +4,544      -5,381          73
+  XOM          +8,325      -1,215      -4,491      -1,466      -1,029          13
+  MMM          +7,057        -723      +2,554        -531        -723           2
+  ABT          +5,482        +510      +3,103      +1,954      +1,032          13
+  IONQ         +3,876      +2,791      +2,099      +2,044      +2,373           5
+  IBM         +16,920      +9,035      +7,875      +9,124      +8,229          16
+  TSLA        +36,300      +9,845     +11,957     +16,541     +21,578          23
+  AMZN        +21,115     +12,878      +8,334     +17,767      +9,583          27
+  UNH         +32,951     +16,468     +20,728     +21,529     +18,684          16
+  ────────────────────────────────────────────────────────────────────────────────────────────────
+  TOTAL      +391,000     -46,043     -58,540     -20,539     -43,648
+  beats                      6/18        7/18        7/18        6/18
+════════════════════════════════════════════════════════════════════════════════════════════════════
+  Done in 1215s

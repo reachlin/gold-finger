@@ -129,6 +129,30 @@ def atm_strike(price: float, step: float = 5.0) -> float:
     return round(round(price / step) * step, 2)
 
 
+def adaptive_profit_target(entry_iv: float, entry_dte: int,
+                           target_min: float | None = None,
+                           target_max: float | None = None) -> float:
+    """
+    Self-adjusting early-exit threshold for short options, in [35%, 65%]
+    of entry premium (bounds from strategy_params):
+    - Higher IV  → higher target (fat premium is worth waiting for more decay)
+    - Longer DTE → higher target (more time to collect full theta decay)
+
+    Calibration anchors:
+      iv=0.20, dte=15 → ~35%  (thin premium, exit fast)
+      iv=0.60, dte=45 → ~50%  (standard tastyworks rule)
+      iv=1.00, dte=75 → ~65%  (high-IV, long-dated — hold for bigger capture)
+    """
+    if target_min is None or target_max is None:
+        from strategy_params import SCAV_PROFIT_TARGET_MIN, SCAV_PROFIT_TARGET_MAX
+        target_min = SCAV_PROFIT_TARGET_MIN if target_min is None else target_min
+        target_max = SCAV_PROFIT_TARGET_MAX if target_max is None else target_max
+    iv_factor  = min(max((entry_iv - 0.20) / 0.80, 0.0), 1.0)
+    dte_factor = min(max((entry_dte - 15)  / 60,   0.0), 1.0)
+    score      = 0.6 * iv_factor + 0.4 * dte_factor
+    return target_min + (target_max - target_min) * score
+
+
 def simulate_put_trade(future_df: pd.DataFrame, entry_S: float, K: float,
                        sigma: float, r: float = RISK_FREE_RATE,
                        dte: int = PUT_DTE, max_hold: int = PUT_MAX_HOLD,

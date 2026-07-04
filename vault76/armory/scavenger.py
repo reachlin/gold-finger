@@ -102,7 +102,7 @@ class Scavenger(Role):
         close    = float(last["close"])
         adx      = float(last["adx"])
         rsi      = float(last["rsi"])
-        hv       = historical_vol(df["close"])
+        hv       = historical_vol(df["close"].iloc[-22:])
 
         base["close"] = round(close, 2)
         base["hv"]    = round(hv * 100, 1)

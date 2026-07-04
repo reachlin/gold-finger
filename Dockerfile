@@ -2,9 +2,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# System deps
+# System deps (libgomp1 is a lightgbm runtime dependency)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc g++ && \
+    gcc g++ libgomp1 && \
     rm -rf /var/lib/apt/lists/*
 
 # Python deps — installed before copying source so layer is cached

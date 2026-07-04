@@ -6,8 +6,8 @@ services:
     restart: unless-stopped
     environment:
       # LLM provider — pick one block below
-      LLM_PROVIDER: anthropic
-      LLM_MODEL: claude-haiku-4-5-20251001
+      #LLM_PROVIDER: anthropic
+      #LLM_MODEL: claude-haiku-4-5-20251001
       # ANTHROPIC_API_KEY: set in .env or override here
 
       # OpenAI alternative:
@@ -41,10 +41,12 @@ services:
       - ./data:/app/data
       # Schwab OAuth token (must be pre-authenticated)
       - ./schwab/schwab_token.json:/app/schwab/schwab_token.json
-    # Tee stdout+stderr to data/overseer.log (survives container removal)
-    command: >
-      sh -c "python -u schwab/auto_overseer.py --paper
-             2>&1 | tee -a /app/data/overseer.log"
+    # Tee stdout+stderr to data/overseer.log (survives container removal).
+    # Must be a list: a folded (>) scalar keeps the newline before a
+    # more-indented continuation line, which split this into two shell
+    # statements and silently disconnected tee (found 2026-07-04).
+    command: ["sh", "-c",
+              "python -u schwab/auto_overseer.py --paper 2>&1 | tee -a /app/data/overseer.log"]
     logging:
       driver: "json-file"
       options:
