@@ -331,6 +331,16 @@ live_scanner.py
    collateral for a stronger peer is explicitly valid; prefer premium/day
    per collateral $, proven-edge names, diversification, laddering,
    real-chain quotes; keep ~10% cash reserve.
-   Step 2 (measurable): deterministic ranking — yield/day per collateral
-   $ with a concentration penalty, deploy down the ranking until budget
-   is spent; backtest it with the existing harness.
+   Step 2 — ranking DEPLOYED (2026-07-04), measurement pending. New
+   allocator.py orders each scan's batch deterministically: cash-freeing
+   signals first (RESUME_WHEEL, covered SELL_CALL), then SELL_PUTs by
+   premium/day per collateral $ halved per open position on the symbol,
+   then BUY/HOLD_SHARES. live_scanner ranks the batch before the
+   overseer loop, so high-efficiency candidates get first claim on cash
+   instead of WATCHLIST order. Caveat: the existing backtests run each
+   symbol as an independent book with no shared cash, so they cannot
+   measure allocation policy — validating step 2 needs a portfolio-level
+   harness (merge per-symbol signal streams under one cash constraint).
+   Until then the ranking is justified by construction (dominance:
+   free-cash signals cost nothing; higher premium/day per $ is strictly
+   better for identical risk) and by paper trading observation.

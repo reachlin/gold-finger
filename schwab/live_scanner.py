@@ -34,6 +34,7 @@ import options_ledger as ol
 import assignment_risk
 import timesfm_advisor
 import wheel_router
+import allocator
 from chain_quotes import requote_signal
 from vault76.overseer import Overseer
 from vault76.armory.raider import Raider
@@ -973,6 +974,21 @@ def main():
 
         # Scan for new signals
         signals = _scan_all(client, regime=regime, spy_df=spy_df)
+
+        # Deterministic allocation order (plan item 4, step 2): cash-freeing
+        # signals first, then puts by premium/day per collateral dollar with
+        # a same-symbol concentration penalty — replaces the accidental
+        # first-come-first-served WATCHLIST order.
+        try:
+            open_counts: dict = {}
+            for p in ol.open_options(ol.read_rows(OPTION_LEDGER_PATH)):
+                sym = p.get("symbol")
+                open_counts[sym] = open_counts.get(sym, 0) + 1
+            for sym in wheel_router.load_holds(ROUTER_HOLDS_PATH):
+                open_counts[sym] = open_counts.get(sym, 0) + 1
+            signals = allocator.rank_signals(signals, open_counts)
+        except Exception as exc:
+            print(f"  [Allocator] ranking skipped ({exc})")
 
         # Publish the batch so the AutoOverseer can weigh each signal
         # against its competitors for the same cash (capital allocation)
