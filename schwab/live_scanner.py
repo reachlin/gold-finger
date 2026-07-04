@@ -986,7 +986,11 @@ def main():
                 open_counts[sym] = open_counts.get(sym, 0) + 1
             for sym in wheel_router.load_holds(ROUTER_HOLDS_PATH):
                 open_counts[sym] = open_counts.get(sym, 0) + 1
-            signals = allocator.rank_signals(signals, open_counts)
+            # score_puts=False: the portfolio backtest (2026-07-04) measured
+            # premium-density put ranking at -$47K vs neutral order on $30K —
+            # keep only the cash-freeing-first tier until score v2 wins.
+            signals = allocator.rank_signals(signals, open_counts,
+                                             score_puts=False)
         except Exception as exc:
             print(f"  [Allocator] ranking skipped ({exc})")
 

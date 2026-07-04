@@ -337,10 +337,27 @@ live_scanner.py
    premium/day per collateral $ halved per open position on the symbol,
    then BUY/HOLD_SHARES. live_scanner ranks the batch before the
    overseer loop, so high-efficiency candidates get first claim on cash
-   instead of WATCHLIST order. Caveat: the existing backtests run each
-   symbol as an independent book with no shared cash, so they cannot
-   measure allocation policy — validating step 2 needs a portfolio-level
-   harness (merge per-symbol signal streams under one cash constraint).
-   Until then the ranking is justified by construction (dominance:
-   free-cash signals cost nothing; higher premium/day per $ is strictly
-   better for identical risk) and by paper trading observation.
+   instead of WATCHLIST order.
+
+   Step 3 — portfolio-level harness BUILT and MEASURED (2026-07-04):
+   backtest_portfolio.py runs the wheel across all 18 symbols in date
+   lockstep under ONE shared cash pool (report:
+   data/backtest_portfolio_2026-07-04.txt).
+
+   **Result: the premium-density score LOSES at tight capital.**
+   $30K: watchlist order +$142,368 vs allocator +$94,961 (-$47K);
+   $100K: identical (+$198.5K both — nothing competes, ~500 skips on
+   ~1000 trades). Diagnosis: premium/(strike×dte) is highest on high-IV
+   names, so the allocator funds extra NVDA/GOOGL/KO cycles and NEVER
+   funds UNH — the single best wheel name (+$30.9K under watchlist
+   order, absent from the allocator's per-symbol P&L top-8). Premium
+   density is anti-correlated with realized wheel edge in this universe:
+   quality sideways names have modest density and great outcomes.
+   "Cheap ≠ good" applies to the score itself.
+
+   Next iteration (score v2): multiply the density score by a per-symbol
+   edge prior (e.g. per-symbol backtest edge per collateral $, floored
+   for unproven names, refreshed at each checkpoint) and re-run the
+   harness (44s per sweep). Until a v2 measures positive, prefer neutral
+   (watchlist) ordering at small capital — the LLM still sees peers and
+   the allocation field guide from step 1.

@@ -52,11 +52,19 @@ def score(signal: dict, open_count: int = 0) -> float:
 
 
 def rank_signals(signals: list[dict],
-                 open_counts: "dict[str, int] | None" = None) -> list[dict]:
+                 open_counts: "dict[str, int] | None" = None,
+                 score_puts: bool = True) -> list[dict]:
     """
     Deterministic processing order for a scan's signal batch. Never drops
     a signal — the AutoOverseer still judges every one; this only decides
     who gets first claim on the cash.
+
+    score_puts=False keeps SELL_PUTs in their original (neutral) order,
+    only moving cash-freeing signals to the front. The portfolio backtest
+    (2026-07-04) measured the premium-density ranking at -$47K vs neutral
+    order on $30K capital — density chases high-IV names and starves
+    quality low-vol names like UNH. The live scanner uses False until a
+    risk/edge-adjusted score v2 measures positive.
     """
     open_counts = open_counts or {}
 
@@ -70,6 +78,7 @@ def rank_signals(signals: list[dict],
         else:
             rest.append(s)
 
-    scored.sort(key=lambda s: score(s, open_counts.get(s.get("symbol"), 0)),
-                reverse=True)
+    if score_puts:
+        scored.sort(key=lambda s: score(s, open_counts.get(s.get("symbol"), 0)),
+                    reverse=True)
     return free + scored + rest

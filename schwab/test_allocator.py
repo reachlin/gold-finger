@@ -77,6 +77,15 @@ class TestRankSignals:
         one = [_put("KO", 79.0, 0.71)]
         assert al.rank_signals(one) == one
 
+    def test_score_puts_false_keeps_put_order_neutral(self):
+        """Portfolio backtest 2026-07-04: density-ranked puts LOST -$47K
+        vs neutral order at $30K — the live scanner disables put scoring
+        until a v2 score measures positive."""
+        ko, amzn = _put("KO", 79.0, 0.71), _put("AMZN", 221.0, 2.1)
+        call = {"symbol": "IBM", "signal": "SELL_CALL", "strike": 280.0}
+        ranked = al.rank_signals([ko, amzn, call], score_puts=False)
+        assert [s["symbol"] for s in ranked] == ["IBM", "KO", "AMZN"]
+
     def test_ranking_never_drops_signals(self):
         sigs = [_put("KO", 79.0, 0.71), _put("AMZN", 221.0, 2.1),
                 {"symbol": "X", "signal": "WEIRD"}]
