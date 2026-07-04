@@ -78,7 +78,11 @@ def _get_regime(overseer, cur_date, spy_ind, spy_date_idx, vix_by_date):
     spy_i = spy_date_idx.get(cur_date)
     if spy_i is None or spy_i < MIN_HISTORY:
         return Overseer.WASTELAND
-    return overseer.classify(spy_ind.iloc[:spy_i + 1], vix)
+    # spy_ind already has indicators computed — read rows directly instead of
+    # re-running compute_indicators on a growing slice (avoids O(n²) per symbol)
+    last = spy_ind.iloc[spy_i]
+    prev = spy_ind.iloc[spy_i - 5]  # 5 bars back, matches Overseer.classify
+    return overseer.classify_row(last, prev, vix)
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +151,7 @@ def walk_forward_chemist(df: pd.DataFrame, symbol: str,
 
         # ── SPREAD_OPEN: track and exit ───────────────────────────────────────
         elif state == SPREAD_OPEN:
-            hv             = historical_vol(snapshot["close"])
+            hv             = historical_vol(snapshot["close"].iloc[-22:])
             bars_remaining = pos["expiry_i"] - i
             # cost_to_close = current value of spread we're short
             cost_to_close  = _spread_mark(close, pos["short_strike"],

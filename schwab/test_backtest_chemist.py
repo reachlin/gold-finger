@@ -129,3 +129,22 @@ class TestWalkForwardChemist:
         events = walk_forward_chemist(df, "TEST", vix_df=vix)
         for e in events:
             assert e["event"] in VALID_EVENTS, f"Unknown event: {e['event']}"
+
+
+class TestGetRegimeFastPath:
+    def test_ema50_trend_measured_five_bars_back(self):
+        """Must match Overseer.classify: prev = 5 bars back, not 6."""
+        import datetime
+        from backtest_chemist import _get_regime, MIN_HISTORY
+        from vault76.overseer import Overseer
+
+        n     = MIN_HISTORY + 10
+        spy_i = n - 1
+        ema   = np.full(n, 500.0)
+        ema[spy_i - 6] = 505.0   # 6 bars back: would read "falling" → WASTELAND
+        ema[spy_i - 5] = 495.0   # 5 bars back: rising → RECLAMATION
+        spy_ind = pd.DataFrame({"close": np.full(n, 510.0), "ema50": ema})
+
+        cur = datetime.date(2026, 1, 2)
+        regime = _get_regime(Overseer(), cur, spy_ind, {cur: spy_i}, {})
+        assert regime == Overseer.RECLAMATION

@@ -106,6 +106,49 @@ class TestOverseerRegimes:
         assert o.classify(tiny, vix=18.0) == Overseer.WASTELAND
 
 
+class TestClassifyRow:
+    """Fast-path classification from precomputed indicator rows."""
+
+    def test_reclamation_when_above_rising_ema50(self):
+        from vault76.overseer import Overseer
+        o = Overseer()
+        last = {"close": 510.0, "ema50": 500.0}
+        prev = {"ema50": 495.0}
+        assert o.classify_row(last, prev, vix=15.0) == Overseer.RECLAMATION
+
+    def test_wasteland_when_below_ema50(self):
+        from vault76.overseer import Overseer
+        o = Overseer()
+        last = {"close": 490.0, "ema50": 500.0}
+        prev = {"ema50": 495.0}
+        assert o.classify_row(last, prev, vix=15.0) == Overseer.WASTELAND
+
+    def test_wasteland_when_ema50_falling(self):
+        from vault76.overseer import Overseer
+        o = Overseer()
+        last = {"close": 510.0, "ema50": 500.0}
+        prev = {"ema50": 505.0}
+        assert o.classify_row(last, prev, vix=15.0) == Overseer.WASTELAND
+
+    def test_nuked_zone_overrides_trend(self):
+        from vault76.overseer import Overseer
+        o = Overseer()
+        last = {"close": 510.0, "ema50": 500.0}
+        prev = {"ema50": 495.0}
+        assert o.classify_row(last, prev, vix=35.0) == Overseer.NUKED_ZONE
+
+    def test_classify_agrees_with_classify_row(self):
+        """classify() must delegate to classify_row — one copy of the rule."""
+        from vault76.overseer import Overseer
+        from schwab.trend_scanner import compute_indicators
+        o = Overseer()
+        for maker, vix in [(_make_spy, 18.0), (_make_crashing_spy, 22.0)]:
+            spy = maker()
+            ind = compute_indicators(spy).dropna().reset_index(drop=True)
+            expected = o.classify_row(ind.iloc[-1], ind.iloc[-6], vix=vix)
+            assert o.classify(spy, vix=vix) == expected
+
+
 class TestOverseerWeaponSelection:
     def test_scavenger_recommended_in_wasteland(self):
         from vault76.overseer import Overseer

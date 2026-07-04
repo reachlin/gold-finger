@@ -54,8 +54,9 @@ CALL_OPEN  = "CALL_OPEN"
 
 def _entry_iv(snapshot: "pd.DataFrame") -> float:
     """Yang-Zhang vol at entry; falls back to close-only HV."""
-    iv = yang_zhang_vol(snapshot) if "open" in snapshot.columns else 0.0
-    return iv if iv > 0 else (historical_vol(snapshot["close"]) or 0.30)
+    tail = snapshot.iloc[-22:]
+    iv = yang_zhang_vol(tail) if "open" in tail.columns else 0.0
+    return iv if iv > 0 else (historical_vol(tail["close"]) or 0.30)
 
 
 # ---------------------------------------------------------------------------
@@ -88,16 +89,20 @@ def _build_regime_lookup(spy_df: pd.DataFrame | None,
 
 def _get_regime(overseer: Overseer, cur_date, spy_ind, spy_date_idx: dict,
                 vix_by_date: dict) -> str:
-    """Classify regime at cur_date using pre-built lookups."""
+    """Classify regime at cur_date using pre-built lookups (O(1) per call)."""
     vix = vix_by_date.get(cur_date, 20.0)
     if vix >= 30.0:
-        return Overseer.NUKED_ZONE  # VIX alone is sufficient — no SPY needed
+        return Overseer.NUKED_ZONE
     if spy_ind is None:
         return Overseer.WASTELAND
     spy_i = spy_date_idx.get(cur_date)
     if spy_i is None or spy_i < MIN_HISTORY:
         return Overseer.WASTELAND
-    return overseer.classify(spy_ind.iloc[:spy_i + 1], vix)
+    # spy_ind already has indicators computed — read rows directly instead of
+    # re-running compute_indicators on a growing slice (avoids O(n²) per symbol)
+    last = spy_ind.iloc[spy_i]
+    prev = spy_ind.iloc[spy_i - 5]  # 5 bars back, matches Overseer.classify
+    return overseer.classify_row(last, prev, vix)
 
 
 def _spy_lookback_return(spy_ind: pd.DataFrame, spy_i: int) -> float:
@@ -203,7 +208,7 @@ def walk_forward_scavenger(df: pd.DataFrame, symbol: str,
             close      = float(row["close"])
             days_left  = max(cycle["put_expiry_i"] - i, 0)
             T_left     = days_left / 365
-            hv         = historical_vol(snapshot["close"])
+            hv         = historical_vol(snapshot["close"].iloc[-22:])
             sigma      = hv if hv > 0 else 0.30
             cur_val    = black_scholes_put(close, cycle["put_strike"], T_left,
                                           RISK_FREE, sigma)
@@ -272,7 +277,7 @@ def walk_forward_scavenger(df: pd.DataFrame, symbol: str,
             close     = float(row["close"])
             days_left = max(cycle["call_expiry_i"] - i, 0)
             T_left    = days_left / 365
-            hv        = historical_vol(snapshot["close"])
+            hv        = historical_vol(snapshot["close"].iloc[-22:])
             sigma     = hv if hv > 0 else 0.30
             cur_val   = black_scholes_call(close, cycle["call_strike"], T_left,
                                            RISK_FREE, sigma)
