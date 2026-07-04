@@ -35,7 +35,7 @@ class Overseer:
     _ROLES = {
         RECLAMATION: ["maggie", "raider", "scavenger"],  # Maggie hunts breakouts; Raider attacks pullbacks; Scavenger sells puts on sideways stocks
         WASTELAND:   ["scavenger", "raider"],   # Scavenger primary for income; Raider opportunistic on any trending names
-        NUKED_ZONE:  ["chemist"],               # Blast radius — Chemist harvests the chaos
+        NUKED_ZONE:  ["chemist", "medic"],      # Blast radius — Chemist harvests the chaos, Medic buys quality ETFs at panic prices
     }
 
     def classify(self, spy_df: pd.DataFrame, vix: float = 20.0) -> str:

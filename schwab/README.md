@@ -372,3 +372,17 @@ live_scanner.py
    LLM's peer context + allocation field guide (step 1) remains the
    adaptive layer; revisit only with a prior that's stable across
    regimes.
+
+5. **The Medic — crisis ETF accumulation** — DEPLOYED 2026-07-04.
+   New NUKED_ZONE role (vault76/armory/medic.py): buy quality dividend
+   ETFs at the panic close (VIX >= 30), hold through WASTELAND, sell on
+   the first RECLAMATION bar. Roster measured by backtest_medic.py over
+   19 episodes 2015-2026 (data/backtest_medic_2026-07-04.txt):
+   MEDIC_ETFS = SCHD +$508 (15/19 wins), VIG +$6,411 (16/19),
+   VYM +$3,580 (16/19). TLT tested -$2,595 (6/19) — flight-to-safety is
+   expensive at panic — and GLD's +$5K is gold-bull-dependent; both
+   excluded. Panic entry beats waiting for the first calm bar
+   (+$10,499 vs +$6,297 on the roster; --entry nuke|calm flag).
+   Scanner emits BUY_ETF/SELL_ETF ($600/ETF, positions in
+   data/paper_medic_holdings.json), AutoOverseer approves by default.
+   Known limit: no 1970s-style multi-year grind in the data window.

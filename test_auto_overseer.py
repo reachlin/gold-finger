@@ -129,6 +129,14 @@ def test_overseer_system_documents_router_signals():
     assert "default is APPROVE" in OVERSEER_SYSTEM
 
 
+def test_overseer_system_documents_medic_signals():
+    """Medic signals: crisis ETF buys, default approve."""
+    from schwab.auto_overseer import OVERSEER_SYSTEM
+    assert "BUY_ETF" in OVERSEER_SYSTEM
+    assert "SELL_ETF" in OVERSEER_SYSTEM
+    assert "Medic" in OVERSEER_SYSTEM
+
+
 def test_real_order_skipped_for_router_signals(monkeypatch, capsys):
     """Router signals are strategy-state changes, not options orders —
     real mode must never try to build an OCC order from them."""

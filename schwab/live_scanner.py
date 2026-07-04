@@ -39,6 +39,7 @@ from chain_quotes import requote_signal
 from vault76.overseer import Overseer
 from vault76.armory.raider import Raider
 from vault76.armory.scavenger import Scavenger
+from vault76.armory.medic import Medic, MEDIC_ETFS
 
 SCAN_INTERVAL_MIN = 5
 MARKET_OPEN_ET    = 9
@@ -238,6 +239,13 @@ def _fetch_with_indicators(client, symbol: str) -> pd.DataFrame | None:
 _overseer  = Overseer()
 _raider    = Raider()
 _scavenger = Scavenger()
+_medic     = Medic()
+
+# The Medic: crisis accumulation — budget per ETF per NUKED_ZONE episode,
+# positions persisted like router holds
+MEDIC_BUDGET_PER_ETF = 600
+MEDIC_HOLDS_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "data", "paper_medic_holdings.json")
 
 # LGBM move-risk models — trained at startup in main(), advisory only.
 # _assign_models: P(>5% drop in 30d) for SELL_PUT/BUY; _upside_models:
@@ -437,6 +445,35 @@ def _scan_all(client, regime: str = Overseer.RECLAMATION,
                         if auc is not None:
                             c["model_auc"] = auc
                     signals.append(c)
+
+    # The Medic: crisis accumulation of dividend ETFs. Buys only in
+    # NUKED_ZONE; sells only on RECLAMATION recovery — so the ETFs are
+    # only fetched when the blast radius is active or a position is open.
+    medic_holds = wheel_router.load_holds(MEDIC_HOLDS_PATH)
+    if regime == Overseer.NUKED_ZONE or medic_holds:
+        today = str(pd.Timestamp.now().date())
+        for sym in MEDIC_ETFS:
+            df_etf = _fetch_with_indicators(client, sym)
+            if df_etf is None:
+                continue
+            res = _medic.scan(sym, df_etf, regime=regime,
+                              holding=sym in medic_holds)
+            if res["signal"] == "NONE":
+                continue
+            if (today, sym, res["signal"]) in _router_proposed:
+                continue
+            _router_proposed.add((today, sym, res["signal"]))
+            close = float(df_etf.iloc[-1]["close"])
+            if res["signal"] == "BUY_ETF":
+                res["shares"] = max(1, int(MEDIC_BUDGET_PER_ETF / close))
+            else:
+                pos = medic_holds[sym]
+                res["shares"]     = pos["shares"]
+                res["hold_entry"] = pos["entry"]
+                res["hold_date"]  = pos["date"]
+                res["unrealized"] = round((close - pos["entry"])
+                                          * pos["shares"], 2)
+            signals.append(res)
     return signals
 
 
@@ -590,7 +627,17 @@ def _print_signal(s: dict, paper: bool = False, kronos_cache: dict | None = None
         print(f"ROUTER:  TimesFM 30d {s['timesfm_30d_pct']:+.1f}%  "
               f"(τ = {s.get('router_tau', '?')}%)")
 
-    if sig not in ("HOLD_SHARES", "RESUME_WHEEL") \
+    elif sig == "BUY_ETF":
+        print(f"SHARES:  {s['shares']}  (≈${s['shares'] * s.get('close', 0):,.0f})")
+        print(f"POLICY:  Medic crisis buy — backtested 15-16/19 winning "
+              f"episodes; default APPROVE, veto only on context")
+
+    elif sig == "SELL_ETF":
+        print(f"SHARES:  {s['shares']}  held since {s.get('hold_date', '?')} "
+              f"@ ${s.get('hold_entry', '?')}")
+        print(f"UNREAL:  ${s.get('unrealized', 0):+,.2f}")
+
+    if sig not in ("HOLD_SHARES", "RESUME_WHEEL", "BUY_ETF", "SELL_ETF") \
             and s.get("timesfm_30d_pct") is not None:
         print(f"TIMESFM: 30d SMA5 forecast {s['timesfm_30d_pct']:+.1f}% "
               f"(zero-shot advisory)")
@@ -917,6 +964,11 @@ def main():
         print("  [Router] active holds: "
               + ", ".join(f"{sym} {p['shares']}sh @ ${p['entry']}"
                           for sym, p in router_holds.items()))
+    medic_holds = wheel_router.load_holds(MEDIC_HOLDS_PATH)
+    if medic_holds:
+        print("  [Medic] crisis positions: "
+              + ", ".join(f"{sym} {p['shares']}sh @ ${p['entry']}"
+                          for sym, p in medic_holds.items()))
 
     # Settle overnight expiries/assignments before the briefing
     try:
@@ -1105,6 +1157,24 @@ def main():
                         if not args.paper:
                             print(f"  Suggested: SELL {s['shares']} {s['symbol']} "
                                   f"@ market (router exit — no automated order)")
+                    elif sig == "BUY_ETF":
+                        wheel_router.enter_hold(
+                            MEDIC_HOLDS_PATH, s["symbol"], s["shares"],
+                            s["close"], str(pd.Timestamp.now().date()))
+                        print(f"APPROVED: {s['symbol']} BUY_ETF — Medic buys "
+                              f"{s['shares']} sh @ ${s['close']} (crisis entry)")
+                        if not args.paper:
+                            print(f"  Suggested: BUY {s['shares']} {s['symbol']} "
+                                  f"@ market (medic — no automated order)")
+                    elif sig == "SELL_ETF":
+                        pnl = wheel_router.exit_hold(
+                            MEDIC_HOLDS_PATH, s["symbol"], s["close"])
+                        print(f"APPROVED: {s['symbol']} SELL_ETF — Medic exits "
+                              f"@ ${s['close']}"
+                              + (f"  P&L ${pnl:+,.2f}" if pnl is not None else ""))
+                        if not args.paper:
+                            print(f"  Suggested: SELL {s['shares']} {s['symbol']} "
+                                  f"@ market (medic — no automated order)")
                     print(VERDICT_OK)
 
                 else:  # skip

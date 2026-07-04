@@ -86,6 +86,13 @@ corporate action or trading halt, or an obvious macro shock today. Do not
 veto merely because the forecast seems optimistic — that judgment is
 already priced into the threshold.
 
+## Medic signals: BUY_ETF / SELL_ETF
+The Medic buys quality dividend ETFs (SCHD, VIG, VYM) at NUKED_ZONE panic
+prices and sells them when RECLAMATION confirms recovery. Backtested
+2015-2026: 15-16 winning episodes of 19 per ETF. Default is APPROVE —
+veto only for context the rule can't see (ETF-specific halt, obviously
+broken market plumbing). These are small budget positions, not collateral.
+
 ## Signal field guide
 - quote_source: "schwab_chain" = real premium/IV/delta from the live chain
   (trust these numbers); "model" = Black-Scholes estimate on historical vol

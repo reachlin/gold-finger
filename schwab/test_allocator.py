@@ -26,6 +26,11 @@ class TestCashNeeded:
     def test_sell_call_and_resume_wheel_are_free(self):
         assert al.cash_needed({"signal": "SELL_CALL", "strike": 250.0}) == 0.0
         assert al.cash_needed({"signal": "RESUME_WHEEL", "shares": 3}) == 0.0
+        assert al.cash_needed({"signal": "SELL_ETF", "shares": 7}) == 0.0
+
+    def test_buy_etf_uses_share_cost(self):
+        s = {"signal": "BUY_ETF", "shares": 7, "close": 80.7}
+        assert al.cash_needed(s) == pytest.approx(564.9)
 
     def test_hold_shares_uses_share_cost(self):
         s = {"signal": "HOLD_SHARES", "shares": 2, "close": 262.0}

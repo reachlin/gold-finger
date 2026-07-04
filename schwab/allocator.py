@@ -22,7 +22,7 @@ claim on the cash. Scores are deterministic so the policy is backtestable.
 CONCENTRATION_PENALTY = 0.5   # score multiplier per open position on the symbol
 DEFAULT_BUDGET        = 600   # matches live_scanner.BUDGET_PER_TRADE
 
-_FREE_SIGNALS = ("RESUME_WHEEL", "SELL_CALL")
+_FREE_SIGNALS = ("RESUME_WHEEL", "SELL_CALL", "SELL_ETF")
 _SCORED       = ("SELL_PUT",)
 
 
@@ -31,11 +31,11 @@ def cash_needed(signal: dict, budget_per_trade: float = DEFAULT_BUDGET) -> float
     sig = signal.get("signal")
     if sig == "SELL_PUT":
         return float(signal.get("strike", 0)) * 100
-    if sig == "HOLD_SHARES":
+    if sig in ("HOLD_SHARES", "BUY_ETF"):
         return float(signal.get("shares", 0)) * float(signal.get("close", 0))
     if sig == "BUY":
         return float(budget_per_trade)
-    return 0.0   # SELL_CALL (covered by held shares), RESUME_WHEEL (frees cash)
+    return 0.0   # SELL_CALL (covered), RESUME_WHEEL / SELL_ETF (free cash)
 
 
 def score(signal: dict, open_count: int = 0, prior: float = 1.0) -> float:
