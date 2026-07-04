@@ -71,6 +71,14 @@ def test_overseer_system_allows_duplicates():
     assert "ALLOWED" in OVERSEER_SYSTEM
 
 
+def test_overseer_system_documents_lgbm_advisories():
+    """Field guide must cover every LGBM field the scanner can attach."""
+    from schwab.auto_overseer import OVERSEER_SYSTEM
+    for field in ("assign_risk_pct", "called_away_pct", "drop_risk_pct",
+                  "model_auc"):
+        assert field in OVERSEER_SYSTEM, f"missing field guide for {field}"
+
+
 # ---------------------------------------------------------------------------
 # Tests for OCC option symbol builder
 # ---------------------------------------------------------------------------

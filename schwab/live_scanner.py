@@ -236,8 +236,11 @@ _overseer  = Overseer()
 _raider    = Raider()
 _scavenger = Scavenger()
 
-# LGBM assignment-risk models — trained at startup in main(), advisory only
+# LGBM move-risk models — trained at startup in main(), advisory only.
+# _assign_models: P(>5% drop in 30d) for SELL_PUT/BUY; _upside_models:
+# P(>8% rally in 30d) for SELL_CALL (called-away risk).
 _assign_models: dict = {}
+_upside_models: dict = {}
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 
 # ---------------------------------------------------------------------------
@@ -339,6 +342,13 @@ def _scan_all(client, regime: str = Overseer.RECLAMATION,
         # The Raider: buy pullbacks in uptrends
         r = _raider.scan(symbol, df_ind, regime=regime)
         if r["signal"] != "NONE":
+            # LGBM advisory: high drop risk → the "pullback" may be a breakdown
+            risk = assignment_risk.advise(_assign_models, symbol, df_ind)
+            if risk is not None:
+                r["drop_risk_pct"] = risk
+                auc = assignment_risk.model_auc(_assign_models, symbol)
+                if auc is not None:
+                    r["model_auc"] = auc
             signals.append(r)
         # The Scavenger: sell options on sideways stocks.
         # Model signals are re-quoted against the real Schwab chain — real
@@ -352,6 +362,9 @@ def _scan_all(client, regime: str = Overseer.RECLAMATION,
                 risk = assignment_risk.advise(_assign_models, symbol, df_ind)
                 if risk is not None:
                     s["assign_risk_pct"] = risk
+                    auc = assignment_risk.model_auc(_assign_models, symbol)
+                    if auc is not None:
+                        s["model_auc"] = auc
                 signals.append(s)
         # Wheel phase 2: assigned shares → sell covered calls
         if symbol in holdings:
@@ -360,6 +373,14 @@ def _scan_all(client, regime: str = Overseer.RECLAMATION,
             if c["signal"] != "NONE":
                 c = requote_signal(client, c)
                 if c is not None:
+                    # LGBM advisory: P(>8% rally within 30 trading days) —
+                    # how likely the shares get called away at the strike.
+                    up = assignment_risk.advise(_upside_models, symbol, df_ind)
+                    if up is not None:
+                        c["called_away_pct"] = up
+                        auc = assignment_risk.model_auc(_upside_models, symbol)
+                        if auc is not None:
+                            c["model_auc"] = auc
                     signals.append(c)
     return signals
 
@@ -449,6 +470,11 @@ def _print_signal(s: dict, paper: bool = False, kronos_cache: dict | None = None
         print(f"STOP:    ${s['stop']}")
         print(f"RSI:     {s.get('rsi', '?')}  ADX: {s.get('adx', '?')}")
         print(f"EMA20:   ${s.get('ema20', '?')}  EMA50: ${s.get('ema50', '?')}")
+        if s.get("drop_risk_pct") is not None:
+            print(f"LGBM:    {s['drop_risk_pct']}% chance of >5% drop "
+                  f"within 30 trading days (advisory"
+                  + (f", AUC {s['model_auc']}" if s.get("model_auc") else "")
+                  + ")")
 
     elif sig == "SELL_PUT":
         collateral = float(s.get("strike", 0)) * 100
@@ -467,7 +493,9 @@ def _print_signal(s: dict, paper: bool = False, kronos_cache: dict | None = None
             print(f"QUOTE:   model (Black-Scholes on HV) — chain unavailable")
         if s.get("assign_risk_pct") is not None:
             print(f"LGBM:    {s['assign_risk_pct']}% chance of >5% drop "
-                  f"within 30 trading days (advisory)")
+                  f"within 30 trading days (advisory"
+                  + (f", AUC {s['model_auc']}" if s.get("model_auc") else "")
+                  + ")")
         if kronos_cache is not None:
             _, k_msg = _kronos_advisory(s, kronos_cache)
             if k_msg:
@@ -487,6 +515,11 @@ def _print_signal(s: dict, paper: bool = False, kronos_cache: dict | None = None
                   f"bid/ask ${s.get('bid', '?')}/${s.get('ask', '?')}")
         else:
             print(f"QUOTE:   model (Black-Scholes on HV) — chain unavailable")
+        if s.get("called_away_pct") is not None:
+            print(f"LGBM:    {s['called_away_pct']}% chance of >8% rally "
+                  f"within 30 trading days — called away (advisory"
+                  + (f", AUC {s['model_auc']}" if s.get("model_auc") else "")
+                  + ")")
 
     print(f"REASON:  {s['reason']}")
     print(f"{SIGNAL_END}")
@@ -770,8 +803,9 @@ def main():
 
     price_fetcher = _make_price_fetcher(client)
 
-    # Train LGBM assignment-risk models from local history (seconds/symbol)
-    global _assign_models
+    # Train LGBM move-risk models from local history (seconds/symbol):
+    # drop risk for SELL_PUT/BUY, rally (called-away) risk for SELL_CALL
+    global _assign_models, _upside_models
     try:
         _assign_models = assignment_risk.load_models(WATCHLIST, DATA_DIR)
         aucs = {s: m.holdout_auc for s, m in _assign_models.items()
@@ -783,6 +817,18 @@ def main():
     except Exception as exc:
         print(f"  [AssignRisk] disabled ({exc})")
         _assign_models = {}
+    try:
+        _upside_models = assignment_risk.load_models(WATCHLIST, DATA_DIR,
+                                                     direction="up")
+        aucs = {s: m.holdout_auc for s, m in _upside_models.items()
+                if m.holdout_auc is not None}
+        print(f"  [CalledAway] models ready for {len(_upside_models)}/"
+              f"{len(WATCHLIST)} symbols"
+              + (f"  (median holdout AUC {sorted(aucs.values())[len(aucs)//2]:.2f})"
+                 if aucs else ""))
+    except Exception as exc:
+        print(f"  [CalledAway] disabled ({exc})")
+        _upside_models = {}
 
     kronos_cache  = _load_kronos_cache(WATCHLIST)
 

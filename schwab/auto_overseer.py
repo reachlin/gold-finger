@@ -65,10 +65,20 @@ several near-strike puts stacked before the same expiry on a volatile name).
 - quote_source: "schwab_chain" = real premium/IV/delta from the live chain
   (trust these numbers); "model" = Black-Scholes estimate on historical vol
   (treat premium as approximate)
-- assign_risk_pct: LGBM-estimated probability (%) of a >5% drop within 30
-  trading days, trained per symbol on daily history. Advisory. Weigh it
+- assign_risk_pct: on SELL_PUT — LGBM probability (%) of a >5% drop within
+  30 trading days, trained per symbol on daily history. Advisory. Weigh it
   together with the Kronos buffer: both bearish → lean SKIP; if they
   disagree, judge from IV/ADX/context. Above ~50% is elevated.
+- drop_risk_pct: on BUY — same drop model. A pullback entry with high drop
+  risk may be a breakdown, not a dip → lean SKIP above ~50%.
+- called_away_pct: on SELL_CALL — LGBM probability (%) of a >8% rally within
+  30 trading days, i.e. shares called away at the strike. Being called away
+  locks in the wheel profit, so moderate values are fine; very high values
+  mean the call likely caps a strong run — prefer SKIP if cost basis is far
+  below the strike and the trend is strong.
+- model_auc: chronological holdout AUC of the LGBM model behind the field
+  above (0.5 = coin flip). Discount the advisory when AUC is below ~0.6;
+  trust it more above ~0.7.
 
 ## Response format — ONLY valid JSON, no other text
 {"decision": "yes", "reason": "brief reason under 15 words"}

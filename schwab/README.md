@@ -203,3 +203,29 @@ live_scanner.py
   ├── "y" → print ===APPROVED=== + order suggestion
   └── "n" → print ===SKIPPED===
 ```
+
+---
+
+## Plan — next experiments
+
+1. **TimesFM second opinion next to Kronos** (in progress). Cache a zero-shot
+   30-day SMA-direction forecast per symbol at scanner startup (same pattern
+   as the Kronos cache) and attach it to signals. Kronos + TimesFM agreeing
+   bearish is a stronger skip signal than either alone.
+
+2. **Backtest the LGBM advisory as a mechanical gate.** The walk-forward
+   backtests never consume the LGBM advisories — they only inform the live
+   LLM overseer, so their value is currently unmeasured (and holdout AUCs of
+   0.44–0.59 on real history are a warning sign). Experiment: in
+   `backtest_scavenger.py`, skip SELL_PUT entries when a walk-forward
+   `assign_risk_pct` > 60% (refit the per-symbol model periodically inside
+   the loop, no lookahead) and compare edge vs the 2026-07-04 checkpoint
+   baseline (-$15,506, 8/18). Expect minutes of runtime from the refits.
+
+3. **Wheel-vs-hold strategy router.** The negative edge is concentrated in
+   trending growth names (AMD -$22K, GOOGL -$13K, HD -$11K, MSFT -$9K vs
+   B&H) where covered calls cap the upside; wins are on sideways names
+   (UNH, AMZN, IBM). Train an LGBM "will this stock gain >X% in 30d" label
+   (same feature scaffolding as assignment_risk.py) to route symbols between
+   hold-don't-wheel and wheel, or surface it as upside-forfeiture risk on
+   SELL_CALL. Targets the actual source of the -$15.5K edge.
