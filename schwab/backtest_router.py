@@ -48,6 +48,19 @@ THRESHOLDS = {
 _tfm_forecast_fn = None   # TimesFM loaded once, on first uncached symbol
 
 
+def _event_i(e: dict) -> int:
+    """Bar index an event's P&L is realized at — the latest *_i it carries."""
+    return max((v for k, v in e.items()
+                if k.endswith("_i") and isinstance(v, (int, np.integer))),
+               default=0)
+
+
+def _filter_since(events: list, dates: "np.ndarray", since) -> list:
+    """Keep events whose realization date is >= since."""
+    last = len(dates) - 1
+    return [e for e in events if dates[min(_event_i(e), last)] >= since]
+
+
 def _predictor_series(symbol: str, ind: pd.DataFrame,
                       predictor: str) -> np.ndarray:
     if predictor == "lgbm":
@@ -69,7 +82,7 @@ def _predictor_series(symbol: str, ind: pd.DataFrame,
 
 
 def run_symbol(symbol: str, spy_df, vix_df, predictor: str,
-               thresholds: tuple) -> "dict | None":
+               thresholds: tuple, since=None) -> "dict | None":
     df = _load_df(symbol)
     if df is None:
         return None
@@ -81,16 +94,34 @@ def run_symbol(symbol: str, spy_df, vix_df, predictor: str,
     if time.time() - t0 > 5:
         print(f"    predictor series in {time.time() - t0:.0f}s", flush=True)
 
-    base = walk_forward_scavenger(df, symbol, spy_df, vix_df)
+    # --since: simulate on full history (warm indicators/positions), but
+    # attribute P&L only to events realized inside the window, and match
+    # B&H to the same window.
+    dates = pd.to_datetime(ind["datetime"]).dt.date.to_numpy()
+    if since is not None:
+        if dates[-1] < since:
+            return None
+        bnh_start = max(int(np.argmax(dates >= since)), MIN_HISTORY)
+        bnh = (float(ind.iloc[-1]["close"])
+               - float(ind.iloc[bnh_start]["close"])) * 100
+    else:
+        bnh = _bnh_pnl(df)
+
+    def _pnl(events):
+        if since is not None:
+            events = _filter_since(events, dates, since)
+        return events
+
+    base = _pnl(walk_forward_scavenger(df, symbol, spy_df, vix_df))
     row  = {
         "symbol":   symbol,
-        "bnh":      _bnh_pnl(df),
+        "bnh":      bnh,
         "base_pnl": sum(e["pnl"] for e in base),
     }
     for tau in thresholds:
-        events = walk_forward_scavenger(df, symbol, spy_df, vix_df,
-                                        router_probs=probs,
-                                        router_threshold=tau)
+        events = _pnl(walk_forward_scavenger(df, symbol, spy_df, vix_df,
+                                             router_probs=probs,
+                                             router_threshold=tau))
         holds  = [e for e in events if e["event"] == "router_hold_exit"]
         row[f"pnl@{tau}"]   = sum(e["pnl"] for e in events)
         row[f"holds@{tau}"] = len(holds)
@@ -105,11 +136,16 @@ def main():
                     default="lgbm")
     ap.add_argument("--thresholds", type=str, default=None,
                     help="comma-separated, e.g. 3.0,4.0,5.0")
+    ap.add_argument("--since", type=str, default=None,
+                    help="attribute P&L to events realized on/after this "
+                         "date (YYYY-MM-DD); B&H measured over the same window")
     args = ap.parse_args()
 
     symbols    = [s.upper() for s in args.symbols] or WATCHLIST
     thresholds = (tuple(float(t) for t in args.thresholds.split(","))
                   if args.thresholds else THRESHOLDS[args.predictor])
+    since      = (pd.to_datetime(args.since).date()
+                  if args.since else None)
 
     spy_path = os.path.join(DATA_DIR, "spy_history.csv")
     vix_path = os.path.join(DATA_DIR, "vix_history.csv")
@@ -120,7 +156,8 @@ def main():
     rows = []
     for sym in symbols:
         print(f"  {sym}...", flush=True)
-        row = run_symbol(sym, spy_df, vix_df, args.predictor, thresholds)
+        row = run_symbol(sym, spy_df, vix_df, args.predictor, thresholds,
+                         since=since)
         if row is not None:
             rows.append(row)
 
@@ -128,10 +165,11 @@ def main():
     taus = thresholds
     unit = "P(>8% rally in 30d)" if args.predictor == "lgbm" \
         else "TimesFM 30d SMA5 forecast %"
+    window = f"  —  window: {since} → end" if since else ""
     print()
     print("═" * 100)
     print(f"  WHEEL-vs-HOLD ROUTER  —  predictor: {args.predictor.upper()}  "
-          f"—  Scavenger book only, edge vs B&H")
+          f"—  Scavenger book only, edge vs B&H{window}")
     print(f"  Router: hold shares uncapped while walk-forward {unit} >= threshold")
     print("═" * 100)
     hdr = f"  {'Symbol':7s}{'B&H':>12s}{'base edge':>12s}"

@@ -108,6 +108,27 @@ class TestWalkForwardTimesFM:
                        and e["put_entry_i"] >= first_valid for e in events)
 
 
+class TestSinceFilter:
+    """--since window: attribute each event to its last bar's date."""
+
+    def test_event_i_takes_latest_bar(self):
+        from backtest_router import _event_i
+        e = {"put_entry_i": 10, "put_expiry_i": 40, "exit_i": 25, "pnl": 1.0}
+        assert _event_i(e) == 40
+
+    def test_filter_since_keeps_events_at_or_after_cutoff(self):
+        import datetime
+        from backtest_router import _filter_since
+        dates = np.array([datetime.date(2023, 12, 29),
+                          datetime.date(2024, 1, 2),
+                          datetime.date(2024, 1, 3)])
+        events = [{"exit_i": 0, "pnl": 1.0},
+                  {"exit_i": 1, "pnl": 2.0},
+                  {"exit_i": 2, "pnl": 3.0}]
+        kept = _filter_since(events, dates, datetime.date(2024, 1, 1))
+        assert [e["pnl"] for e in kept] == [2.0, 3.0]
+
+
 class TestRouterGateInBacktest:
     def test_hot_router_produces_holds_not_puts(self):
         from backtest_scavenger import walk_forward_scavenger

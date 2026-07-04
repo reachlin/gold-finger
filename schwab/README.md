@@ -256,11 +256,20 @@ live_scanner.py
    data/backtest_router_tfm_2026-07-04.txt (2/4/6 sweep),
    data/backtest_router_tfm_sweep_2026-07-04.txt (3/3.5/4/4.5).
 
-   Caveats before deploying to the live scanner: (a) threshold chosen
-   in-sample — the wide 3-4% plateau mitigates but doesn't eliminate;
-   (b) TimesFM's pretraining data may include these very price series
-   pre-~2024, so the early backtest years could flatter it (Kronos has
-   the same issue); (c) router share trades carry no transaction costs
-   in the sim (~2-4 round trips/symbol/yr — small). Suggested next step:
-   validate on 2024+ bars only (post-pretraining), then wire hold-mode
-   into the live scanner as a scanner-side gate (not an LLM advisory).
+   **2024+ validation (`--since 2024-01-01`) PASSED**
+   (data/backtest_router_tfm_2024plus.txt): in the recent window the
+   baseline scavenger already beats B&H (+$12,067) and the router
+   roughly doubles it — τ=3.0 → +$25,775, 3.5 → +$23,687, 4.0 →
+   +$21,355, beats 10/18 vs 9/18 — same plateau shape as the full
+   history, few holds (0-24/symbol over 2.5y). Biggest per-symbol cost:
+   TSLA +$20.2K → +$8.7K @3.0 (router exits too early on the wildest
+   name); biggest wins NVDA +$8.8K, AMZN +$5.4K, IBM +$5.1K @3.0.
+
+   Remaining caveats: (a) threshold still chosen from the same data —
+   but the 3-4% plateau held in both windows; (b) TimesFM 2.5 shipped
+   in 2025, so even 2024 bars may brush its pretraining window — the
+   only fully clean data is live paper trading from here on; (c) no
+   transaction costs on router share trades (~2-4 round trips/yr).
+   Next step if deploying: wire hold-mode into the live scanner as a
+   mechanical scanner-side gate at τ=3.5% (mid-plateau), not an LLM
+   advisory — and let paper trading provide the clean out-of-sample.
