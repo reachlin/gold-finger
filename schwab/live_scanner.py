@@ -259,6 +259,8 @@ DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 # ---------------------------------------------------------------------------
 
 _decision_fn       = None   # callable(signal: dict) -> "y" | "n" | "q"
+_current_scan_signals: list = []  # this scan's signals — AutoOverseer reads
+                                  # them to show each signal its competitors
 _current_portfolio = None   # populated in main() after PaperPortfolio init
 _current_kronos_cache: dict = {}  # populated in main() after _load_kronos_cache()
 _current_client    = None   # populated in main() after Schwab auth
@@ -971,6 +973,11 @@ def main():
 
         # Scan for new signals
         signals = _scan_all(client, regime=regime, spy_df=spy_df)
+
+        # Publish the batch so the AutoOverseer can weigh each signal
+        # against its competitors for the same cash (capital allocation)
+        global _current_scan_signals
+        _current_scan_signals = signals
 
         if portfolio:
             portfolio.log_scan(

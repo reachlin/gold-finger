@@ -62,6 +62,19 @@ several near-strike puts stacked before the same expiry on a volatile name).
 - SKIP if yield/DTE < 0.02% per day (not enough premium for the capital tie-up)
 - APPROVE if HV 15–50%, ADX < 22, yield > 0.03%/day, quality company
 
+## Capital allocation (when "Other pending signals" are listed)
+Cash may not cover every candidate this scan — approving this signal can
+forfeit a better one. It is VALID to reject an otherwise-acceptable signal
+to keep collateral free for a stronger peer. Prefer:
+- higher capital efficiency: premium/day per collateral dollar
+- proven-edge names: UNH, AMZN, IBM top the backtests; KO and PG are
+  cheap collateral but negative-edge — cheap is not good
+- diversification: avoid stacking correlated/same-sector names whose
+  puts would all be assigned in the same drawdown
+- laddered expiries and smaller positions over one big lump of collateral
+- real-chain quotes (quote_source: schwab_chain) over model estimates
+Keep roughly 10% of cash unreserved for rolls and adjustments.
+
 ## Router signals: HOLD_SHARES / RESUME_WHEEL
 These come from the backtested wheel-vs-hold router: when the TimesFM 30d
 forecast crosses the threshold, the scanner proposes holding shares uncapped
@@ -107,8 +120,33 @@ or
 # Prompt builder
 # ---------------------------------------------------------------------------
 
+# Fields worth showing for a competing signal — enough to judge capital
+# efficiency and risk, without the full signal dump
+PEER_FIELDS = ("signal", "strike", "premium", "premium_pct", "dte",
+               "assign_risk_pct", "called_away_pct", "timesfm_30d_pct",
+               "shares", "entry")
+
+
+def peer_summaries(all_signals: list[dict], current: dict) -> list[dict]:
+    """Compact summaries of the scan's OTHER signals — the candidates
+    competing with `current` for the same cash."""
+    peers = []
+    for s in all_signals:
+        if s is current:
+            continue
+        p = {"symbol": s.get("symbol", "?")}
+        for k in PEER_FIELDS:
+            if s.get(k) is not None:
+                p[k] = s[k]
+        if s.get("signal") == "SELL_PUT" and s.get("strike"):
+            p["collateral"] = float(s["strike"]) * 100
+        peers.append(p)
+    return peers
+
+
 def build_prompt(signal: dict, portfolio_state: dict, kronos: dict,
-                 open_positions: list[dict] | None = None) -> str:
+                 open_positions: list[dict] | None = None,
+                 peer_signals: list[dict] | None = None) -> str:
     lines = ["## Signal"]
     for k, v in signal.items():
         lines.append(f"  {k}: {v}")
@@ -116,6 +154,27 @@ def build_prompt(signal: dict, portfolio_state: dict, kronos: dict,
     lines.append("\n## Portfolio state")
     lines.append(f"  Cash available for collateral: ${portfolio_state.get('available', 0):,.0f}")
     lines.append(f"  Collateral required:           ${portfolio_state.get('required', 0):,.0f}")
+
+    if peer_signals:
+        lines.append(f"\n## Other pending signals this scan ({len(peer_signals)})"
+                     f" — competing for the same cash")
+        for p in peer_signals:
+            parts = [f"{p.get('symbol', '?')} {p.get('signal', '?')}"]
+            if p.get("strike") is not None:
+                parts.append(f"strike ${p['strike']}")
+            if p.get("premium") is not None:
+                parts.append(f"premium ${p['premium']}/sh")
+            if p.get("premium_pct") is not None:
+                parts.append(f"({p['premium_pct']}%)")
+            if p.get("dte") is not None:
+                parts.append(f"{p['dte']} DTE")
+            if p.get("collateral") is not None:
+                parts.append(f"collateral ${p['collateral']:,.0f}")
+            if p.get("assign_risk_pct") is not None:
+                parts.append(f"assign_risk {p['assign_risk_pct']}%")
+            if p.get("timesfm_30d_pct") is not None:
+                parts.append(f"timesfm_30d {p['timesfm_30d_pct']:+.1f}%")
+            lines.append("  - " + "  ".join(parts))
 
     sym = signal.get("symbol", "?")
     if open_positions:
@@ -220,8 +279,12 @@ class AutoOverseer:
         except Exception:
             open_positions = []
 
+        # Competing signals from the same scan — set by live_scanner's loop
+        peers = peer_summaries(getattr(scanner, "_current_scan_signals", []), s)
+
         prompt   = build_prompt(s, portfolio_state, kronos,
-                                open_positions=open_positions)
+                                open_positions=open_positions,
+                                peer_signals=peers)
         raw      = self.llm.chat(system=OVERSEER_SYSTEM, user=prompt)
         decision, reason = parse_llm_response(raw) if raw else ("no", "LLM returned empty response")
 

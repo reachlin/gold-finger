@@ -324,9 +324,13 @@ live_scanner.py
    concentration and correlated-assignment risk, expiry laddering
    (small positions free capital in slices), real-chain liquidity
    (bid/ask), and a cash reserve for rolls.
-   Step 1: list the scan's other pending candidates in each signal's
-   prompt (like open positions) + an allocation section in
-   OVERSEER_SYSTEM so the LLM sees opportunity cost.
+   Step 1 — DONE (2026-07-04): each signal's prompt lists the scan's
+   other pending candidates ("Other pending signals this scan", compact
+   per-peer summary via peer_summaries()) and OVERSEER_SYSTEM has a
+   "Capital allocation" section: rejecting an acceptable signal to keep
+   collateral for a stronger peer is explicitly valid; prefer premium/day
+   per collateral $, proven-edge names, diversification, laddering,
+   real-chain quotes; keep ~10% cash reserve.
    Step 2 (measurable): deterministic ranking — yield/day per collateral
    $ with a concentration penalty, deploy down the ranking until budget
    is spent; backtest it with the existing harness.
