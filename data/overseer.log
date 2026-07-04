@@ -11868,3 +11868,9 @@ SKIPPED: PG SELL_PUT — budget block
     KO     SELL_PUT  strike $77.26  prem $74  collat $7,726  exp 2026-07-31 (28d left)  [opened 2026-07-01]
     PG     SELL_PUT  strike $138.63  prem $116  collat $13,863  exp 2026-07-31 (28d left)  [opened 2026-07-01]
 Scanner exiting. Restart tomorrow (9am–4pm ET).
+TEE_TEST_1783142878
+  [AutoOverseer] LLM: LLMClient(provider='anthropic', model='claude-haiku-4-5-20251001')  paper=True
+  [MarketCheck] 2026-07-04 (Saturday): market CLOSED (NYSE calendar)
+  [AutoOverseer] LLM: LLMClient(provider='anthropic', model='claude-haiku-4-5-20251001')  paper=True
+  [MarketCheck] 2026-07-04 (Saturday): market CLOSED (NYSE calendar)
+  [MarketCheck] sleeping 7.4h until the next 09:00 ET calendar check

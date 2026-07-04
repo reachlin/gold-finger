@@ -139,6 +139,37 @@ def test_market_closed_independence_day_observed():
     assert market_open_on(date(2026, 7, 3)) is False
 
 
+def test_seconds_until_market_check_before_9am():
+    """Before 9am ET → sleep until 9am today."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from schwab.auto_overseer import seconds_until_market_check
+    now = datetime(2026, 7, 4, 5, 0, tzinfo=ZoneInfo("America/New_York"))
+    assert seconds_until_market_check(now) == 4 * 3600
+
+
+def test_seconds_until_market_check_after_9am():
+    """At/after 9am ET → sleep until 9am tomorrow (no hot restart loop)."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from schwab.auto_overseer import seconds_until_market_check
+    now = datetime(2026, 7, 4, 12, 0, tzinfo=ZoneInfo("America/New_York"))
+    assert seconds_until_market_check(now) == 21 * 3600
+
+
+def test_check_market_open_sleeps_when_closed(monkeypatch):
+    """A closed day must sleep instead of returning immediately — the
+    container restart policy would otherwise hot-loop and spam Slack."""
+    import schwab.auto_overseer as ao
+    naps, slacks = [], []
+    monkeypatch.setattr(ao.time, "sleep", lambda s: naps.append(s))
+    monkeypatch.setattr(ao, "market_open_on", lambda d: False)
+    result = ao._check_market_open(llm=None, send_slack=slacks.append)
+    assert result is False
+    assert len(naps) == 1 and naps[0] > 60      # slept until next check
+    assert len(slacks) == 1                     # exactly one notification
+
+
 # ---------------------------------------------------------------------------
 # Tests for parse_llm_response
 # ---------------------------------------------------------------------------

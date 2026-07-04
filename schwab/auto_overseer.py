@@ -25,6 +25,7 @@ Environment variables (alternative to CLI flags):
 import os
 import sys
 import json
+import time
 import argparse
 
 from dotenv import load_dotenv
@@ -328,6 +329,27 @@ def market_open_on(day) -> "bool | None":
         return None
 
 
+def seconds_until_market_check(now_et) -> float:
+    """
+    Seconds until the next 09:00 ET. On a closed day the overseer sleeps
+    this long before exiting — otherwise the container's restart policy
+    hot-loops the process every few seconds, re-sending the "market
+    closed" Slack notification on every cycle (observed 2026-07-04).
+    """
+    from datetime import timedelta
+    target = now_et.replace(hour=9, minute=0, second=0, microsecond=0)
+    if now_et >= target:
+        target += timedelta(days=1)
+    return (target - now_et).total_seconds()
+
+
+def _sleep_until_next_check(now_et) -> None:
+    sleep_s = seconds_until_market_check(now_et)
+    print(f"  [MarketCheck] sleeping {sleep_s / 3600:.1f}h until the next "
+          f"09:00 ET calendar check")
+    time.sleep(sleep_s)
+
+
 MARKET_CHECK_SYSTEM = """You are a US stock market calendar expert.
 Answer ONLY with valid JSON: {"open": true, "reason": "brief reason"}
 or {"open": false, "reason": "brief reason"}
@@ -355,6 +377,7 @@ def _check_market_open(llm: "LLMClient", send_slack) -> bool:
         if not cal_open:
             send_slack(f"*Market closed today* ({today}, {weekday}): NYSE calendar."
                        f"\nOverseer will not scan.")
+            _sleep_until_next_check(now_et)
         return cal_open
 
     prompt = (f"Today in US Eastern Time is {today.isoformat()} ({weekday}). "
@@ -377,6 +400,7 @@ def _check_market_open(llm: "LLMClient", send_slack) -> bool:
     print(f"  [MarketCheck] {today} ({weekday}): market {status} — {reason}")
     if not is_open:
         send_slack(f"*Market closed today* ({today}, {weekday}): {reason}\nOverseer will not scan.")
+        _sleep_until_next_check(now_et)
     return is_open
 
 
