@@ -270,6 +270,16 @@ live_scanner.py
    in 2025, so even 2024 bars may brush its pretraining window — the
    only fully clean data is live paper trading from here on; (c) no
    transaction costs on router share trades (~2-4 round trips/yr).
-   Next step if deploying: wire hold-mode into the live scanner as a
-   mechanical scanner-side gate at τ=3.5% (mid-plateau), not an LLM
-   advisory — and let paper trading provide the clean out-of-sample.
+
+   **DEPLOYED to the scanner (2026-07-04), mechanical-proposes /
+   LLM-disposes:** when the cached TimesFM forecast crosses τ=3.5%
+   (wheel_router.ROUTER_TAU), the scanner emits HOLD_SHARES /
+   RESUME_WHEEL signals; the AutoOverseer approves by default (that is
+   the backtested policy) and vetoes only on context the models can't
+   see (earnings/halt/macro — see OVERSEER_SYSTEM). While a hold is
+   active the Scavenger is suppressed for that symbol. Hold positions
+   persist in data/paper_router_holds.json; proposals dedup per
+   day/symbol/action. Real mode prints the suggested share trade but
+   never places automated equity orders. Vetoes land in overseer.log —
+   after a few weeks of paper trading, compare LLM-mediated vs pure
+   mechanical policy and keep the winner.

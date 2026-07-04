@@ -101,6 +101,66 @@ def load_probs(symbol: str, data_dir: str) -> "np.ndarray | None":
 
 
 # ---------------------------------------------------------------------------
+# Live scanner side — mechanical proposes, LLM disposes.
+#
+# The scanner calls live_route() with the cached TimesFM forecast; the
+# resulting HOLD_SHARES / RESUME_WHEEL signal goes through the AutoOverseer
+# like any other signal (default APPROVE — the mechanical policy is the
+# backtested one; the LLM vetoes only on context the models can't see).
+# Approved holds persist in a JSON file so hold mode survives restarts.
+# ---------------------------------------------------------------------------
+
+ROUTER_TAU = 3.5   # % — mid-plateau of the 2026-07-04 experiments
+                   # (full history and 2024+ validation both hold at 3.0-4.0)
+
+
+def live_route(forecast_pct: "float | None", in_hold: bool) -> "str | None":
+    """HOLD_SHARES to enter hold mode, RESUME_WHEEL to exit, None to stay."""
+    if forecast_pct is None:
+        return None
+    if not in_hold and forecast_pct >= ROUTER_TAU:
+        return "HOLD_SHARES"
+    if in_hold and forecast_pct < ROUTER_TAU:
+        return "RESUME_WHEEL"
+    return None
+
+
+def load_holds(path: str) -> dict:
+    """{symbol: {"shares", "entry", "date"}} — {} if no file."""
+    import json
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_holds(path: str, holds: dict) -> None:
+    import json
+    with open(path, "w") as f:
+        json.dump(holds, f, indent=2)
+
+
+def enter_hold(path: str, symbol: str, shares: int, entry_price: float,
+               date: str) -> None:
+    holds = load_holds(path)
+    holds[symbol] = {"shares": shares, "entry": entry_price, "date": date}
+    save_holds(path, holds)
+
+
+def exit_hold(path: str, symbol: str, exit_price: float) -> "float | None":
+    """Remove the hold and return realized P&L, or None if not held."""
+    holds = load_holds(path)
+    pos = holds.pop(symbol, None)
+    if pos is None:
+        return None
+    save_holds(path, holds)
+    return (exit_price - pos["entry"]) * pos["shares"]
+
+
+# ---------------------------------------------------------------------------
 # TimesFM as the predictor — zero-shot, so walk-forward is free of training
 # leakage by construction: the context at bar i is the trailing SMA5 window
 # ending at bar i, nothing else.

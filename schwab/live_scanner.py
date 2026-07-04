@@ -33,6 +33,7 @@ from options_pricer import historical_vol
 import options_ledger as ol
 import assignment_risk
 import timesfm_advisor
+import wheel_router
 from chain_quotes import requote_signal
 from vault76.overseer import Overseer
 from vault76.armory.raider import Raider
@@ -245,6 +246,12 @@ _upside_models: dict = {}
 
 # TimesFM zero-shot 30-day SMA5 forecasts — cached at startup, advisory only
 _timesfm_cache: dict = {}
+
+# Wheel-vs-hold router: hold mode persists across restarts; proposals are
+# deduped per (date, symbol, action) so a rejected one doesn't re-fire all day
+ROUTER_HOLDS_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "data", "paper_router_holds.json")
+_router_proposed: set = set()
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 
 # ---------------------------------------------------------------------------
@@ -346,6 +353,35 @@ def _scan_all(client, regime: str = Overseer.RECLAMATION,
         # TimesFM advisory: zero-shot 30-day SMA5 forecast, attached to every
         # signal on this symbol as a second foundation-model view next to Kronos
         tfm_pct = timesfm_advisor.advise(_timesfm_cache, symbol)
+
+        # Wheel-vs-hold router: mechanical proposal at ROUTER_TAU, the LLM
+        # disposes. While a hold is active the Scavenger is suppressed for
+        # this symbol (that's the point — don't cap the runner).
+        router_holds = wheel_router.load_holds(ROUTER_HOLDS_PATH)
+        in_hold      = symbol in router_holds
+        action       = wheel_router.live_route(tfm_pct, in_hold)
+        close        = float(df_ind.iloc[-1]["close"])
+        dedup_key    = (str(pd.Timestamp.now().date()), symbol, action)
+        if action is not None and dedup_key not in _router_proposed:
+            _router_proposed.add(dedup_key)
+            sig = {"symbol": symbol, "signal": action, "card": "router",
+                   "close": round(close, 2), "timesfm_30d_pct": tfm_pct,
+                   "router_tau": wheel_router.ROUTER_TAU}
+            if action == "HOLD_SHARES":
+                sig["shares"] = max(1, int(BUDGET_PER_TRADE / close))
+                sig["reason"] = (f"Router: TimesFM 30d forecast {tfm_pct:+.1f}% >= "
+                                 f"{wheel_router.ROUTER_TAU}% — hold shares "
+                                 f"uncapped instead of wheeling")
+            else:
+                pos = router_holds[symbol]
+                sig["shares"]     = pos["shares"]
+                sig["hold_entry"] = pos["entry"]
+                sig["hold_date"]  = pos["date"]
+                sig["unrealized"] = round((close - pos["entry"]) * pos["shares"], 2)
+                sig["reason"] = (f"Router: TimesFM 30d forecast {tfm_pct:+.1f}% < "
+                                 f"{wheel_router.ROUTER_TAU}% — resume wheeling")
+            signals.append(sig)
+
         # The Raider: buy pullbacks in uptrends
         r = _raider.scan(symbol, df_ind, regime=regime)
         if r["signal"] != "NONE":
@@ -362,7 +398,9 @@ def _scan_all(client, regime: str = Overseer.RECLAMATION,
         # The Scavenger: sell options on sideways stocks.
         # Model signals are re-quoted against the real Schwab chain — real
         # strike/premium/IV/delta, or dropped if the real premium is too thin.
-        s = _scavenger.scan(symbol, df_ind, regime=regime)
+        # Suppressed while a router hold is active on this symbol.
+        s = (_scavenger.scan(symbol, df_ind, regime=regime)
+             if not in_hold else {"signal": "NONE"})
         if s["signal"] != "NONE":
             s = requote_signal(client, s)
             if s is not None:
@@ -378,7 +416,8 @@ def _scan_all(client, regime: str = Overseer.RECLAMATION,
                         s["model_auc"] = auc
                 signals.append(s)
         # Wheel phase 2: assigned shares → sell covered calls
-        if symbol in holdings:
+        # (also suppressed while a router hold is active — don't cap the run)
+        if symbol in holdings and not in_hold:
             c = _scavenger.scan(symbol, df_ind, regime=regime,
                                 cost_basis=holdings[symbol]["cost_basis"])
             if c["signal"] != "NONE":
@@ -534,7 +573,22 @@ def _print_signal(s: dict, paper: bool = False, kronos_cache: dict | None = None
                   + (f", AUC {s['model_auc']}" if s.get("model_auc") else "")
                   + ")")
 
-    if s.get("timesfm_30d_pct") is not None:
+    elif sig == "HOLD_SHARES":
+        print(f"SHARES:  {s['shares']}  (≈${s['shares'] * s.get('close', 0):,.0f})")
+        print(f"ROUTER:  TimesFM 30d {s['timesfm_30d_pct']:+.1f}%  "
+              f"(τ = {s.get('router_tau', '?')}%)")
+        print(f"POLICY:  backtested wheel-vs-hold router — default APPROVE; "
+              f"veto only on context (earnings/halt/macro)")
+
+    elif sig == "RESUME_WHEEL":
+        print(f"SHARES:  {s['shares']}  held since {s.get('hold_date', '?')} "
+              f"@ ${s.get('hold_entry', '?')}")
+        print(f"UNREAL:  ${s.get('unrealized', 0):+,.2f}")
+        print(f"ROUTER:  TimesFM 30d {s['timesfm_30d_pct']:+.1f}%  "
+              f"(τ = {s.get('router_tau', '?')}%)")
+
+    if sig not in ("HOLD_SHARES", "RESUME_WHEEL") \
+            and s.get("timesfm_30d_pct") is not None:
         print(f"TIMESFM: 30d SMA5 forecast {s['timesfm_30d_pct']:+.1f}% "
               f"(zero-shot advisory)")
     print(f"REASON:  {s['reason']}")
@@ -855,6 +909,12 @@ def main():
     global _timesfm_cache
     _timesfm_cache = timesfm_advisor.load_cache(WATCHLIST, DATA_DIR)
 
+    router_holds = wheel_router.load_holds(ROUTER_HOLDS_PATH)
+    if router_holds:
+        print("  [Router] active holds: "
+              + ", ".join(f"{sym} {p['shares']}sh @ ${p['entry']}"
+                          for sym, p in router_holds.items()))
+
     # Settle overnight expiries/assignments before the briefing
     try:
         _process_option_ledger(client)
@@ -999,6 +1059,25 @@ def main():
                         else:
                             print(f"  Suggested: {sig} {s['symbol']} ${s['strike']} strike, "
                                   f"${s['dte']}d DTE — collect ${s['premium']*100:.0f}/contract")
+                    elif sig == "HOLD_SHARES":
+                        wheel_router.enter_hold(
+                            ROUTER_HOLDS_PATH, s["symbol"], s["shares"],
+                            s["close"], str(pd.Timestamp.now().date()))
+                        print(f"APPROVED: {s['symbol']} HOLD_SHARES — "
+                              f"{s['shares']} sh @ ${s['close']}; Scavenger "
+                              f"suppressed until RESUME_WHEEL")
+                        if not args.paper:
+                            print(f"  Suggested: BUY {s['shares']} {s['symbol']} "
+                                  f"@ market (router hold — no automated order)")
+                    elif sig == "RESUME_WHEEL":
+                        pnl = wheel_router.exit_hold(
+                            ROUTER_HOLDS_PATH, s["symbol"], s["close"])
+                        print(f"APPROVED: {s['symbol']} RESUME_WHEEL — hold "
+                              f"closed @ ${s['close']}"
+                              + (f"  P&L ${pnl:+,.2f}" if pnl is not None else ""))
+                        if not args.paper:
+                            print(f"  Suggested: SELL {s['shares']} {s['symbol']} "
+                                  f"@ market (router exit — no automated order)")
                     print(VERDICT_OK)
 
                 else:  # skip

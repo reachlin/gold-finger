@@ -79,6 +79,25 @@ def test_overseer_system_documents_lgbm_advisories():
         assert field in OVERSEER_SYSTEM, f"missing field guide for {field}"
 
 
+def test_overseer_system_documents_router_signals():
+    """Router signals: default approve (backtested policy), veto on context."""
+    from schwab.auto_overseer import OVERSEER_SYSTEM
+    assert "HOLD_SHARES" in OVERSEER_SYSTEM
+    assert "RESUME_WHEEL" in OVERSEER_SYSTEM
+    assert "default is APPROVE" in OVERSEER_SYSTEM
+
+
+def test_real_order_skipped_for_router_signals(monkeypatch, capsys):
+    """Router signals are strategy-state changes, not options orders —
+    real mode must never try to build an OCC order from them."""
+    from schwab.auto_overseer import AutoOverseer
+    monkeypatch.setenv("REALLY_REAL", "true")
+    ao = AutoOverseer.__new__(AutoOverseer)          # skip LLM init
+    for sig in ("HOLD_SHARES", "RESUME_WHEEL"):
+        ao._place_real_order({"signal": sig, "symbol": "NVDA"})
+        assert "no automated real order" in capsys.readouterr().out
+
+
 # ---------------------------------------------------------------------------
 # Tests for OCC option symbol builder
 # ---------------------------------------------------------------------------

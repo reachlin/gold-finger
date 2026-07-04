@@ -61,6 +61,17 @@ several near-strike puts stacked before the same expiry on a volatile name).
 - SKIP if yield/DTE < 0.02% per day (not enough premium for the capital tie-up)
 - APPROVE if HV 15–50%, ADX < 22, yield > 0.03%/day, quality company
 
+## Router signals: HOLD_SHARES / RESUME_WHEEL
+These come from the backtested wheel-vs-hold router: when the TimesFM 30d
+forecast crosses the threshold, the scanner proposes holding shares uncapped
+instead of wheeling (HOLD_SHARES), or selling the held shares and resuming
+the wheel (RESUME_WHEEL). This mechanical policy is the validated one
+(2015-2026 and 2024+ backtests) — the default is APPROVE. Veto ONLY for
+context the models cannot see: earnings within ~5 trading days, pending
+corporate action or trading halt, or an obvious macro shock today. Do not
+veto merely because the forecast seems optimistic — that judgment is
+already priced into the threshold.
+
 ## Signal field guide
 - quote_source: "schwab_chain" = real premium/IV/delta from the live chain
   (trust these numbers); "model" = Black-Scholes estimate on historical vol
@@ -228,6 +239,12 @@ class AutoOverseer:
         Place a real Schwab options SELL_TO_OPEN order.
         Requires REALLY_REAL=true env var as a hard safety gate.
         """
+        if s.get("signal") not in ("SELL_PUT", "SELL_CALL"):
+            # Router/equity signals are strategy-state changes, not options
+            # orders — the scanner prints the suggested share trade instead.
+            print(f"  [AutoOverseer] {s.get('signal')} — no automated real "
+                  f"order; manage the share trade manually")
+            return
         if os.environ.get("REALLY_REAL", "").lower() != "true":
             print("  [AutoOverseer] Real order suppressed — set REALLY_REAL=true to enable")
             return

@@ -108,6 +108,54 @@ class TestWalkForwardTimesFM:
                        and e["put_entry_i"] >= first_valid for e in events)
 
 
+class TestLiveRoute:
+    """Live scanner routing: mechanical proposal, LLM disposes."""
+
+    def test_enter_hold_at_or_above_tau(self):
+        assert wr.live_route(wr.ROUTER_TAU, in_hold=False) == "HOLD_SHARES"
+        assert wr.live_route(9.9, in_hold=False) == "HOLD_SHARES"
+
+    def test_no_action_below_tau_when_flat(self):
+        assert wr.live_route(wr.ROUTER_TAU - 0.1, in_hold=False) is None
+
+    def test_exit_hold_below_tau(self):
+        assert wr.live_route(wr.ROUTER_TAU - 0.1, in_hold=True) == "RESUME_WHEEL"
+
+    def test_stay_in_hold_at_or_above_tau(self):
+        assert wr.live_route(wr.ROUTER_TAU, in_hold=True) is None
+
+    def test_none_forecast_never_routes(self):
+        assert wr.live_route(None, in_hold=False) is None
+        assert wr.live_route(None, in_hold=True) is None
+
+
+class TestHoldsFile:
+    """JSON persistence of router hold positions."""
+
+    def test_missing_file_is_empty(self, tmp_path):
+        assert wr.load_holds(str(tmp_path / "none.json")) == {}
+
+    def test_enter_and_load_roundtrip(self, tmp_path):
+        path = str(tmp_path / "holds.json")
+        wr.enter_hold(path, "NVDA", shares=3, entry_price=199.19,
+                      date="2026-07-04")
+        holds = wr.load_holds(path)
+        assert holds["NVDA"]["shares"] == 3
+        assert holds["NVDA"]["entry"] == 199.19
+
+    def test_exit_hold_returns_pnl_and_clears(self, tmp_path):
+        path = str(tmp_path / "holds.json")
+        wr.enter_hold(path, "NVDA", shares=3, entry_price=200.0,
+                      date="2026-07-04")
+        pnl = wr.exit_hold(path, "NVDA", exit_price=210.0)
+        assert pnl == pytest.approx(30.0)
+        assert "NVDA" not in wr.load_holds(path)
+
+    def test_exit_unknown_symbol_returns_none(self, tmp_path):
+        path = str(tmp_path / "holds.json")
+        assert wr.exit_hold(path, "ZZZ", exit_price=100.0) is None
+
+
 class TestSinceFilter:
     """--since window: attribute each event to its last bar's date."""
 
