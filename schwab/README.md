@@ -237,11 +237,30 @@ live_scanner.py
    backtest_scavenger.py; experiment runner backtest_router.py; report at
    data/backtest_router_2026-07-04.txt.
 
-   Result vs scavenger-only baseline edge -$46,043: τ=0.50 → -$58,836,
-   τ=0.60 → -$44,621, τ=0.70 → -$47,610. Best case is +$1.4K (noise);
-   per-symbol swings are huge and threshold-sensitive (AMD +$16.7K better
-   @0.60 — proof the mechanism works when the prediction is right — but
-   GOOGL -$10K, NVDA -$8K worse). Bottleneck is the predictor, not the
-   routing rule: LGBM holdout AUCs are ~0.5. Revisit only with a better
-   30d-rally predictor (e.g. walk-forward TimesFM from item 2, or a plain
-   momentum/ADX rule as a baseline predictor).
+   LGBM predictor result vs scavenger-only baseline edge -$46,043:
+   τ=0.50 → -$58,836, τ=0.60 → -$44,621, τ=0.70 → -$47,610. Best case is
+   +$1.4K (noise); per-symbol swings are huge and threshold-sensitive.
+   Bottleneck is the predictor (holdout AUC ~0.5), not the routing rule.
+
+   **TimesFM predictor result (2026-07-04): the router works.** Per-bar
+   zero-shot 30d SMA5 forecast (`--predictor timesfm`, series cached in
+   data/router_cache/), route when forecast >= τ%:
+   τ=3.0 → **-$16,748**, τ=3.5 → -$18,785, τ=4.0 → -$20,539 — a stable
+   plateau recovering $25-29K of the -$46K deficit, with broad per-symbol
+   gains (UNH +$8.9K, GOOGL +$6.3K, TSLA +$5.7K, IBM +$4.9K @3.0) and
+   small concentrated losses (XOM -$2.8K worst). Falls apart outside the
+   band: τ=2.0 → -$58,540 (over-routing), τ=6.0 → -$43,648 (never fires).
+   Adding unchanged Raider (+$8.4K) and Chemist (+$22.2K) books, the
+   routed portfolio edge turns POSITIVE: ≈ +$14K vs B&H — first
+   configuration to beat buy-and-hold. Reports:
+   data/backtest_router_tfm_2026-07-04.txt (2/4/6 sweep),
+   data/backtest_router_tfm_sweep_2026-07-04.txt (3/3.5/4/4.5).
+
+   Caveats before deploying to the live scanner: (a) threshold chosen
+   in-sample — the wide 3-4% plateau mitigates but doesn't eliminate;
+   (b) TimesFM's pretraining data may include these very price series
+   pre-~2024, so the early backtest years could flatter it (Kronos has
+   the same issue); (c) router share trades carry no transaction costs
+   in the sim (~2-4 round trips/symbol/yr — small). Suggested next step:
+   validate on 2024+ bars only (post-pretraining), then wire hold-mode
+   into the live scanner as a scanner-side gate (not an LLM advisory).

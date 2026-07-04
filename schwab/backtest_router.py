@@ -12,17 +12,25 @@ For each symbol:
 Baseline reference: checkpoint 2026-07-04 — scavenger-only edge is what
 this experiment moves; Raider/Chemist books are untouched.
 
+Predictors:
+  lgbm    — walk-forward LGBM P(>8% rally in 30d); thresholds are probabilities
+  timesfm — per-bar zero-shot TimesFM 30d SMA5 forecast; thresholds are %
+            (forecast series cached in data/router_cache/, resumable)
+
 Usage:
   /Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/backtest_router.py
+  /Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/backtest_router.py --predictor timesfm
   /Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/backtest_router.py AMD GOOGL
 """
 import os
 import sys
 import time
+import argparse
 
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import numpy as np
 import pandas as pd
 
 from trend_scanner import compute_indicators
@@ -31,17 +39,47 @@ import wheel_router
 from run_backtest import WATCHLIST, _load_df, _bnh_pnl
 
 DATA_DIR   = os.path.join(os.path.dirname(__file__), "..", "data")
-THRESHOLDS = (0.50, 0.60, 0.70)
+CACHE_DIR  = os.path.join(DATA_DIR, "router_cache")
+THRESHOLDS = {
+    "lgbm":    (0.50, 0.60, 0.70),   # probability
+    "timesfm": (2.00, 4.00, 6.00),   # forecast % over 30 trading days
+}
+
+_tfm_forecast_fn = None   # TimesFM loaded once, on first uncached symbol
 
 
-def run_symbol(symbol: str, spy_df, vix_df) -> "dict | None":
+def _predictor_series(symbol: str, ind: pd.DataFrame,
+                      predictor: str) -> np.ndarray:
+    if predictor == "lgbm":
+        return wheel_router.walk_forward_probs(ind)
+
+    # timesfm — disk-cached: ~2.6k zero-shot forecasts per symbol
+    global _tfm_forecast_fn
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    cache_path = os.path.join(CACHE_DIR, f"{symbol.lower()}_tfm_{len(ind)}.npy")
+    if os.path.exists(cache_path):
+        return np.load(cache_path)
+    if _tfm_forecast_fn is None:
+        from timesfm_advisor import _load_forecast_fn
+        _tfm_forecast_fn = _load_forecast_fn()
+    series = wheel_router.walk_forward_timesfm(ind,
+                                               forecast_fn=_tfm_forecast_fn)
+    np.save(cache_path, series)
+    return series
+
+
+def run_symbol(symbol: str, spy_df, vix_df, predictor: str,
+               thresholds: tuple) -> "dict | None":
     df = _load_df(symbol)
     if df is None:
         return None
 
-    # Same post-dropna frame the scavenger backtest iterates — probs align 1:1
+    # Same post-dropna frame the scavenger backtest iterates — series align 1:1
     ind   = compute_indicators(df).dropna().reset_index(drop=True)
-    probs = wheel_router.walk_forward_probs(ind)
+    t0    = time.time()
+    probs = _predictor_series(symbol, ind, predictor)
+    if time.time() - t0 > 5:
+        print(f"    predictor series in {time.time() - t0:.0f}s", flush=True)
 
     base = walk_forward_scavenger(df, symbol, spy_df, vix_df)
     row  = {
@@ -49,7 +87,7 @@ def run_symbol(symbol: str, spy_df, vix_df) -> "dict | None":
         "bnh":      _bnh_pnl(df),
         "base_pnl": sum(e["pnl"] for e in base),
     }
-    for tau in THRESHOLDS:
+    for tau in thresholds:
         events = walk_forward_scavenger(df, symbol, spy_df, vix_df,
                                         router_probs=probs,
                                         router_threshold=tau)
@@ -61,7 +99,17 @@ def run_symbol(symbol: str, spy_df, vix_df) -> "dict | None":
 
 
 def main():
-    symbols = [s.upper() for s in sys.argv[1:]] or WATCHLIST
+    ap = argparse.ArgumentParser()
+    ap.add_argument("symbols", nargs="*", help="default: full watchlist")
+    ap.add_argument("--predictor", choices=("lgbm", "timesfm"),
+                    default="lgbm")
+    ap.add_argument("--thresholds", type=str, default=None,
+                    help="comma-separated, e.g. 3.0,4.0,5.0")
+    args = ap.parse_args()
+
+    symbols    = [s.upper() for s in args.symbols] or WATCHLIST
+    thresholds = (tuple(float(t) for t in args.thresholds.split(","))
+                  if args.thresholds else THRESHOLDS[args.predictor])
 
     spy_path = os.path.join(DATA_DIR, "spy_history.csv")
     vix_path = os.path.join(DATA_DIR, "vix_history.csv")
@@ -72,16 +120,19 @@ def main():
     rows = []
     for sym in symbols:
         print(f"  {sym}...", flush=True)
-        row = run_symbol(sym, spy_df, vix_df)
+        row = run_symbol(sym, spy_df, vix_df, args.predictor, thresholds)
         if row is not None:
             rows.append(row)
 
     # ── Report ────────────────────────────────────────────────────────────
-    taus = THRESHOLDS
+    taus = thresholds
+    unit = "P(>8% rally in 30d)" if args.predictor == "lgbm" \
+        else "TimesFM 30d SMA5 forecast %"
     print()
     print("═" * 100)
-    print("  WHEEL-vs-HOLD ROUTER  —  Scavenger book only, edge vs B&H per variant")
-    print("  Router: hold shares uncapped while walk-forward P(>8% rally in 30d) >= threshold")
+    print(f"  WHEEL-vs-HOLD ROUTER  —  predictor: {args.predictor.upper()}  "
+          f"—  Scavenger book only, edge vs B&H")
+    print(f"  Router: hold shares uncapped while walk-forward {unit} >= threshold")
     print("═" * 100)
     hdr = f"  {'Symbol':7s}{'B&H':>12s}{'base edge':>12s}"
     for tau in taus:

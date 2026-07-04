@@ -98,3 +98,52 @@ def load_probs(symbol: str, data_dir: str) -> "np.ndarray | None":
     except Exception as exc:
         print(f"  [Router] {symbol}: skipped ({exc})")
         return None
+
+
+# ---------------------------------------------------------------------------
+# TimesFM as the predictor — zero-shot, so walk-forward is free of training
+# leakage by construction: the context at bar i is the trailing SMA5 window
+# ending at bar i, nothing else.
+# ---------------------------------------------------------------------------
+
+MIN_CTX    = 100    # minimum SMA5 points before forecasting a bar
+BATCH_SIZE = 256    # contexts per model call
+
+
+def walk_forward_timesfm(df: pd.DataFrame, forecast_fn=None,
+                         batch_size: int = BATCH_SIZE) -> np.ndarray:
+    """
+    Per-bar zero-shot forecast of the SMA5 change over the next PRED_LEN
+    bars, in % (the same quantity timesfm_advisor caches for the live
+    scanner, computed at every bar). NaN during SMA/context warm-up.
+
+    The output plugs into walk_forward_scavenger(router_probs=...) with
+    router_threshold expressed in % (e.g. 4.0 = forecast >= +4%).
+    """
+    from timesfm_advisor import (SMA_WINDOW, PRED_LEN, CONTEXT_LEN,
+                                 _load_forecast_fn)
+
+    fn  = forecast_fn or _load_forecast_fn()
+    sma = df["close"].rolling(SMA_WINDOW).mean().to_numpy(dtype=np.float32)
+    n   = len(df)
+    out = np.full(n, np.nan)
+
+    contexts, idxs = [], []
+    for i in range(n):
+        if np.isnan(sma[i]):
+            continue
+        start = max(SMA_WINDOW - 1, i - CONTEXT_LEN + 1)
+        ctx   = sma[start:i + 1]
+        if len(ctx) < MIN_CTX:
+            continue
+        contexts.append(ctx)
+        idxs.append(i)
+
+    for b in range(0, len(contexts), batch_size):
+        batch = contexts[b:b + batch_size]
+        preds = np.asarray(fn(batch, PRED_LEN))
+        for k, i in enumerate(idxs[b:b + batch_size]):
+            now, pred = float(batch[k][-1]), float(preds[k][-1])
+            if now > 0:
+                out[i] = (pred / now - 1) * 100
+    return out

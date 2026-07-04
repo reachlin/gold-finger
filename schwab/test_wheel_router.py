@@ -61,6 +61,53 @@ class TestWalkForwardProbs:
         assert np.isnan(probs).all()
 
 
+class TestWalkForwardTimesFM:
+    """TimesFM-as-predictor: per-bar zero-shot 30d SMA5 forecast pct."""
+
+    @staticmethod
+    def _ramp_fn(pct: float):
+        """Every forecast ends pct above the context's last value."""
+        def fn(contexts, horizon):
+            return np.array([
+                np.linspace(c[-1], c[-1] * (1 + pct / 100), horizon)
+                for c in contexts
+            ])
+        return fn
+
+    def test_shape_warmup_and_values(self):
+        df = _trendy()
+        out = wr.walk_forward_timesfm(df, forecast_fn=self._ramp_fn(4.0))
+        assert len(out) == len(df)
+        assert np.isnan(out[:50]).all()            # SMA/context warm-up
+        valid = out[~np.isnan(out)]
+        assert len(valid) > 0
+        np.testing.assert_allclose(valid, 4.0, atol=0.01)
+
+    def test_no_lookahead_truncation_invariance(self):
+        """Forecast at bar i uses only the trailing context up to bar i."""
+        def echo_fn(contexts, horizon):
+            # forecast = last context value scaled by context mean parity —
+            # any deterministic function of the context works here
+            return np.array([np.full(horizon, c[-1] * (1 + (c.mean() % 0.01)))
+                             for c in contexts])
+        df   = _trendy()
+        full = wr.walk_forward_timesfm(df, forecast_fn=echo_fn)
+        cut  = wr.walk_forward_timesfm(df.iloc[:500].reset_index(drop=True),
+                                       forecast_fn=echo_fn)
+        np.testing.assert_allclose(full[:500], cut, equal_nan=True)
+
+    def test_routes_backtest_with_pct_threshold(self):
+        """The pct series plugs into the same router harness (τ in %)."""
+        from backtest_scavenger import walk_forward_scavenger
+        df  = _trendy()
+        out = wr.walk_forward_timesfm(df, forecast_fn=self._ramp_fn(6.0))
+        events = walk_forward_scavenger(df, "TEST", router_probs=out,
+                                        router_threshold=4.0)
+        first_valid = int(np.argmax(~np.isnan(out)))
+        assert not any(e["event"].startswith("put_")
+                       and e["put_entry_i"] >= first_valid for e in events)
+
+
 class TestRouterGateInBacktest:
     def test_hot_router_produces_holds_not_puts(self):
         from backtest_scavenger import walk_forward_scavenger
