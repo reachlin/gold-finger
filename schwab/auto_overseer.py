@@ -79,6 +79,11 @@ several near-strike puts stacked before the same expiry on a volatile name).
 - model_auc: chronological holdout AUC of the LGBM model behind the field
   above (0.5 = coin flip). Discount the advisory when AUC is below ~0.6;
   trust it more above ~0.7.
+- timesfm_30d_pct: TimesFM (zero-shot foundation model) forecast of the
+  SMA5 change over the next 30 trading days, in %. Independent second
+  opinion next to Kronos: both bearish on a SELL_PUT → stronger SKIP;
+  strongly positive on a SELL_CALL → shares likely called away / upside
+  capped. Treat as a trend hint, not a price target.
 
 ## Response format — ONLY valid JSON, no other text
 {"decision": "yes", "reason": "brief reason under 15 words"}

@@ -32,6 +32,7 @@ from trend_scanner import compute_indicators
 from options_pricer import historical_vol
 import options_ledger as ol
 import assignment_risk
+import timesfm_advisor
 from chain_quotes import requote_signal
 from vault76.overseer import Overseer
 from vault76.armory.raider import Raider
@@ -241,6 +242,9 @@ _scavenger = Scavenger()
 # P(>8% rally in 30d) for SELL_CALL (called-away risk).
 _assign_models: dict = {}
 _upside_models: dict = {}
+
+# TimesFM zero-shot 30-day SMA5 forecasts — cached at startup, advisory only
+_timesfm_cache: dict = {}
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 
 # ---------------------------------------------------------------------------
@@ -339,9 +343,14 @@ def _scan_all(client, regime: str = Overseer.RECLAMATION,
         df_ind = _fetch_with_indicators(client, symbol)
         if df_ind is None:
             continue
+        # TimesFM advisory: zero-shot 30-day SMA5 forecast, attached to every
+        # signal on this symbol as a second foundation-model view next to Kronos
+        tfm_pct = timesfm_advisor.advise(_timesfm_cache, symbol)
         # The Raider: buy pullbacks in uptrends
         r = _raider.scan(symbol, df_ind, regime=regime)
         if r["signal"] != "NONE":
+            if tfm_pct is not None:
+                r["timesfm_30d_pct"] = tfm_pct
             # LGBM advisory: high drop risk → the "pullback" may be a breakdown
             risk = assignment_risk.advise(_assign_models, symbol, df_ind)
             if risk is not None:
@@ -357,6 +366,8 @@ def _scan_all(client, regime: str = Overseer.RECLAMATION,
         if s["signal"] != "NONE":
             s = requote_signal(client, s)
             if s is not None:
+                if tfm_pct is not None:
+                    s["timesfm_30d_pct"] = tfm_pct
                 # LGBM advisory: P(>5% drop within 30 trading days).
                 # Never gates — shown to Claude/LLM next to Kronos.
                 risk = assignment_risk.advise(_assign_models, symbol, df_ind)
@@ -373,6 +384,8 @@ def _scan_all(client, regime: str = Overseer.RECLAMATION,
             if c["signal"] != "NONE":
                 c = requote_signal(client, c)
                 if c is not None:
+                    if tfm_pct is not None:
+                        c["timesfm_30d_pct"] = tfm_pct
                     # LGBM advisory: P(>8% rally within 30 trading days) —
                     # how likely the shares get called away at the strike.
                     up = assignment_risk.advise(_upside_models, symbol, df_ind)
@@ -521,6 +534,9 @@ def _print_signal(s: dict, paper: bool = False, kronos_cache: dict | None = None
                   + (f", AUC {s['model_auc']}" if s.get("model_auc") else "")
                   + ")")
 
+    if s.get("timesfm_30d_pct") is not None:
+        print(f"TIMESFM: 30d SMA5 forecast {s['timesfm_30d_pct']:+.1f}% "
+              f"(zero-shot advisory)")
     print(f"REASON:  {s['reason']}")
     print(f"{SIGNAL_END}")
     print("\n>>> Waiting for Claude verification... (yes=approve / n=skip / q=quit)")
@@ -834,6 +850,10 @@ def main():
 
     global _current_kronos_cache
     _current_kronos_cache = kronos_cache
+
+    # TimesFM zero-shot 30-day forecasts — second opinion next to Kronos
+    global _timesfm_cache
+    _timesfm_cache = timesfm_advisor.load_cache(WATCHLIST, DATA_DIR)
 
     # Settle overnight expiries/assignments before the briefing
     try:

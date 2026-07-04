@@ -208,19 +208,25 @@ live_scanner.py
 
 ## Plan — next experiments
 
-1. **TimesFM second opinion next to Kronos** (in progress). Cache a zero-shot
-   30-day SMA-direction forecast per symbol at scanner startup (same pattern
-   as the Kronos cache) and attach it to signals. Kronos + TimesFM agreeing
-   bearish is a stronger skip signal than either alone.
+1. **TimesFM second opinion next to Kronos** — DONE (timesfm_advisor.py).
+   Zero-shot 30-day SMA5 forecast per symbol cached at scanner startup
+   (same pattern as the Kronos cache), attached to all signals as
+   `timesfm_30d_pct`. Kronos + TimesFM agreeing bearish is a stronger
+   skip signal than either alone.
 
-2. **Backtest the LGBM advisory as a mechanical gate.** The walk-forward
-   backtests never consume the LGBM advisories — they only inform the live
-   LLM overseer, so their value is currently unmeasured (and holdout AUCs of
-   0.44–0.59 on real history are a warning sign). Experiment: in
-   `backtest_scavenger.py`, skip SELL_PUT entries when a walk-forward
-   `assign_risk_pct` > 60% (refit the per-symbol model periodically inside
-   the loop, no lookahead) and compare edge vs the 2026-07-04 checkpoint
-   baseline (-$15,506, 8/18). Expect minutes of runtime from the refits.
+2. **Backtest the advisories as mechanical gates.** The walk-forward
+   backtests never consume the LGBM or TimesFM advisories — they only
+   inform the live LLM overseer, so their value is currently unmeasured
+   (and LGBM holdout AUCs of 0.44–0.59 on real history are a warning
+   sign). Experiments, each vs the 2026-07-04 checkpoint baseline
+   (-$15,506, 8/18):
+   - LGBM gate: in `backtest_scavenger.py`, skip SELL_PUT entries when a
+     walk-forward `assign_risk_pct` > 60% (refit the per-symbol model
+     periodically inside the loop, no lookahead). Minutes of runtime.
+   - TimesFM gate: skip SELL_PUT when the walk-forward 30-day SMA5
+     forecast < -5% (one zero-shot forecast per bar per symbol, ~52k
+     forecasts batched — roughly 1-1.5h runtime). Same harness so both
+     advisories are measured on equal footing.
 
 3. **Wheel-vs-hold strategy router.** The negative edge is concentrated in
    trending growth names (AMD -$22K, GOOGL -$13K, HD -$11K, MSFT -$9K vs
