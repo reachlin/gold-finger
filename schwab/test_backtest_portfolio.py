@@ -96,6 +96,20 @@ class TestWalkForwardPortfolio:
         # only the allocation *behavior* is asserted here.
         assert wl["trades"] > 0 and al["trades"] > 0
 
+    def test_allocator_v2_policy_runs_with_priors(self):
+        res = bp.walk_forward_portfolio(_dfs(), capital=50_000,
+                                        policy="allocator_v2",
+                                        priors={"AAA": 0.4, "BBB": 0.1})
+        assert res["trades"] > 0
+
+    def test_edge_priors_are_floored_and_keyed_by_symbol(self):
+        import datetime
+        dfs = _dfs(n=300)
+        priors = bp.edge_priors(dfs, cutoff=datetime.date(2024, 12, 1))
+        assert set(priors) <= set(dfs)
+        for v in priors.values():
+            assert v >= bp.PRIOR_FLOOR
+
     def test_cash_accounting_is_consistent(self):
         """Everything is liquidated at the end: pnl equals sum of event pnl."""
         res = bp.walk_forward_portfolio(_dfs(), capital=50_000)

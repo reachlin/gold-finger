@@ -38,22 +38,30 @@ def cash_needed(signal: dict, budget_per_trade: float = DEFAULT_BUDGET) -> float
     return 0.0   # SELL_CALL (covered by held shares), RESUME_WHEEL (frees cash)
 
 
-def score(signal: dict, open_count: int = 0) -> float:
+def score(signal: dict, open_count: int = 0, prior: float = 1.0) -> float:
     """
     Capital efficiency: premium per day per collateral dollar, with a
     concentration penalty per position already open on the symbol.
+
+    prior (score v2): per-symbol edge prior — raw density alone measured
+    -$47K vs neutral order at $30K (portfolio backtest 2026-07-04)
+    because high-IV names have the fattest density and the worst wheel
+    edge. Multiplying by realized edge per collateral dollar re-weights
+    toward names where the wheel actually keeps its premium.
     """
     strike  = float(signal.get("strike", 0) or 0)
     premium = float(signal.get("premium", 0) or 0)
     dte     = float(signal.get("dte", 30) or 30)
     if strike <= 0 or dte <= 0:
         return 0.0
-    return (premium / (strike * dte)) * (CONCENTRATION_PENALTY ** open_count)
+    return (premium / (strike * dte)) * prior \
+        * (CONCENTRATION_PENALTY ** open_count)
 
 
 def rank_signals(signals: list[dict],
                  open_counts: "dict[str, int] | None" = None,
-                 score_puts: bool = True) -> list[dict]:
+                 score_puts: bool = True,
+                 priors: "dict[str, float] | None" = None) -> list[dict]:
     """
     Deterministic processing order for a scan's signal batch. Never drops
     a signal — the AutoOverseer still judges every one; this only decides
@@ -67,6 +75,7 @@ def rank_signals(signals: list[dict],
     risk/edge-adjusted score v2 measures positive.
     """
     open_counts = open_counts or {}
+    priors      = priors or {}
 
     free, scored, rest = [], [], []
     for s in signals:
@@ -79,6 +88,8 @@ def rank_signals(signals: list[dict],
             rest.append(s)
 
     if score_puts:
-        scored.sort(key=lambda s: score(s, open_counts.get(s.get("symbol"), 0)),
+        scored.sort(key=lambda s: score(s,
+                                        open_counts.get(s.get("symbol"), 0),
+                                        priors.get(s.get("symbol"), 1.0)),
                     reverse=True)
     return free + scored + rest

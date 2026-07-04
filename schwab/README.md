@@ -355,9 +355,20 @@ live_scanner.py
    quality sideways names have modest density and great outcomes.
    "Cheap ≠ good" applies to the score itself.
 
-   Next iteration (score v2): multiply the density score by a per-symbol
-   edge prior (e.g. per-symbol backtest edge per collateral $, floored
-   for unproven names, refreshed at each checkpoint) and re-run the
-   harness (44s per sweep). Until a v2 measures positive, prefer neutral
-   (watchlist) ordering at small capital — the LLM still sees peers and
-   the allocation field guide from step 1.
+   Score v2 (density × pre-2024 edge prior, floored at 0.05) — MEASURED
+   2026-07-04, verdict: NO robust winner exists. At $30K:
+   - Full history:  watchlist +$142.4K > v2 +$120.5K > v1 +$95.0K
+   - 2023-07+ OOS:  v1 +$28.3K > v2 +$22.8K > watchlist +$20.9K
+   The ranking FLIPS between windows: v1's full-history loss came from
+   missing the 2015-2021 supercycle names that neutral order happened to
+   fund; in the choppy 2023+ window density actually won (+$7.4K); the
+   backward-looking prior mis-ranked UNH (0.14) exactly when it mattered
+   most, so v2 middles in both windows. At $100K all policies tie.
+   Reports: data/backtest_portfolio_v2_full.txt / _v2_oos.txt.
+
+   Decision (minimax regret): keep NEUTRAL put ordering live
+   (score_puts=False). Worst-case regret — neutral $7.4K, v2 $21.9K,
+   v1 $47.4K. Cash-freeing-first tier stays (strictly dominant). The
+   LLM's peer context + allocation field guide (step 1) remains the
+   adaptive layer; revisit only with a prior that's stable across
+   regimes.

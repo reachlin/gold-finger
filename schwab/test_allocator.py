@@ -49,6 +49,10 @@ class TestScore:
         assert al.score(s, open_count=1) == pytest.approx(base * 0.5)
         assert al.score(s, open_count=2) == pytest.approx(base * 0.25)
 
+    def test_edge_prior_multiplies_score(self):
+        s = _put("UNH", 406.0, 4.0)
+        assert al.score(s, prior=0.4) == pytest.approx(al.score(s) * 0.4)
+
 
 class TestRankSignals:
     def test_cash_freeing_first_then_score_then_rest(self):
@@ -76,6 +80,16 @@ class TestRankSignals:
         assert al.rank_signals([]) == []
         one = [_put("KO", 79.0, 0.71)]
         assert al.rank_signals(one) == one
+
+    def test_priors_reorder_puts(self):
+        """v2: a modest-density name with a strong edge prior outranks a
+        juicy-density name with a weak prior — the fix for the -$47K
+        measurement where density starved UNH."""
+        ko  = _put("KO", 79.0, 0.71)     # density 3.0e-4, weak prior
+        unh = _put("UNH", 406.0, 3.2)    # density 2.6e-4, strong prior
+        ranked = al.rank_signals([ko, unh],
+                                 priors={"KO": 0.1, "UNH": 0.4})
+        assert ranked[0]["symbol"] == "UNH"
 
     def test_score_puts_false_keeps_put_order_neutral(self):
         """Portfolio backtest 2026-07-04: density-ranked puts LOST -$47K

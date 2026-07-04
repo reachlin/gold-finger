@@ -48,11 +48,44 @@ from strategy_params import FAST_RISKOFF_DROP, FAST_RISKOFF_COOLDOWN
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 
 
+PRIOR_FLOOR = 0.05   # minimum edge-prior weight — unproven/negative-edge
+                     # names stay tradeable, just last in line
+
+
+def edge_priors(dfs: dict, cutoff, spy_df=None, vix_df=None,
+                floor: float = PRIOR_FLOOR) -> dict:
+    """
+    Score-v2 prior: per-symbol scavenger edge per collateral dollar,
+    computed ONLY from data before `cutoff` — no lookahead into the
+    evaluation window. Floored so weak names are deprioritized, not banned.
+    """
+    from backtest_scavenger import walk_forward_scavenger
+    priors = {}
+    for sym, df in dfs.items():
+        dates = pd.to_datetime(df["datetime"]).dt.date
+        prior_df = df[dates < cutoff].reset_index(drop=True)
+        if len(prior_df) < MIN_HISTORY + DTE_BARS + 10:
+            continue
+        frame = compute_indicators(prior_df).dropna().reset_index(drop=True)
+        if len(frame) <= MIN_HISTORY:
+            continue
+        pnl  = sum(e["pnl"] for e in
+                   walk_forward_scavenger(prior_df, sym, spy_df, vix_df))
+        bnh  = (float(frame.iloc[-1]["close"])
+                - float(frame.iloc[MIN_HISTORY]["close"])) * SHARES
+        collateral = 0.95 * float(frame.iloc[-1]["close"]) * SHARES
+        priors[sym] = max((pnl - bnh) / collateral, floor)
+    return priors
+
+
 def _order_candidates(candidates: list[dict], policy: str,
-                      open_counts: dict, watchlist: list[str]) -> list[dict]:
+                      open_counts: dict, watchlist: list[str],
+                      priors: "dict | None" = None) -> list[dict]:
     """Processing order for one day's SELL_PUT candidates."""
     if policy == "allocator":
         return allocator.rank_signals(candidates, open_counts)
+    if policy == "allocator_v2":
+        return allocator.rank_signals(candidates, open_counts, priors=priors)
     order = {s: k for k, s in enumerate(watchlist)}
     return sorted(candidates, key=lambda c: order.get(c.get("symbol"), 999))
 
@@ -60,7 +93,8 @@ def _order_candidates(candidates: list[dict], policy: str,
 def walk_forward_portfolio(dfs: dict, capital: float,
                            policy: str = "allocator",
                            watchlist: "list[str] | None" = None,
-                           spy_df=None, vix_df=None) -> dict:
+                           spy_df=None, vix_df=None,
+                           priors: "dict | None" = None) -> dict:
     """
     Run the wheel across all symbols under one shared cash pool.
     Event pnl values are booked so that sum(event pnl) == total pnl after
@@ -181,7 +215,8 @@ def walk_forward_portfolio(dfs: dict, capital: float,
 
         # ── Entries: the day's candidates compete for shared cash ────────
         open_counts = {s: 1 for s, b in books.items() if b["state"] != FLAT}
-        for c in _order_candidates(candidates, policy, open_counts, watchlist):
+        for c in _order_candidates(candidates, policy, open_counts, watchlist,
+                                   priors=priors):
             sym, need = c["symbol"], float(c["strike"]) * SHARES
             if cash - committed >= need:
                 i = c["_i"]
@@ -256,32 +291,56 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("symbols", nargs="*", help="default: full watchlist")
     ap.add_argument("--capitals", default="30000,100000")
+    ap.add_argument("--start", default=None,
+                    help="truncate data to start here (YYYY-MM-DD) — with "
+                         "--prior-cutoff before it, the v2 prior is fully "
+                         "out-of-sample for the evaluation window")
+    ap.add_argument("--prior-cutoff", default="2024-01-01",
+                    help="v2 edge priors use only data before this date")
     args = ap.parse_args()
 
     symbols  = [s.upper() for s in args.symbols] or WATCHLIST
     capitals = [float(c) for c in args.capitals.split(",")]
+    cutoff   = pd.to_datetime(args.prior_cutoff).date()
 
-    dfs = {s: d for s in symbols if (d := _load_df(s)) is not None}
+    full_dfs = {s: d for s in symbols if (d := _load_df(s)) is not None}
+    dfs = full_dfs
+    if args.start:
+        start = pd.to_datetime(args.start).date()
+        dfs = {s: d[pd.to_datetime(d["datetime"]).dt.date >= start]
+               .reset_index(drop=True) for s, d in full_dfs.items()}
+        dfs = {s: d for s, d in dfs.items()
+               if len(d) >= MIN_HISTORY + DTE_BARS + 10}
+
     spy_path = os.path.join(DATA_DIR, "spy_history.csv")
     vix_path = os.path.join(DATA_DIR, "vix_history.csv")
     spy_df = pd.read_csv(spy_path, parse_dates=["datetime"]) if os.path.exists(spy_path) else None
     vix_df = pd.read_csv(vix_path, parse_dates=["datetime"]) if os.path.exists(vix_path) else None
 
     t0 = time.time()
+    # v2 priors always come from FULL history strictly before the cutoff —
+    # when --start >= --prior-cutoff the evaluation is fully out-of-sample
+    priors = edge_priors(full_dfs, cutoff, spy_df, vix_df)
+
+    window = f"from {args.start}" if args.start else "full history"
     print("═" * 96)
     print("  PORTFOLIO BACKTEST — shared cash pool, wheel (Scavenger) book")
-    print(f"  Symbols: {len(dfs)}   Policies: watchlist vs allocator")
+    print(f"  Symbols: {len(dfs)}   Window: {window}   "
+          f"v2 priors: data < {cutoff}")
+    print(f"  Priors: " + "  ".join(f"{s}:{p:.2f}"
+          for s, p in sorted(priors.items(), key=lambda kv: -kv[1])))
     print("═" * 96)
-    print(f"  {'Capital':>10s}  {'Policy':10s}{'P&L':>14s}{'Premiums':>13s}"
+    print(f"  {'Capital':>10s}  {'Policy':13s}{'P&L':>14s}{'Premiums':>13s}"
           f"{'Trades':>8s}{'Skipped':>9s}{'B&H eq-w':>13s}{'Edge':>13s}")
     print("  " + "─" * 92)
     for capital in capitals:
         bnh = _bnh_equal_weight(dfs, capital)
-        for policy in ("watchlist", "allocator"):
+        for policy in ("watchlist", "allocator", "allocator_v2"):
             r = walk_forward_portfolio(dfs, capital, policy=policy,
                                        watchlist=list(dfs),
-                                       spy_df=spy_df, vix_df=vix_df)
-            print(f"  {capital:>10,.0f}  {policy:10s}{r['pnl']:>+14,.0f}"
+                                       spy_df=spy_df, vix_df=vix_df,
+                                       priors=priors)
+            print(f"  {capital:>10,.0f}  {policy:13s}{r['pnl']:>+14,.0f}"
                   f"{r['premium_collected']:>13,.0f}{r['trades']:>8d}"
                   f"{r['skipped_for_cash']:>9d}{bnh:>+13,.0f}"
                   f"{r['pnl'] - bnh:>+13,.0f}")
