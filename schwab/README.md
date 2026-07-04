@@ -179,6 +179,35 @@ Edit `WATCHLIST` in `live_scanner.py` or `daily_signal.py` to change.
 
 ---
 
+## Top candidates & capital sizing (checkpoint 2026-07-04)
+
+![Top 6 by edge](../data/backtest_top6_edge_2026-07-04.png)
+
+Top 6 symbols by combined edge vs B&H (2015→2026): UNH, AMZN, IBM, META,
+TSLA, IONQ. Note the backtests assume **100 shares / 1 contract per trade,
+no compounding** — dollar edges rank per-symbol strategy quality; they are
+NOT account returns and have no relation to the $30K paper portfolio.
+
+Wheeling the **top 3** needs one contract of cash-secured collateral each
+(at 2026-06-26 closes, 5% OTM strikes):
+
+| Symbol | Close   | Strike | Collateral |
+|--------|--------:|-------:|-----------:|
+| UNH    | $427.89 |  ~$406 |    $40,600 |
+| AMZN   | $232.69 |  ~$221 |    $22,100 |
+| IBM    | $271.63 |  ~$258 |    $25,800 |
+| all 3  |         |        |  **$88,500** |
+
+**Reasonable capital: ~$95-100K** (collateral + ~10% cushion for
+assignments and same-symbol stacking). Smaller tiers: ~$55K → AMZN+IBM;
+~$30K → one name at a time (why the $30K paper account trades KO/PG —
+the budget check auto-skips big names). A $10K account fits none of the
+top 3 (KO ~$7.7K / IONQ ~$5.1K only); the router's HOLD_SHARES side is
+the accessible way into expensive names. Income scale at full size:
+~1-1.5% of collateral per monthly cycle ≈ $900-1,300/month gross.
+
+---
+
 ## Signal Flow Diagram
 
 ```
