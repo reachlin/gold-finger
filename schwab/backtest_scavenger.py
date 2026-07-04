@@ -46,10 +46,11 @@ RISK_FREE   = 0.05
 _TARGET_MIN = SCAV_PROFIT_TARGET_MIN
 _TARGET_MAX = SCAV_PROFIT_TARGET_MAX
 
-FLAT       = "FLAT"
-PUT_OPEN   = "PUT_OPEN"
-HOLDING    = "HOLDING"
-CALL_OPEN  = "CALL_OPEN"
+FLAT        = "FLAT"
+PUT_OPEN    = "PUT_OPEN"
+HOLDING     = "HOLDING"
+CALL_OPEN   = "CALL_OPEN"
+ROUTER_HOLD = "ROUTER_HOLD"   # wheel-vs-hold router: own shares uncapped
 
 
 def _entry_iv(snapshot: "pd.DataFrame") -> float:
@@ -124,7 +125,9 @@ def walk_forward_scavenger(df: pd.DataFrame, symbol: str,
                            spy_df: pd.DataFrame | None = None,
                            vix_df: pd.DataFrame | None = None,
                            early_exit: bool = True,
-                           sell_calls: bool = True) -> list[dict]:
+                           sell_calls: bool = True,
+                           router_probs: "np.ndarray | None" = None,
+                           router_threshold: float = 0.60) -> list[dict]:
     """
     Simulate the wheel strategy on df.
     spy_df / vix_df: if provided, the Overseer classifies regime at each bar.
@@ -137,6 +140,12 @@ def walk_forward_scavenger(df: pd.DataFrame, symbol: str,
     early_exit / sell_calls: set both False to reproduce the pre-wheel live
     scanner behavior — puts held to expiry, assignments liquidated at the
     expiry close, no covered-call phase. Used by compare_wheel_versions.py.
+
+    router_probs: optional wheel-vs-hold router (see wheel_router.py) —
+    per-bar P(>8% rally in 30d) aligned to THIS function's post-dropna
+    indicator frame. When P >= router_threshold: in FLAT buy-and-hold
+    100 shares (ROUTER_HOLD) instead of selling a put; in HOLDING skip
+    the covered call so the rally isn't capped. NaN never routes.
 
     Returns list of trade events with P&L.
     """
@@ -151,6 +160,11 @@ def walk_forward_scavenger(df: pd.DataFrame, symbol: str,
     state  = FLAT
     cycle: dict = {}
 
+    def _router_hot(bar_i: int) -> bool:
+        return (router_probs is not None and bar_i < len(router_probs)
+                and not np.isnan(router_probs[bar_i])
+                and router_probs[bar_i] >= router_threshold)
+
     # Fast risk-off cooldown tracker: bar index until which new puts are blocked.
     # Starts at -1 (no cooldown active). Updated whenever a SPY shock is detected.
     riskoff_until_i = -1
@@ -164,6 +178,19 @@ def walk_forward_scavenger(df: pd.DataFrame, symbol: str,
 
         # ── FLAT: look for a put to sell ─────────────────────────────────────
         if state == FLAT:
+            # Wheel-vs-hold router: predicted runner → own shares uncapped
+            # instead of wheeling. Checked before the role gate on purpose —
+            # runners get routed to the Raider and would never enter here.
+            if (_router_hot(i) and regime != Overseer.NUKED_ZONE
+                    and i > riskoff_until_i):
+                cycle = {"symbol":          symbol,
+                         "hold_entry_i":     i,
+                         "hold_entry_close": float(row["close"]),
+                         "hold_regime":      regime}
+                state = ROUTER_HOLD
+                i    += 1
+                continue
+
             # Overseer gates entry: route by this stock's own ADX
             if "scavenger" not in overseer.recommend_roles(regime, row):
                 i += 1
@@ -253,8 +280,24 @@ def walk_forward_scavenger(df: pd.DataFrame, symbol: str,
             else:
                 i += 1
 
+        # ── ROUTER_HOLD: own shares uncapped until the router cools ──────────
+        elif state == ROUTER_HOLD:
+            if (not _router_hot(i)) or regime == Overseer.NUKED_ZONE \
+                    or i >= n - 1:
+                close = float(row["close"])
+                pnl   = (close - cycle["hold_entry_close"]) * SHARES
+                events.append({**cycle, "event": "router_hold_exit",
+                               "pnl": round(pnl, 2), "exit_i": i,
+                               "hold_exit_close": close})
+                cycle = {}
+                state = FLAT
+            i += 1
+
         # ── HOLDING: look for a call to sell ─────────────────────────────────
         elif state == HOLDING:
+            if _router_hot(i):
+                i += 1   # predicted runner — don't cap it with a covered call
+                continue
             res = scav.scan(symbol, snapshot, cost_basis=cycle["cost_basis"],
                             regime=regime)
             if res["signal"] == "SELL_CALL":

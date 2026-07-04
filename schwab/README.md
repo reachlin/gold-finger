@@ -228,10 +228,20 @@ live_scanner.py
      forecasts batched — roughly 1-1.5h runtime). Same harness so both
      advisories are measured on equal footing.
 
-3. **Wheel-vs-hold strategy router.** The negative edge is concentrated in
-   trending growth names (AMD -$22K, GOOGL -$13K, HD -$11K, MSFT -$9K vs
-   B&H) where covered calls cap the upside; wins are on sideways names
-   (UNH, AMZN, IBM). Train an LGBM "will this stock gain >X% in 30d" label
-   (same feature scaffolding as assignment_risk.py) to route symbols between
-   hold-don't-wheel and wheel, or surface it as upside-forfeiture risk on
-   SELL_CALL. Targets the actual source of the -$15.5K edge.
+3. **Wheel-vs-hold strategy router** — TESTED 2026-07-04, NOT DEPLOYED.
+   Idea: the negative edge is concentrated in runners (AMD -$24K, MSFT
+   -$14K, GOOGL -$14K scavenger-only) where covered calls cap the upside,
+   so route per symbol per bar: walk-forward LGBM P(>8% rally in 30d) >= τ
+   → hold 100 shares uncapped instead of wheeling (and skip covered calls
+   while hot). Implemented in wheel_router.py + ROUTER_HOLD state in
+   backtest_scavenger.py; experiment runner backtest_router.py; report at
+   data/backtest_router_2026-07-04.txt.
+
+   Result vs scavenger-only baseline edge -$46,043: τ=0.50 → -$58,836,
+   τ=0.60 → -$44,621, τ=0.70 → -$47,610. Best case is +$1.4K (noise);
+   per-symbol swings are huge and threshold-sensitive (AMD +$16.7K better
+   @0.60 — proof the mechanism works when the prediction is right — but
+   GOOGL -$10K, NVDA -$8K worse). Bottleneck is the predictor, not the
+   routing rule: LGBM holdout AUCs are ~0.5. Revisit only with a better
+   30d-rally predictor (e.g. walk-forward TimesFM from item 2, or a plain
+   momentum/ADX rule as a baseline predictor).
