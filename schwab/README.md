@@ -312,3 +312,21 @@ live_scanner.py
    never places automated equity orders. Vetoes land in overseer.log —
    after a few weeks of paper trading, compare LLM-mediated vs pure
    mechanical policy and keep the winner.
+
+4. **Portfolio allocation — choosing among affordable signals.** Today
+   capital is assigned first-come-first-served in WATCHLIST order: each
+   signal passes the budget check alone, and the LLM approves per-signal
+   without seeing competitors, so "two small caps vs one large" is never
+   actually decided — list position decides. Factors a real allocator
+   should weigh: capital efficiency (premium/day per collateral $ —
+   backtest edge per collateral $ is AMZN ~0.67 > IBM ~0.41 > UNH ~0.37),
+   edge quality (cheap ≠ good: KO is cheap and negative-edge),
+   concentration and correlated-assignment risk, expiry laddering
+   (small positions free capital in slices), real-chain liquidity
+   (bid/ask), and a cash reserve for rolls.
+   Step 1: list the scan's other pending candidates in each signal's
+   prompt (like open positions) + an allocation section in
+   OVERSEER_SYSTEM so the LLM sees opportunity cost.
+   Step 2 (measurable): deterministic ranking — yield/day per collateral
+   $ with a concentration penalty, deploy down the ranking until budget
+   is spent; backtest it with the existing harness.

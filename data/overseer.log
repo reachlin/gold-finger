@@ -11874,3 +11874,9 @@ TEE_TEST_1783142878
   [AutoOverseer] LLM: LLMClient(provider='anthropic', model='claude-haiku-4-5-20251001')  paper=True
   [MarketCheck] 2026-07-04 (Saturday): market CLOSED (NYSE calendar)
   [MarketCheck] sleeping 7.4h until the next 09:00 ET calendar check
+  [AutoOverseer] LLM: LLMClient(provider='anthropic', model='claude-haiku-4-5-20251001')  paper=True
+  [MarketCheck] 2026-07-04 (Saturday): market CLOSED (NYSE calendar)
+  [MarketCheck] sleeping 3.9h until the next 09:00 ET calendar check
+  [AutoOverseer] LLM: LLMClient(provider='deepseek', model='deepseek-v4-pro')  paper=True
+  [MarketCheck] 2026-07-04 (Saturday): market CLOSED (NYSE calendar)
+  [MarketCheck] sleeping 3.9h until the next 09:00 ET calendar check

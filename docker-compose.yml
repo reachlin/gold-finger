@@ -6,8 +6,8 @@ services:
     restart: unless-stopped
     environment:
       # LLM provider — pick one block below
-      LLM_PROVIDER: anthropic
-      LLM_MODEL: claude-haiku-4-5-20251001
+      #LLM_PROVIDER: anthropic
+      #LLM_MODEL: claude-haiku-4-5-20251001
       # ANTHROPIC_API_KEY: set in .env or override here
 
       # OpenAI alternative:
