@@ -386,3 +386,22 @@ live_scanner.py
    Scanner emits BUY_ETF/SELL_ETF ($600/ETF, positions in
    data/paper_medic_holdings.json), AutoOverseer approves by default.
    Known limit: no 1970s-style multi-year grind in the data window.
+
+6. **Fundamental features for the LGBM advisories** — DEPLOYED 2026-07-05.
+   Borrowed from the WorldQuant alpha playbook's measured pass rates
+   (fundamental 40% > mixed 12.7% > pure technical 5.3%), which matched
+   our own finding that technical-only models sit at AUC ~0.5.
+   fundamentals.py builds earnings_yield (EPS-ttm/price), eps_growth,
+   surprise_last, surprise_mean4 from cached yfinance earnings history
+   (data/fundamentals/, refresh with fetch_fundamentals.py) — as-of
+   joined, report dated D visible strictly after D (no lookahead,
+   unit-tested). Experiment (experiment_fundamentals.py, report
+   data/experiment_fundamentals_2026-07-05.txt): median holdout AUC
+   down 0.521 → 0.546, up 0.517 → 0.570 (15/18 symbols improved);
+   HD/AMZN/MMM/IONQ now 0.61-0.74. load_models() picks the cache up
+   automatically, so the scanner's assign_risk_pct / called_away_pct /
+   model_auc reflect it with no call-site changes. Caveat: single
+   chronological split per symbol — trust the medians, not individual
+   deltas (NVDA down -0.18 may be split noise). Next candidate from the
+   same playbook: turnover/cost accounting in backtests, and role-PnL
+   daily-correlation report.
