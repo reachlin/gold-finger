@@ -405,3 +405,21 @@ live_scanner.py
    deltas (NVDA down -0.18 may be split noise). Next candidate from the
    same playbook: turnover/cost accounting in backtests, and role-PnL
    daily-correlation report.
+
+7. **Option-chain anomaly detector (unusual put flow).** Motivated by
+   the FUTU/TIGR case (2026-05: put volume spiked days before a CSRC
+   penalty announcement — informed flow visible in put/call ratio
+   anomalies). Defensive gate for the Scavenger: don't sell puts into
+   informed bearish flow. Build on data we already pull — Schwab
+   get_option_chain returns per-contract volume/OI/IV every scan:
+   (a) snapshot per watchlist symbol per day → data/chain_stats.csv:
+       total put/call volume, P/C ratio, aggregate volume/OI, and
+       near-dated OTM put concentration (the FUTU signature);
+   (b) after ~20 sessions of baseline, flag z-score anomalies and attach
+       put_call_ratio / uoa_flag to signals + an OVERSEER_SYSTEM guide
+       ("elevated informed put flow → lean SKIP on SELL_PUT").
+   Limits: watchlist-only, scan-time volume (no intraday sweeps), and
+   NOT backtestable — no free historical options-volume data, so it
+   accrues validity through paper trading only. Upgrade path if it
+   earns its keep: Unusual Whales API (paid) for whole-market intraday
+   flow. Start the snapshot collector early — baselines take ~4 weeks.
