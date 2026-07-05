@@ -71,6 +71,83 @@ class TestBuildFeatures:
         assert feats.isna().all().all()
 
 
+def _analyst():
+    """4 analyst actions: up, down, PT raise, PT lower."""
+    return pd.DataFrame({
+        "gradedate": pd.to_datetime(["2023-03-01", "2023-06-01",
+                                     "2023-06-15", "2023-10-01"]),
+        "firm": ["A", "B", "C", "D"],
+        "tograde": ["Buy", "Hold", "Buy", "Sell"],
+        "fromgrade": ["Hold", "Buy", "Buy", "Hold"],
+        "action": ["up", "down", "main", "down"],
+        "pricetargetaction": ["Raises", "Lowers", "Raises", "Lowers"],
+        "currentpricetarget": [120.0, 90.0, 130.0, 80.0],
+        "priorpricetarget": [100.0, 110.0, 120.0, 100.0],
+    })
+
+
+class TestAnalystFeatures:
+    def test_columns_and_no_lookahead(self):
+        bars  = _bars()
+        feats = fu.build_analyst_features(bars, _analyst())
+        assert list(feats.columns) == fu.ANALYST_FEATURES
+        d = pd.to_datetime(bars["datetime"]).dt.date
+        # March 1 upgrade still inside the 90d window on May 15
+        may15 = feats[d == pd.Timestamp("2023-05-15").date()]
+        assert may15["net_upgrades_90d"].iloc[0] == pytest.approx(1.0)
+        # June 1 downgrade must NOT be visible on June 1 (no lookahead);
+        # the March upgrade has aged out by then (92 days old)
+        on_day    = feats[d == pd.Timestamp("2023-06-01").date()]
+        day_after = feats[d == pd.Timestamp("2023-06-02").date()]
+        assert on_day["net_upgrades_90d"].iloc[0] == pytest.approx(0.0)
+        assert day_after["net_upgrades_90d"].iloc[0] == pytest.approx(-1.0)
+
+    def test_counts_age_out_of_window(self):
+        bars  = _bars()
+        feats = fu.build_analyst_features(bars, _analyst())
+        d = pd.to_datetime(bars["datetime"]).dt.date
+        # by Sept 15, both March and June actions are >90d old
+        row = feats[d == pd.Timestamp("2023-09-15").date()]
+        assert row["net_upgrades_90d"].iloc[0] == pytest.approx(0.0)
+        assert row["pt_revisions_90d"].iloc[0] == pytest.approx(0.0)
+
+    def test_pt_gap_uses_trailing_median_over_close(self):
+        bars  = _bars(price=100.0)
+        feats = fu.build_analyst_features(bars, _analyst())
+        d = pd.to_datetime(bars["datetime"]).dt.date
+        # on 2023-07-03 the trailing 180d PTs are [120, 90, 130] → median 120
+        row = feats[d == pd.Timestamp("2023-07-03").date()]
+        assert row["pt_gap"].iloc[0] == pytest.approx(120.0 / 100.0 - 1)
+
+    def test_counts_zero_and_ptgap_nan_before_first_action(self):
+        bars  = _bars()
+        feats = fu.build_analyst_features(bars, _analyst())
+        assert feats["net_upgrades_90d"].iloc[0] == pytest.approx(0.0)
+        assert np.isnan(feats["pt_gap"].iloc[0])
+
+    def test_load_analyst_missing_returns_none(self, tmp_path):
+        assert fu.load_analyst("ZZZ", str(tmp_path)) is None
+
+    def test_freshness_gate(self):
+        bars = _bars(n=100, start="2026-03-02")       # ends ~2026-07
+        last_bar = pd.to_datetime(bars["datetime"]).max()
+
+        def actions(n, last):
+            dates = pd.date_range(end=last, periods=n, freq="W")
+            return pd.DataFrame({"gradedate": dates,
+                                 "action": ["up"] * n,
+                                 "pricetargetaction": ["Raises"] * n,
+                                 "currentpricetarget": [100.0] * n})
+
+        fresh  = actions(120, last_bar - pd.Timedelta(days=10))
+        stale  = actions(120, last_bar - pd.Timedelta(days=200))
+        sparse = actions(29, last_bar - pd.Timedelta(days=10))
+        assert fu.analyst_is_fresh(fresh, bars) is True
+        assert fu.analyst_is_fresh(stale, bars) is False    # > 90d old
+        assert fu.analyst_is_fresh(sparse, bars) is False   # < 100 actions
+        assert fu.analyst_is_fresh(None, bars) is False
+
+
 class TestLoad:
     def test_load_earnings_missing_returns_none(self, tmp_path):
         assert fu.load_earnings("ZZZ", str(tmp_path)) is None

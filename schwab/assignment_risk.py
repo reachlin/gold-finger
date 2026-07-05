@@ -75,8 +75,8 @@ def make_labels_up(closes: pd.Series, horizon: int = HORIZON,
     return labels
 
 
-def make_features(df: pd.DataFrame, earnings: "pd.DataFrame | None" = None
-                  ) -> pd.DataFrame:
+def make_features(df: pd.DataFrame, earnings: "pd.DataFrame | None" = None,
+                  analyst: "pd.DataFrame | None" = None) -> pd.DataFrame:
     """
     Tabular features per row from raw OHLCV. Uses the same indicator engine
     as the scanner (trend_scanner.compute_indicators) plus normalized
@@ -105,6 +105,11 @@ def make_features(df: pd.DataFrame, earnings: "pd.DataFrame | None" = None
         fund = build_fundamental_features(df, earnings)
         fund.index = out.index
         out = pd.concat([out, fund], axis=1)
+    if analyst is not None:
+        from fundamentals import build_analyst_features
+        ana = build_analyst_features(df, analyst)
+        ana.index = out.index
+        out = pd.concat([out, ana], axis=1)
     return out
 
 
@@ -126,12 +131,14 @@ class AssignmentRiskModel:
         self.calibrated   = False
         self.feature_cols = list(FEATURES)
 
-    def fit(self, df: pd.DataFrame, earnings: "pd.DataFrame | None" = None):
+    def fit(self, df: pd.DataFrame, earnings: "pd.DataFrame | None" = None,
+            analyst: "pd.DataFrame | None" = None):
         from lightgbm import LGBMClassifier
 
-        feats   = make_features(df, earnings)
+        feats   = make_features(df, earnings, analyst)
         self.feature_cols = list(feats.columns)
         self._earnings    = earnings   # reused at predict time
+        self._analyst     = analyst
         labeler = make_labels if self.direction == "down" else make_labels_up
         labels  = pd.Series(labeler(df["close"], HORIZON, self.move_pct),
                             index=feats.index)
@@ -175,11 +182,15 @@ class AssignmentRiskModel:
         return self
 
     def predict_prob(self, df: pd.DataFrame,
-                     earnings: "pd.DataFrame | None" = None) -> float:
+                     earnings: "pd.DataFrame | None" = None,
+                     analyst: "pd.DataFrame | None" = None) -> float:
         """Probability for the most recent row of df (raw OHLCV)."""
         if earnings is None:
             earnings = getattr(self, "_earnings", None)
-        feats = make_features(df, earnings)[self.feature_cols].iloc[[-1]]
+        if analyst is None:
+            analyst = getattr(self, "_analyst", None)
+        feats = make_features(df, earnings,
+                              analyst)[self.feature_cols].iloc[[-1]]
         return float(self.model.predict_proba(feats)[:, 1][0])
 
 
@@ -192,7 +203,7 @@ def load_models(symbols: list[str], data_dir: str,
     down / 0.52 → 0.57 up). Symbols without data or with training
     failures are skipped — the advisory is optional by design.
     """
-    from fundamentals import load_earnings
+    from fundamentals import load_earnings, load_analyst, analyst_is_fresh
     fund_dir = os.path.join(data_dir, "fundamentals")
 
     models: dict[str, AssignmentRiskModel] = {}
@@ -203,8 +214,16 @@ def load_models(symbols: list[str], data_dir: str,
         try:
             df       = pd.read_csv(path)
             earnings = load_earnings(sym, fund_dir)
+            # Analyst features: up-direction only (down measured flat,
+            # median -0.003) and only through the freshness gate — stale
+            # feeds poison the model (experiment 2026-07-05)
+            analyst = None
+            if direction == "up":
+                candidate = load_analyst(sym, fund_dir)
+                if analyst_is_fresh(candidate, df):
+                    analyst = candidate
             models[sym] = AssignmentRiskModel(direction=direction).fit(
-                df, earnings=earnings)
+                df, earnings=earnings, analyst=analyst)
         except Exception as exc:
             print(f"  [AssignRisk] {sym}: training skipped ({exc})")
     return models

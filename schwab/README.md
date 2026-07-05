@@ -406,7 +406,21 @@ live_scanner.py
    same playbook: turnover/cost accounting in backtests, and role-PnL
    daily-correlation report.
 
-7. **Option-chain anomaly detector (unusual put flow).** Motivated by
+7. **Analyst features (up-models only, freshness-gated)** — DEPLOYED
+   2026-07-05. Seeking Alpha assessed and rejected (no official API;
+   scrapers are paid/ToS-gray/unbacktestable). Instead: yfinance
+   upgrades_downgrades (dated actions + price targets, 2012→now) →
+   net_upgrades_90d / pt_revisions_90d / pt_gap in fundamentals.py,
+   as-of joined, no lookahead. Experiment
+   (data/experiment_analyst_2026-07-05.txt) vs the deployed tech+fund
+   baseline: up median 0.570 → 0.602, down -0.003 (flat → not deployed
+   for down). Hazard found: stale feeds poison models (IONQ 29 actions
+   dead since 2024-08 → up AUC 0.694 → 0.308), so load_models applies
+   analyst_is_fresh (newest action ≤ 90d old, ≥ 100 actions) — gates
+   out IONQ and META today. Live verified: 16/18 up-models with analyst
+   features, median AUC 0.606.
+
+8. **Option-chain anomaly detector (unusual put flow).** Motivated by
    the FUTU/TIGR case (2026-05: put volume spiked days before a CSRC
    penalty announcement — informed flow visible in put/call ratio
    anomalies). Defensive gate for the Scavenger: don't sell puts into
