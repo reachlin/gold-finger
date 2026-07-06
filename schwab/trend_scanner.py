@@ -18,6 +18,15 @@ PULLBACK_EMA_PCT = 0.08    # price must be within 8% of EMA20
 TARGET_PCT       = 0.20    # take profit
 STOP_PCT         = 0.08    # stop loss
 
+# ── Breakout / consolidation params (Qullamaggie-style setups) ──────────────
+ADR_WINDOW             = 14      # average daily range lookback
+BREAKOUT_LOOKBACK       = 20      # N-day high a breakout must clear
+RUNUP_LOOKBACK          = 90      # bars searched for the qualifying prior move
+RUNUP_MIN_PCT           = 0.25    # min run-up % before a consolidation counts
+CONSOLIDATION_LOOKBACK  = 15      # bars checked for tightening range / higher lows
+CONSOLIDATION_EMA_PCT   = 0.08    # price must stay within 8% of EMA20 while surfing it
+BREAKOUT_VOL_RATIO_MIN  = 1.4     # volume surge required on the breakout bar
+
 
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -26,6 +35,7 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     low    = df["low"]
     volume = df["volume"]
 
+    df["ema10"] = ta.trend.EMAIndicator(close, window=10).ema_indicator()
     df["ema20"] = ta.trend.EMAIndicator(close, window=20).ema_indicator()
     df["ema50"] = ta.trend.EMAIndicator(close, window=50).ema_indicator()
 
@@ -39,6 +49,12 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
     vol_sma20   = volume.rolling(20).mean()
     df["vol_ratio"] = volume / vol_sma20.replace(0, np.nan)
+
+    daily_range_pct = (high - low) / close
+    df["adr_pct"] = daily_range_pct.rolling(ADR_WINDOW).mean()
+
+    # Prior N-day high, excluding today's own bar — the level a breakout must clear.
+    df["high_20"] = high.shift(1).rolling(BREAKOUT_LOOKBACK).max()
 
     return df
 
@@ -115,6 +131,87 @@ def compute_levels(entry: float) -> dict:
     stop   = round(entry * (1 - STOP_PCT), 2)
     rr     = round(TARGET_PCT / STOP_PCT, 2)
     return {"entry": entry, "target": target, "stop": stop, "risk_reward": rr}
+
+
+def detect_prior_runup(df: pd.DataFrame, lookback: int = RUNUP_LOOKBACK,
+                        min_pct: float = RUNUP_MIN_PCT) -> bool:
+    """True if the stock ran up at least `min_pct` at some point in the
+    `lookback` window before the current consolidation zone (Qullamaggie:
+    "stock up 30-100%+ over 1-3 months" ahead of a breakout base).
+    """
+    start = max(0, len(df) - lookback)
+    end   = len(df) - CONSOLIDATION_LOOKBACK
+    if end - start < 10:
+        return False
+    window = df["close"].iloc[start:end]
+    run_up = window.max() / window.min() - 1
+    return bool(run_up >= min_pct)
+
+
+def detect_tight_consolidation(df: pd.DataFrame,
+                                lookback: int = CONSOLIDATION_LOOKBACK) -> bool:
+    """True if the last `lookback` bars show a tightening base: higher lows,
+    a contracting daily range (ADR%), and price surfing a rising EMA20 —
+    Qullamaggie's "orderly pullback with higher lows and tightening range."
+    """
+    if len(df) < lookback + 1:
+        return False
+    window = df.iloc[-lookback:]
+
+    half = lookback // 2
+    early_low = window["low"].iloc[:half].min()
+    late_low  = window["low"].iloc[half:].min()
+    higher_lows = late_low >= early_low * 0.98
+
+    contracting = window["adr_pct"].iloc[-1] < window["adr_pct"].iloc[0]
+
+    ema20 = window["ema20"]
+    surfing_ema20 = bool(
+        (window["close"] >= ema20 * (1 - CONSOLIDATION_EMA_PCT)).all()
+        and ema20.iloc[-1] > ema20.iloc[0]
+    )
+
+    return bool(higher_lows and contracting and surfing_ema20)
+
+
+def detect_breakout_trigger(df: pd.DataFrame,
+                             vol_ratio_min: float = BREAKOUT_VOL_RATIO_MIN) -> bool:
+    """True if today's bar is a range-expansion breakout: close above the
+    prior N-day high on a volume surge.
+    """
+    last = df.iloc[-1]
+    if pd.isna(last["high_20"]) or pd.isna(last["vol_ratio"]):
+        return False
+    breaks_high  = last["close"] > last["high_20"]
+    volume_surge = last["vol_ratio"] > vol_ratio_min
+    return bool(breaks_high and volume_surge)
+
+
+def compute_breakout_levels(entry: float, atr: float, adr_pct: float,
+                             r_multiple: float = 3.0) -> dict:
+    """Stop distance is capped at the tighter of ATR or ADR% of entry —
+    "stop should not be wider than the ATR or ADR of the stock."
+    Target is a simple R-multiple; live trailing (10/20-EMA close-below)
+    takes over once the position is running.
+    """
+    stop_distance = min(atr, entry * adr_pct)
+    stop_distance = max(stop_distance, entry * 0.01)   # floor — avoid a zero-width stop
+    stop   = round(entry - stop_distance, 2)
+    target = round(entry + stop_distance * r_multiple, 2)
+    return {"entry": round(entry, 2), "target": target, "stop": stop,
+            "risk_reward": round(r_multiple, 2)}
+
+
+def position_size_by_risk(equity: float, risk_pct: float,
+                           entry: float, stop: float) -> int:
+    """Shares to buy so a stop-out loses exactly `risk_pct` of `equity` —
+    Qullamaggie's 0.25-1% account risk per trade discipline.
+    """
+    risk_per_share = entry - stop
+    if risk_per_share <= 0:
+        return 0
+    dollar_risk = equity * risk_pct
+    return max(int(dollar_risk // risk_per_share), 0)
 
 
 def scan_symbol(symbol: str, df: pd.DataFrame,

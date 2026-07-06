@@ -40,6 +40,22 @@ They raid settlements, strike fast, and retreat when outgunned.
 - Deploy in: Reclamation Day (primary), The Wasteland (opportunistic)
 - Avoid: Nuked Zone — even Raiders know when to run
 
+### The Maggie — Role #003
+**Named for:** [Qullamaggie](https://qullamaggie.com/), the swing trader whose
+Breakout setup this role implements.
+
+**Trading:** Momentum breakout. Screens for stocks that already ran up 25%+
+in the last ~90 bars, then coiled into a tight consolidation (higher lows,
+contracting daily range, surfing the rising EMA20). Buys the range-expansion
+breakout above the consolidation high on a volume surge. Stop is capped at
+the tighter of ATR or ADR% of entry — never a wider stop than the stock's
+own noise. First target takes profit and moves the stop to breakeven; the
+rest trails on a 10-day EMA close-below.
+
+- Deploy in: Reclamation Day only — Qullamaggie's setups "work best in
+  bullish markets"; sit out corrections and bear markets
+- Avoid: The Wasteland, Nuked Zone
+
 ### The Scavenger — Role #002
 **Fallout 76:** Scavengers are patient survivors who find value in overlooked places.
 They forage through ruined buildings, extract useful components, and never rush.
@@ -95,6 +111,4 @@ Extracts premium from quiet markets others ignore.
 
 | Codename | Strategy | Optimal Regime |
 |---|---|---|
-| **The Chemist** | Options volatility plays — synthesizes profit from chaos | Nuked Zone (when it finally calms) |
-| **The Trader** | Momentum / breakout — follows strong moves | Reclamation Day (full bull) |
 | **The Settler** | Dividend + value investing — builds lasting positions | Any regime |

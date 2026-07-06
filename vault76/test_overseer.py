@@ -172,6 +172,21 @@ class TestOverseerWeaponSelection:
         for regime in (Overseer.RECLAMATION, Overseer.WASTELAND, Overseer.NUKED_ZONE):
             assert isinstance(o.recommend_roles(regime), list)
 
+    def test_maggie_recommended_in_reclamation_no_stock(self):
+        from vault76.overseer import Overseer
+        o = Overseer()
+        assert "maggie" in o.recommend_roles(Overseer.RECLAMATION)
+
+    def test_maggie_not_recommended_in_wasteland(self):
+        from vault76.overseer import Overseer
+        o = Overseer()
+        assert "maggie" not in o.recommend_roles(Overseer.WASTELAND)
+
+    def test_maggie_not_recommended_in_nuked_zone(self):
+        from vault76.overseer import Overseer
+        o = Overseer()
+        assert "maggie" not in o.recommend_roles(Overseer.NUKED_ZONE)
+
 
 class TestOverseerStockRouting:
     """Stock-aware routing: Overseer picks role based on per-stock ADX."""
@@ -226,3 +241,33 @@ class TestOverseerStockRouting:
         o = Overseer()
         roles = o.recommend_roles(Overseer.RECLAMATION)
         assert "scavenger" in roles and "raider" in roles
+
+    def test_maggie_always_offered_in_reclamation_runner_branch(self):
+        """High-ADX stock in RECLAMATION -> Raider AND Maggie both scan
+        (Maggie's own breakout gate decides whether it actually fires)."""
+        from vault76.overseer import Overseer, ADX_RUNNER
+        o = Overseer()
+        roles = o.recommend_roles(Overseer.RECLAMATION, {"adx": ADX_RUNNER + 5})
+        assert "raider" in roles
+        assert "maggie" in roles
+
+    def test_maggie_always_offered_in_reclamation_sideways_branch(self):
+        """Low-ADX stock in RECLAMATION -> Scavenger AND Maggie both scan —
+        a breakout can fire before ADX has caught up to confirm the trend."""
+        from vault76.overseer import Overseer, ADX_RUNNER
+        o = Overseer()
+        roles = o.recommend_roles(Overseer.RECLAMATION, {"adx": ADX_RUNNER - 5})
+        assert "scavenger" in roles
+        assert "maggie" in roles
+
+    def test_maggie_never_offered_in_wasteland(self):
+        from vault76.overseer import Overseer
+        o = Overseer()
+        for adx in [10, 30, 50]:
+            assert "maggie" not in o.recommend_roles(Overseer.WASTELAND, {"adx": adx})
+
+    def test_maggie_never_offered_in_nuked_zone(self):
+        from vault76.overseer import Overseer
+        o = Overseer()
+        for adx in [10, 30, 50]:
+            assert "maggie" not in o.recommend_roles(Overseer.NUKED_ZONE, {"adx": adx})

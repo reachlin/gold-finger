@@ -12,11 +12,14 @@ Charles Schwab via their official API. Paper-trading first; real capital after
 |---|---|---|
 | **The Overseer** | `vault76/overseer.py` | Market regime classifier (Reclamation Day / Wasteland / Nuked Zone) |
 | **The Raider** | `vault76/armory/raider.py` | Pullback-in-trend strategy (EMA/RSI/ADX) |
+| **The Maggie** | `vault76/armory/maggie.py` | Qullamaggie-style breakout strategy (run-up + consolidation + volume breakout) |
 | **The Scavenger** | `vault76/armory/scavenger.py` | Wheel strategy (cash-secured put → covered call) |
+| **Relative Strength Screener** | `schwab/relative_strength_screener.py` | Ranks a universe by 1/3/6-month returns; feeds The Maggie's leader screen |
 | **Live Scanner** | `schwab/live_scanner.py` | Real-time scan loop with Vault 76 Daily Briefing to Slack |
 | **Vault 20** | `vault20/vault20.py` | Manual position tracker for any broker without API |
 | **Option Finder** | `vault20/option_finder.py` | Schwab option chain screener with real Greeks + IV rank |
 | **Backtest** | `schwab/backtest_scavenger.py` | Walk-forward wheel strategy backtest with early-exit |
+| **Backtest** | `schwab/backtest_maggie.py` | Walk-forward breakout strategy backtest |
 
 ### Option Finder usage
 
@@ -56,6 +59,12 @@ Techniques borrowed from these open-source projects:
 | [OpenBB](https://github.com/OpenBB-finance/OpenBB) | IV rank concept; GEX/DEX metrics; volatility surface architecture |
 
 All four repos are cloned locally under `/Users/lincai/dev/private/` for reference.
+
+Strategy sources (not code, not cloned):
+
+| Source | What we borrowed |
+|---|---|
+| [Qullamaggie](https://qullamaggie.com/) | Breakout setup — run-up + tight consolidation + volume breakout, ATR/ADR-capped stops, R-multiple targets, EMA trailing. Implemented as **The Maggie**. |
 
 ---
 
