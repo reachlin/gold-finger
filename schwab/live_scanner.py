@@ -21,6 +21,11 @@ import time
 import argparse
 from datetime import datetime, timedelta, timezone
 
+# LightGBM + torch OpenMP deadlock guard — see auto_overseer.py header.
+# Also needed here for direct `python live_scanner.py` runs.
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
 import pandas as pd
 from dotenv import load_dotenv
 

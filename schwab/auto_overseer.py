@@ -28,6 +28,13 @@ import json
 import time
 import argparse
 
+# LightGBM and PyTorch each bundle their own OpenMP on macOS; training the
+# LGBM advisories before loading Kronos/TimesFM deadlocked torch forever on
+# an OMP barrier (kmp_flag_64::wait, 0% CPU — observed 2026-07-06, wedged
+# both scanners all morning). Must be set before either library initializes.
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
