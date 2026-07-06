@@ -33,7 +33,7 @@ class Overseer:
 
     # Which roles are active per regime
     _ROLES = {
-        RECLAMATION: ["raider", "scavenger"],   # Raider attacks pullbacks; Scavenger sells puts on sideways stocks
+        RECLAMATION: ["maggie", "raider", "scavenger"],  # Maggie hunts breakouts; Raider attacks pullbacks; Scavenger sells puts on sideways stocks
         WASTELAND:   ["scavenger", "raider"],   # Scavenger primary for income; Raider opportunistic on any trending names
         NUKED_ZONE:  ["chemist"],               # Blast radius — Chemist harvests the chaos
     }
@@ -91,10 +91,13 @@ class Overseer:
 
         stock_ind : optional per-stock indicators (must contain 'adx').
                     When provided, routes by the stock's own trend strength:
-                      RECLAMATION + ADX >= ADX_RUNNER → ["raider"]   (ride the trend)
-                      RECLAMATION + ADX <  ADX_RUNNER → ["scavenger"] (collect premium)
+                      RECLAMATION + ADX >= ADX_RUNNER → ["maggie", "raider"]   (breakout scan + ride the trend)
+                      RECLAMATION + ADX <  ADX_RUNNER → ["maggie", "scavenger"] (breakout scan + collect premium)
                       WASTELAND (any ADX)             → ["scavenger"] (income focus)
                       NUKED_ZONE (any ADX)            → ["chemist"]   (unchanged)
+                    Maggie is always offered in RECLAMATION regardless of ADX —
+                    a breakout can fire before ADX has caught up to confirm
+                    the trend; her own scan() gates the entry.
                     Without stock_ind, returns the static regime mapping.
         """
         if stock_ind is None:
@@ -107,7 +110,7 @@ class Overseer:
                     else getattr(stock_ind, "adx", 0.0))
 
         if regime == self.RECLAMATION:
-            return ["raider"] if adx >= ADX_RUNNER else ["scavenger"]
+            return ["maggie", "raider"] if adx >= ADX_RUNNER else ["maggie", "scavenger"]
 
         if regime == self.WASTELAND:
             return ["scavenger"]
