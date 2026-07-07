@@ -228,7 +228,14 @@ def _fetch_history(client, symbol: str, days: int = 200) -> pd.DataFrame | None:
         df["volume"]   = df["volume"].astype(float)
         return df[["datetime", "open", "high", "low", "close", "volume"]]
     except Exception as exc:
-        print(f"    fetch {symbol}: {exc}")
+        exc_str = str(exc).lower()
+        if "invalid_grant" in exc_str or "401" in exc_str or "unauthorized" in exc_str:
+            msg = (f":rotating_light: *Schwab auth expired* (`{symbol}` fetch: "
+                   f"`{exc}`). Re-auth required — run `schwab.auth.client_from_manual_flow`.")
+            print(f"    [AUTH ERROR] {exc}")
+            _send_slack(msg)
+        else:
+            print(f"    fetch {symbol}: {exc}")
         return None
 
 
@@ -700,6 +707,24 @@ def _send_slack(message: str):
         print(f"  [Slack] failed to send: {exc}")
 
 
+def _check_token_age() -> tuple[str, str]:
+    """
+    Return (terminal_line, slack_line) warning if the Schwab token file is
+    approaching its 7-day hard expiry.  Empty strings when age is fine.
+    """
+    TOKEN_PATH = os.path.join(os.path.dirname(__file__), "schwab_token.json")
+    try:
+        mtime = os.path.getmtime(TOKEN_PATH)
+        age_days = (time.time() - mtime) / 86400
+        if age_days >= 6:
+            msg = (f"Schwab token is {age_days:.1f} days old — "
+                   f"expires in ~{7 - age_days:.1f}d. Re-auth soon!")
+            return f"  ⚠  TOKEN WARNING: {msg}", f":warning: *TOKEN WARNING:* {msg}"
+    except Exception:
+        pass
+    return "", ""
+
+
 def _position_lines(portfolio, price_fetcher=None) -> tuple[list[str], list[str]]:
     """
     Build terminal and Slack lines for open positions.
@@ -780,6 +805,9 @@ def _print_startup(client, paper: bool, portfolio=None, price_fetcher=None):
         print(line)
     if paper:
         print(f"  Paper trades:    {PAPER_TRADES_PATH}")
+    token_term, token_slack = _check_token_age()
+    if token_term:
+        print(token_term)
     print(f"  Monitor:         /schwab watch")
     print(sep)
 
@@ -796,6 +824,8 @@ def _print_startup(client, paper: bool, portfolio=None, price_fetcher=None):
         slack_lines.append(f"*Cash:* ${portfolio.cash:,.2f}")
     slack_lines += pos_slack
     slack_lines += opts_slack
+    if token_slack:
+        slack_lines.append(token_slack)
     _send_slack("\n".join(slack_lines))
 
 
