@@ -1,0 +1,8 @@
+timestamp,event_type,symbol,amount,running_balance,description
+2026-07-07 10:26:51 ET,STARTING_CAPITAL,,30000.0,30000.0,"starting capital $30,000.00"
+2026-07-07 10:26:51 ET,OPTION_SELL,KO,71.0,30071.0,SELL_PUT KO strike=79.13 opened 2026-06-29 premium=$71.00
+2026-07-07 10:26:51 ET,OPTION_SELL,KO,74.0,30145.0,SELL_PUT KO strike=77.26 opened 2026-07-01 premium=$74.00
+2026-07-07 10:26:51 ET,OPTION_SELL,PG,116.0,30261.0,SELL_PUT PG strike=138.63 opened 2026-07-01 premium=$116.00
+2026-07-07 10:26:51 ET,OPTION_BUYBACK,KO,-27.38,30233.62,buyback KO 2026-07-07: early_exit at 39% of premium (target 39%)
+2026-07-07 10:26:51 ET,OPTION_BUYBACK,KO,-14.2,30219.42,buyback KO 2026-07-07: early_exit at 19% of premium (target 39%)
+2026-07-07 10:26:51 ET,OPTION_BUYBACK,PG,-16.51,30202.91,buyback PG 2026-07-07: early_exit at 14% of premium (target 39%)

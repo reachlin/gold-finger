@@ -40,6 +40,7 @@ import assignment_risk
 import timesfm_advisor
 import wheel_router
 import allocator
+import cash_ledger as cl
 from chain_quotes import requote_signal
 from vault76.overseer import Overseer
 from vault76.armory.raider import Raider
@@ -284,8 +285,12 @@ _timesfm_cache: dict = {}
 # deduped per (date, symbol, action) so a rejected one doesn't re-fire all day
 ROUTER_HOLDS_PATH = os.path.join(
     os.path.dirname(__file__), "..", "data", "paper_router_holds.json")
+CASH_LEDGER_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "data", "cash_ledger.csv")
 _router_proposed: set = set()
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
+
+_cash_ledger = None   # initialised in main() once starting_capital is known
 
 # ---------------------------------------------------------------------------
 # AutoOverseer hook — set by auto_overseer.py to replace interactive input
@@ -520,6 +525,8 @@ def _process_option_ledger(client) -> list[dict]:
     called-away shares, and adaptive-profit-target early exits.
     Prints and Slacks each settlement event.
     """
+    rows   = ol.read_rows(OPTION_LEDGER_PATH)
+    opens  = {ol.row_key(r): r for r in ol.open_options(rows)}
     events = ol.process_expirations(OPTION_LEDGER_PATH, WHEEL_HOLDINGS_PATH,
                                     _make_quote_fetcher(client))
     if not events:
@@ -532,6 +539,9 @@ def _process_option_ledger(client) -> list[dict]:
                 f"{icon}${abs(ev['pnl']):.2f}  {ev['detail']}")
         print(f"    {line}")
         slack_lines.append(f"  • {line}")
+        if _cash_ledger:
+            opening = opens.get(ev.get("symbol", ""))
+            cl.from_options_event(_cash_ledger, ev, opening)
     _send_slack("\n".join(slack_lines))
     return events
 
@@ -866,7 +876,12 @@ def _print_startup(client, paper: bool, portfolio=None, price_fetcher=None):
     print(f"  Watchlist ({len(WATCHLIST)}):   {', '.join(WATCHLIST)}")
     print(f"  Scan interval:   {SCAN_INTERVAL_MIN} min  |  Budget: ${BUDGET_PER_TRADE}/trade")
     if portfolio:
-        print(f"  Cash:            ${portfolio.cash:,.2f}")
+        opt_bal = _cash_ledger.balance() if _cash_ledger else portfolio.cash
+        total   = portfolio.cash + (opt_bal - portfolio.starting_capital)
+        print(f"  Equity cash:     ${portfolio.cash:,.2f}")
+        print(f"  Options P&L:     ${opt_bal - portfolio.starting_capital:+,.2f}"
+              f"  (total ${opt_bal:,.2f})")
+        print(f"  Account total:   ${total:,.2f}")
     for line in pos_term:
         print(line)
     for line in opts_term:
@@ -889,7 +904,13 @@ def _print_startup(client, paper: bool, portfolio=None, price_fetcher=None):
         f"*Scan interval:* {SCAN_INTERVAL_MIN} min | *Budget/trade:* ${BUDGET_PER_TRADE}",
     ]
     if portfolio:
-        slack_lines.append(f"*Cash:* ${portfolio.cash:,.2f}")
+        opt_bal = _cash_ledger.balance() if _cash_ledger else portfolio.cash
+        total   = portfolio.cash + (opt_bal - portfolio.starting_capital)
+        slack_lines.append(
+            f"*Equity cash:* ${portfolio.cash:,.2f} | "
+            f"*Options P&L:* ${opt_bal - portfolio.starting_capital:+,.2f} | "
+            f"*Total:* ${total:,.2f}"
+        )
     slack_lines += pos_slack
     slack_lines += opts_slack
     if token_slack:
@@ -973,6 +994,10 @@ def main():
 
     global _current_portfolio
     _current_portfolio = portfolio
+
+    global _cash_ledger
+    starting = portfolio.starting_capital if portfolio else 30_000.0
+    _cash_ledger = cl.CashLedger(CASH_LEDGER_PATH, starting_capital=starting)
 
     price_fetcher = _make_price_fetcher(client)
 
@@ -1071,6 +1096,12 @@ def main():
                     print(f"    {ex['symbol']:<6} CLOSED  {icon}${abs(ex['pnl_dollar']):.2f}"
                           f"  ({ex['pnl_pct']:+.1f}%)  [{ex['exit_reason']}]"
                           f"  exit ${ex['exit']:.2f}")
+                    if _cash_ledger:
+                        _cash_ledger.record(
+                            "STOCK_SELL", ex["symbol"], round(ex["proceeds"], 2),
+                            f"SELL {ex['shares']} {ex['symbol']} @ ${ex['exit']:.2f}"
+                            f" [{ex['exit_reason']}] P&L ${ex['pnl_dollar']:+.2f}"
+                        )
 
         # Wheel bookkeeping: settle expiries/assignments/early exits in the
         # options ledger. Assignments feed covered-call scans via holdings.
@@ -1180,6 +1211,11 @@ def main():
                                 print(f"  [PAPER] BUY {pos['shares']} sh @ ${pos['entry']:.2f}"
                                       f"  tgt ${pos['target']:.2f}  stp ${pos['stop']:.2f}"
                                       f"  cost ${pos['cost']:.2f}  cash left ${portfolio.cash:.2f}")
+                                if _cash_ledger:
+                                    _cash_ledger.record(
+                                        "STOCK_BUY", s["symbol"], -round(pos["cost"], 2),
+                                        f"BUY {pos['shares']} {s['symbol']} @ ${pos['entry']:.2f}"
+                                    )
                             else:
                                 print("  [PAPER] Insufficient cash — trade not recorded.")
                         else:
@@ -1190,6 +1226,13 @@ def main():
                         if args.paper:
                             _log_option_trade(s, verdict="APPROVED")
                             print(f"  [PAPER] Logged to {OPTION_LEDGER_PATH}")
+                            if _cash_ledger:
+                                prem_ct = round(float(s.get("premium", 0)) * 100, 2)
+                                _cash_ledger.record(
+                                    "OPTION_SELL", s["symbol"], prem_ct,
+                                    f"{sig} {s['symbol']} strike=${s['strike']} "
+                                    f"exp={s.get('dte','?')}d premium=${prem_ct:.2f}"
+                                )
                         else:
                             print(f"  Suggested: {sig} {s['symbol']} ${s['strike']} strike, "
                                   f"${s['dte']}d DTE — collect ${s['premium']*100:.0f}/contract")
