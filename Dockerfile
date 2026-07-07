@@ -11,6 +11,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements-overseer.txt .
 RUN pip install --no-cache-dir -r requirements-overseer.txt
 
+# ── Optional: full advisory stack in the container ──────────────────────────
+# The TimesFM forecasts (timesfm_30d_pct + the wheel-vs-hold router) need
+# torch + timesfm, which are host installs today — WITHOUT these lines the
+# containerized scanner runs with TimesFM/Kronos gracefully disabled and the
+# router never fires. Uncomment to bake them in. Costs: image grows ~2.5GB
+# (CPU torch), and the 200M checkpoint (~1GB) downloads from HuggingFace on
+# first start — mount a cache volume to keep it across container recreates:
+#   volumes: - ./hf-cache:/root/.cache/huggingface
+# (Kronos would additionally need its repo cloned into the image — separate.)
+#
+# RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && \
+#     pip install --no-cache-dir "timesfm @ git+https://github.com/google-research/timesfm"
+# ENV TIMESFM_SRC=/usr/local/lib/python3.11/site-packages
+# ─────────────────────────────────────────────────────────────────────────────
+
 # Copy project source
 COPY . .
 

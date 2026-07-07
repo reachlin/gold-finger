@@ -75,11 +75,17 @@ def make_labels_up(closes: pd.Series, horizon: int = HORIZON,
     return labels
 
 
-def make_features(df: pd.DataFrame) -> pd.DataFrame:
+def make_features(df: pd.DataFrame, earnings: "pd.DataFrame | None" = None,
+                  analyst: "pd.DataFrame | None" = None) -> pd.DataFrame:
     """
     Tabular features per row from raw OHLCV. Uses the same indicator engine
     as the scanner (trend_scanner.compute_indicators) plus normalized
     distances and a 20-day HV. First ~60 rows are NaN (indicator warm-up).
+
+    earnings: optional earnings history (see fundamentals.py) — appends
+    earnings_yield / eps_growth / surprise features, as-of joined with no
+    lookahead. Motivated by the measured AUC ~0.5 of the technical-only
+    feature set.
     """
     from trend_scanner import compute_indicators
     ind = compute_indicators(df)
@@ -93,6 +99,17 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
     out["atr_pct"]    = ind["atr"] / ind["close"]
     log_ret           = np.log(ind["close"] / ind["close"].shift(1))
     out["hv20"]       = log_ret.rolling(20).std() * np.sqrt(252)
+
+    if earnings is not None:
+        from fundamentals import build_fundamental_features
+        fund = build_fundamental_features(df, earnings)
+        fund.index = out.index
+        out = pd.concat([out, fund], axis=1)
+    if analyst is not None:
+        from fundamentals import build_analyst_features
+        ana = build_analyst_features(df, analyst)
+        ana.index = out.index
+        out = pd.concat([out, ana], axis=1)
     return out
 
 
@@ -106,17 +123,22 @@ class AssignmentRiskModel:
     def __init__(self, direction: str = "down", move_pct: float | None = None):
         if direction not in ("down", "up"):
             raise ValueError(f"direction must be 'down' or 'up', got {direction!r}")
-        self.direction   = direction
-        self.move_pct    = move_pct if move_pct is not None else (
+        self.direction    = direction
+        self.move_pct     = move_pct if move_pct is not None else (
             DROP_PCT if direction == "down" else RISE_PCT)
-        self.model       = None
-        self.holdout_auc = None
-        self.calibrated  = False
+        self.model        = None
+        self.holdout_auc  = None
+        self.calibrated   = False
+        self.feature_cols = list(FEATURES)
 
-    def fit(self, df: pd.DataFrame):
+    def fit(self, df: pd.DataFrame, earnings: "pd.DataFrame | None" = None,
+            analyst: "pd.DataFrame | None" = None):
         from lightgbm import LGBMClassifier
 
-        feats   = make_features(df)
+        feats   = make_features(df, earnings, analyst)
+        self.feature_cols = list(feats.columns)
+        self._earnings    = earnings   # reused at predict time
+        self._analyst     = analyst
         labeler = make_labels if self.direction == "down" else make_labels_up
         labels  = pd.Series(labeler(df["close"], HORIZON, self.move_pct),
                             index=feats.index)
@@ -159,27 +181,49 @@ class AssignmentRiskModel:
             self.calibrated = False
         return self
 
-    def predict_prob(self, df: pd.DataFrame) -> float:
+    def predict_prob(self, df: pd.DataFrame,
+                     earnings: "pd.DataFrame | None" = None,
+                     analyst: "pd.DataFrame | None" = None) -> float:
         """Probability for the most recent row of df (raw OHLCV)."""
-        feats = make_features(df).iloc[[-1]]
+        if earnings is None:
+            earnings = getattr(self, "_earnings", None)
+        if analyst is None:
+            analyst = getattr(self, "_analyst", None)
+        feats = make_features(df, earnings,
+                              analyst)[self.feature_cols].iloc[[-1]]
         return float(self.model.predict_proba(feats)[:, 1][0])
 
 
 def load_models(symbols: list[str], data_dir: str,
                 direction: str = "down") -> dict:
     """
-    Train one model per symbol from {data_dir}/{sym}_history.csv.
-    Symbols without data or with training failures are skipped — the
-    advisory is optional by design.
+    Train one model per symbol from {data_dir}/{sym}_history.csv, with
+    fundamental features from {data_dir}/fundamentals/{sym}_earnings.csv
+    when cached (experiment 2026-07-05: median holdout AUC 0.52 → 0.55
+    down / 0.52 → 0.57 up). Symbols without data or with training
+    failures are skipped — the advisory is optional by design.
     """
+    from fundamentals import load_earnings, load_analyst, analyst_is_fresh
+    fund_dir = os.path.join(data_dir, "fundamentals")
+
     models: dict[str, AssignmentRiskModel] = {}
     for sym in symbols:
         path = os.path.join(data_dir, f"{sym.lower()}_history.csv")
         if not os.path.exists(path):
             continue
         try:
-            df = pd.read_csv(path)
-            models[sym] = AssignmentRiskModel(direction=direction).fit(df)
+            df       = pd.read_csv(path)
+            earnings = load_earnings(sym, fund_dir)
+            # Analyst features: up-direction only (down measured flat,
+            # median -0.003) and only through the freshness gate — stale
+            # feeds poison the model (experiment 2026-07-05)
+            analyst = None
+            if direction == "up":
+                candidate = load_analyst(sym, fund_dir)
+                if analyst_is_fresh(candidate, df):
+                    analyst = candidate
+            models[sym] = AssignmentRiskModel(direction=direction).fit(
+                df, earnings=earnings, analyst=analyst)
         except Exception as exc:
             print(f"  [AssignRisk] {sym}: training skipped ({exc})")
     return models

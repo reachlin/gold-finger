@@ -1,0 +1,420 @@
+gradedate,firm,tograde,fromgrade,action,pricetargetaction,currentpricetarget,priorpricetarget
+2012-02-09 11:00:00,Deutsche Bank,Hold,Buy,down,Maintains,95.0,0.0
+2012-04-25 10:07:00,Jefferies,Buy,,main,Raises,108.0,102.0
+2012-04-25 11:02:00,Goldman Sachs,Sell,,main,Raises,90.0,87.0
+2012-04-25 14:38:00,UBS,Buy,,main,Raises,100.0,95.0
+2012-06-07 11:12:00,Jefferies,Buy,,main,Raises,108.0,102.0
+2012-07-12 09:52:00,Citigroup,Neutral,,main,Lowers,87.0,89.0
+2012-07-16 09:55:00,Morgan Stanley,Overweight,Equal-Weight,up,Announces,102.0,0.0
+2012-09-05 10:52:00,Citigroup,Neutral,,main,Raises,90.0,87.0
+2012-09-10 11:02:00,JP Morgan,Neutral,,main,Raises,94.0,83.0
+2012-09-24 12:19:00,Jefferies,Buy,,main,Raises,110.0,108.0
+2012-10-24 11:32:00,Deutsche Bank,Hold,,main,Lowers,94.0,95.0
+2012-10-24 13:56:00,Jefferies,Buy,,main,Lowers,107.0,110.0
+2012-11-09 13:03:00,Nomura,Neutral,Reduce,up,Raises,96.0,88.0
+2012-12-13 13:12:49,Deutsche Bank,Hold,,main,Raises,100.0,94.0
+2012-12-14 15:00:04,JP Morgan,Neutral,,main,Raises,97.0,94.0
+2013-01-03 13:16:59,Jefferies,Buy,,main,Raises,110.0,107.0
+2013-01-11 11:42:16,JP Morgan,Underweight,Neutral,down,Maintains,97.0,0.0
+2013-01-25 12:48:50,Credit Suisse,Neutral,,main,Raises,103.0,100.0
+2013-01-25 12:59:31,Deutsche Bank,Hold,,main,Raises,108.0,100.0
+2013-01-29 17:28:48,UBS,Buy,,main,Raises,110.0,100.0
+2013-03-06 18:37:48,Tigress Financial,Buy,,init,,0.0,0.0
+2013-03-18 10:29:39,Citigroup,Neutral,,main,Raises,112.0,96.0
+2013-03-18 12:01:22,Morgan Stanley,Overweight,,main,Raises,113.0,111.0
+2013-06-07 20:10:10,Jefferies,Buy,,main,Raises,128.0,120.0
+2013-06-10 11:34:59,Jefferies,Buy,,main,Raises,128.0,120.0
+2013-07-01 10:44:31,Morgan Stanley,Equal-Weight,Overweight,down,Maintains,112.0,0.0
+2013-07-26 11:48:31,Nomura,Neutral,,main,Raises,120.0,105.0
+2013-08-05 11:39:02,Deutsche Bank,Hold,,main,Raises,125.0,114.0
+2013-10-25 11:50:43,Nomura,Neutral,,main,Raises,128.0,120.0
+2013-10-25 21:31:06,FBR Capital,Outperform,,main,Raises,160.0,142.0
+2013-12-02 11:33:37,Morgan Stanley,Underweight,Equal-weight,down,Lowers,122.0,123.0
+2013-12-11 21:00:00,Nomura,Buy,Neutral,up,Raises,150.0,128.0
+2013-12-18 11:36:00,B of A Securities,Buy,,main,Raises,150.0,141.0
+2013-12-18 12:22:21,Citigroup,Neutral,,main,Raises,133.0,122.0
+2013-12-18 22:33:46,Barclays,Equal-Weight,,main,Raises,134.0,121.0
+2013-12-19 22:32:56,Hilliard Lyons,Long-Term Buy,,main,Raises,150.0,135.0
+2013-12-20 21:00:00,JP Morgan,Neutral,Underweight,up,Raises,128.0,120.0
+2013-12-26 21:00:00,Ladenburg Thalmann,Hold,,main,Raises,135.0,110.0
+2014-02-25 22:28:53,Bernstein,Market Perform,,main,Lowers,148.0,149.0
+2014-02-25 22:29:43,William Blair,Market Perform,,main,Raises,129.0,128.0
+2014-04-25 04:03:39,Deutsche Bank,Hold,,main,Raises,145.0,140.0
+2014-07-08 12:17:55,Argus Research,Buy,Hold,up,,0.0,0.0
+2014-07-25 04:22:26,Deutsche Bank,Hold,,main,Raises,155.0,145.0
+2014-07-26 00:44:55,Citigroup,Neutral,,main,Raises,146.0,145.0
+2014-09-17 21:48:56,Stifel,Hold,,init,Announces,158.0,0.0
+2014-10-02 12:00:00,Morgan Stanley,Underweight,,main,Lowers,136.0,138.0
+2014-10-06 13:00:00,Barclays,Equal-Weight,,main,Lowers,149.0,152.0
+2014-10-24 13:00:00,Credit Suisse,Neutral,,main,Raises,156.0,148.0
+2014-11-25 05:00:00,RBC Capital,Underperform,,init,Announces,154.0,0.0
+2014-12-17 05:00:00,B of A Securities,Buy,,main,Raises,190.0,164.0
+2014-12-17 09:41:17,Morgan Stanley,Underweight,,main,Raises,154.0,145.0
+2014-12-17 14:00:00,Credit Suisse,Neutral,,main,Raises,178.0,156.0
+2015-01-05 05:00:00,Hilliard Lyons,Neutral,Long-Term Buy,down,,0.0,0.0
+2015-01-12 14:00:00,Barclays,Equal-Weight,,main,Lowers,159.0,160.0
+2015-01-15 14:00:00,JP Morgan,Neutral,,main,Raises,150.0,149.0
+2015-01-22 19:39:33,UBS,Buy,,init,Announces,95.0,0.0
+2015-01-28 14:00:00,Barclays,Equal-Weight,,main,Lowers,158.0,159.0
+2015-01-29 14:00:00,Jefferies,Buy,,main,Raises,188.0,180.0
+2015-03-17 13:00:00,Barclays,Equal-Weight,,main,Lowers,157.0,158.0
+2015-04-24 13:00:00,Barclays,Equal-Weight,,main,Lowers,155.0,157.0
+2015-06-24 13:00:00,Deutsche Bank,Hold,,main,Raises,172.0,170.0
+2015-09-25 10:42:33,Credit Suisse,Outperform,Neutral,up,Announces,155.0,160.0
+2015-10-05 15:00:00,Barclays,Equal-Weight,,main,Lowers,135.0,153.0
+2015-10-23 17:38:47,Barclays,Equal-Weight,,main,Raises,150.0,135.0
+2015-12-16 15:01:11,Credit Suisse,Outperform,,main,Lowers,167.0,175.0
+2016-01-21 12:32:26,Citigroup,Buy,,init,,0.0,0.0
+2016-01-28 18:15:00,Deutsche Bank,Hold,,main,Lowers,158.0,160.0
+2016-03-14 21:30:55,Credit Suisse,Outperform,,main,Raises,175.0,167.0
+2016-03-15 19:36:18,Credit Suisse,Outperform,,main,Raises,175.0,167.0
+2016-03-30 10:19:19,Morgan Stanley,Underweight,,main,Raises,157.0,146.0
+2016-03-30 12:27:30,UBS,Buy,,main,Raises,190.0,170.0
+2016-03-30 12:32:58,Bernstein,Market Perform,,main,Raises,170.0,160.0
+2016-04-12 11:34:05,Jefferies,Buy,,main,Raises,187.0,175.0
+2016-04-19 10:18:56,Citigroup,Buy,,main,Raises,191.0,168.0
+2016-10-24 04:00:00,Barclays,Overweight,Equal-Weight,up,Raises,0.0,0.0
+2016-11-21 13:13:46,Goldman Sachs,Sell,Neutral,down,,0.0,0.0
+2016-11-23 19:28:16,Jefferies,Buy,,main,Lowers,200.0,210.0
+2016-12-07 11:22:36,RBC Capital,Sector Perform,Underperform,up,,0.0,0.0
+2017-07-10 07:25:48,Morgan Stanley,Underweight,,main,Lowers,191.0,193.0
+2017-07-26 16:47:27,Citigroup,Buy,,main,Lowers,228.0,230.0
+2017-07-26 17:46:46,Morgan Stanley,Underweight,,main,Lowers,190.0,191.0
+2017-09-20 10:47:30,JP Morgan,Underweight,Neutral,down,,0.0,0.0
+2017-10-02 16:09:54,Morgan Stanley,Underweight,,main,Raises,201.0,190.0
+2017-10-09 13:09:22,Citigroup,Buy,,main,Raises,250.0,228.0
+2017-10-10 13:27:57,Citigroup,Buy,,main,Raises,250.0,228.0
+2017-10-25 11:32:23,Stifel,Hold,,main,Raises,244.0,220.0
+2017-10-25 11:44:17,Goldman Sachs,Neutral,Sell,up,,0.0,0.0
+2017-10-25 11:45:27,Argus Research,Buy,,main,Raises,260.0,220.0
+2017-10-25 16:09:46,B of A Securities,Buy,,main,Raises,257.0,227.0
+2017-10-25 18:12:47,Credit Suisse,Outperform,,main,Raises,260.0,238.0
+2017-10-25 18:57:50,Citigroup,Buy,,main,Raises,262.0,250.0
+2018-01-23 13:44:04,UBS,Neutral,,init,,0.0,0.0
+2018-01-24 14:57:08,Hilliard Lyons,Buy,Neutral,up,,0.0,0.0
+2018-01-26 18:56:51,UBS,Neutral,Neutral,main,Raises,262.0,255.0
+2018-02-15 13:25:59,Barclays,Underweight,,init,Announces,235.0,0.0
+2018-03-26 12:31:58,Barclays,Underweight,Underweight,main,Lowers,230.0,235.0
+2018-04-03 11:05:15,Stifel,Hold,Hold,main,Lowers,225.0,251.0
+2018-04-25 11:29:12,Stifel,Hold,Hold,main,Lowers,210.0,225.0
+2018-04-25 12:07:42,Argus Research,Buy,Buy,main,Lowers,240.0,285.0
+2018-04-25 15:51:38,Barclays,Underweight,Underweight,main,Lowers,210.0,230.0
+2018-04-26 12:12:50,JP Morgan,Underweight,Underweight,main,Lowers,221.0,227.0
+2018-04-26 14:03:43,UBS,Neutral,Neutral,main,Lowers,215.0,250.0
+2018-05-03 11:22:57,RBC Capital,Outperform,Sector Perform,up,,0.0,0.0
+2018-05-16 10:15:19,Jefferies,Hold,Buy,down,,0.0,200.0
+2018-07-25 16:14:07,Barclays,Underweight,Underweight,main,Lowers,201.0,210.0
+2018-08-21 11:05:50,Morgan Stanley,Equal-Weight,,init,Announces,212.0,0.0
+2018-08-30 12:15:08,UBS,Neutral,Neutral,main,Raises,220.0,215.0
+2018-09-28 12:13:53,Deutsche Bank,Hold,Hold,main,Raises,220.0,210.0
+2018-10-12 12:52:39,Credit Suisse,Outperform,,init,Announces,228.0,0.0
+2018-10-24 14:28:06,Citigroup,Buy,Buy,main,Lowers,228.0,251.0
+2018-10-24 14:59:02,Barclays,Underweight,Underweight,main,Lowers,195.0,201.0
+2018-10-24 15:18:32,UBS,Neutral,Neutral,main,Lowers,211.0,220.0
+2018-10-24 15:18:33,Argus Research,Buy,Buy,main,Lowers,225.0,240.0
+2018-10-24 15:34:51,Credit Suisse,Outperform,Outperform,main,Lowers,222.0,228.0
+2018-11-16 14:33:41,Deutsche Bank,Hold,Hold,main,Raises,210.0,206.0
+2018-11-19 14:31:10,Barclays,Underweight,Underweight,main,Lowers,190.0,195.0
+2019-01-03 15:24:59,Barclays,Underweight,Underweight,main,Lowers,189.0,190.0
+2019-03-22 12:40:17,Morgan Stanley,Equal-Weight,Equal-Weight,main,Lowers,199.0,201.0
+2019-04-03 13:37:14,Barclays,Underweight,Underweight,main,Lowers,188.0,189.0
+2019-04-26 12:52:58,Argus Research,Hold,Buy,down,,0.0,0.0
+2019-04-26 15:43:11,Deutsche Bank,Hold,Hold,main,Lowers,183.0,188.0
+2019-04-29 11:25:46,Gordon Haskett,Hold,Buy,down,,0.0,0.0
+2019-05-24 12:59:06,Morgan Stanley,Equal-Weight,,main,Lowers,172.0,184.0
+2019-06-27 13:26:02,B of A Securities,Neutral,,main,Lowers,185.0,193.0
+2019-07-09 10:28:25,RBC Capital,Sector Perform,Outperform,down,Lowers,176.0,207.0
+2019-07-12 13:34:18,UBS,Neutral,,main,Lowers,182.0,201.0
+2019-07-26 12:49:47,Credit Suisse,Outperform,,main,Raises,194.0,180.0
+2019-07-29 12:49:29,Morgan Stanley,Equal-Weight,,main,Raises,177.0,172.0
+2019-08-06 12:12:19,JP Morgan,Underweight,,main,Lowers,140.0,143.0
+2019-09-27 12:44:00,Morgan Stanley,Equal-Weight,,main,Lowers,173.0,177.0
+2019-10-10 12:35:52,JP Morgan,Underweight,,main,Raises,143.0,140.0
+2019-10-15 12:30:19,Citigroup,Buy,,main,Lowers,180.0,197.0
+2019-10-25 12:16:09,Morgan Stanley,Equal-Weight,,main,Lowers,165.0,173.0
+2019-10-28 12:43:27,Barclays,Underweight,,main,Lowers,157.0,158.0
+2019-12-04 13:53:34,Deutsche Bank,Hold,,main,Raises,176.0,160.0
+2019-12-09 11:21:40,Citigroup,Neutral,Buy,down,,0.0,0.0
+2019-12-23 11:16:37,JP Morgan,Neutral,Underweight,up,Raises,150.0,143.0
+2020-01-09 14:54:28,Wolfe Research,Peer Perform,Underperform,up,,0.0,0.0
+2020-01-29 12:21:03,Citigroup,Neutral,,main,Lowers,176.0,180.0
+2020-01-29 13:37:41,Morgan Stanley,Equal-Weight,,main,Raises,175.0,165.0
+2020-02-26 10:17:55,Melius Research,Overweight,Neutral,up,,0.0,0.0
+2020-03-17 12:40:52,Morgan Stanley,Equal-Weight,,main,Lowers,156.0,175.0
+2020-03-27 17:07:27,Goldman Sachs,Neutral,,main,Lowers,159.0,172.0
+2020-03-30 10:07:56,Gordon Haskett,Underperform,Hold,down,,0.0,0.0
+2020-04-01 16:21:23,Citigroup,Neutral,,main,Lowers,146.0,170.0
+2020-04-09 09:14:01,Langenberg & Company,Buy,Hold,up,Lowers,180.0,200.0
+2020-04-09 14:18:28,Deutsche Bank,Hold,,main,Lowers,158.0,178.0
+2020-04-28 08:40:33,CFRA,Buy,Hold,up,Announces,177.0,0.0
+2020-04-29 12:07:37,Deutsche Bank,Hold,,main,Raises,163.0,158.0
+2020-04-29 12:52:19,Credit Suisse,Outperform,,main,Raises,180.0,165.0
+2020-04-29 15:48:56,Citigroup,Neutral,,main,Raises,170.0,146.0
+2020-04-29 16:10:41,Barclays,Underweight,,main,Raises,154.0,141.0
+2020-04-29 16:15:23,B of A Securities,Neutral,,main,Raises,170.0,165.0
+2020-05-01 12:25:59,Morgan Stanley,Equal-Weight,,main,Raises,160.0,131.0
+2020-06-08 12:00:43,Barclays,Underweight,,main,Lowers,159.0,154.0
+2020-06-15 08:37:32,Goldman Sachs,Neutral,,main,Raises,169.0,152.0
+2020-07-07 11:18:16,Barclays,Underweight,,main,Lowers,156.0,159.0
+2020-07-08 08:35:09,UBS,Sell,,main,Raises,138.0,126.0
+2020-07-29 11:41:20,Barclays,Underweight,,main,Raises,157.0,156.0
+2020-07-29 12:02:17,Morgan Stanley,Equal-Weight,,main,Raises,166.0,160.0
+2020-07-29 13:07:37,Citigroup,Neutral,,main,Raises,171.0,170.0
+2020-07-29 14:16:12,Credit Suisse,Outperform,,main,Lowers,179.0,180.0
+2020-09-16 12:33:01,Credit Suisse,Outperform,,main,Raises,197.0,179.0
+2020-10-07 12:39:58,Gordon Haskett,Hold,Underperform,up,,0.0,0.0
+2020-10-13 08:33:27,Deutsche Bank,Hold,,main,Lowers,169.0,171.0
+2020-10-13 12:02:04,Morgan Stanley,Equal-Weight,,main,Raises,173.0,166.0
+2020-10-15 08:31:10,UBS,Sell,,main,Raises,145.0,138.0
+2020-10-28 08:28:14,Deutsche Bank,Hold,,main,Raises,170.0,169.0
+2020-10-28 11:31:43,Morgan Stanley,Equal-Weight,,main,Raises,176.0,173.0
+2020-10-30 08:26:45,UBS,Sell,,main,Raises,150.0,145.0
+2020-12-04 09:24:37,RBC Capital,Sector Perform,,main,Lowers,191.0,193.0
+2020-12-04 13:16:53,Barclays,Underweight,,main,Raises,159.0,157.0
+2021-01-07 13:15:59,B of A Securities,Underperform,Neutral,down,Announces,170.0,0.0
+2021-01-12 13:44:02,Morgan Stanley,Equal-Weight,,main,Raises,188.0,176.0
+2021-01-13 16:19:17,Deutsche Bank,Hold,,main,Raises,190.0,187.0
+2021-01-19 16:17:33,Wolfe Research,Peer Perform,,main,Lowers,194.0,203.0
+2021-01-27 11:04:52,JP Morgan,Overweight,Neutral,up,Announces,205.0,0.0
+2021-01-27 13:20:19,Barclays,Underweight,,main,Raises,163.0,159.0
+2021-01-27 14:06:58,Credit Suisse,Outperform,,main,Lowers,197.0,208.0
+2021-01-27 14:12:33,Citigroup,Neutral,,main,Raises,188.0,185.0
+2021-01-27 16:15:35,RBC Capital,Sector Perform,,main,Raises,197.0,193.0
+2021-02-03 15:35:59,Argus Research,Buy,Hold,up,Announces,200.0,0.0
+2021-03-23 12:08:34,Credit Suisse,Outperform,,main,Raises,202.0,197.0
+2021-04-06 13:06:04,Barclays,Underweight,,main,Raises,180.0,163.0
+2021-04-12 14:25:57,Morgan Stanley,Equal-Weight,,main,Raises,200.0,188.0
+2021-04-13 15:10:50,Deutsche Bank,Hold,,main,Lowers,192.0,193.0
+2021-04-16 15:08:07,UBS,Sell,,main,Raises,175.0,158.0
+2021-04-28 12:13:57,RBC Capital,Sector Perform,,main,Raises,200.0,198.0
+2021-04-28 12:27:37,Barclays,Underweight,,main,Raises,182.0,180.0
+2021-04-28 12:52:12,Credit Suisse,Outperform,,main,Lowers,210.0,213.0
+2021-04-28 13:09:38,Citigroup,Neutral,,main,Raises,202.0,199.0
+2021-04-28 15:06:05,Deutsche Bank,Hold,,main,Raises,199.0,192.0
+2021-05-03 15:04:24,UBS,Sell,,main,Raises,181.0,175.0
+2021-07-06 09:11:03,Credit Suisse,Neutral,Outperform,down,Raises,212.0,210.0
+2021-07-08 12:32:07,Barclays,Underweight,,main,Raises,185.0,182.0
+2021-07-12 12:47:02,Wolfe Research,Underperform,Peer Perform,down,Lowers,215.0,218.0
+2021-07-14 13:20:42,Deutsche Bank,Hold,,main,Lowers,196.0,199.0
+2021-07-28 12:28:53,Wolfe Research,Underperform,,main,Lowers,215.0,219.0
+2021-07-28 13:13:02,Morgan Stanley,Equal-Weight,,main,Raises,213.0,200.0
+2021-07-28 13:14:05,Citigroup,Neutral,,main,Raises,206.0,202.0
+2021-07-28 14:34:53,Deutsche Bank,Hold,,main,Raises,201.0,196.0
+2021-07-28 15:02:34,RBC Capital,Sector Perform,,main,Raises,206.0,200.0
+2021-07-29 14:57:22,UBS,Sell,,main,Raises,183.0,181.0
+2021-09-17 11:19:11,UBS,Sell,,main,Lowers,172.0,183.0
+2021-09-17 11:52:00,B of A Securities,Underperform,,main,Lowers,185.0,190.0
+2021-10-04 09:12:06,JP Morgan,Neutral,Overweight,down,Announces,210.0,0.0
+2021-10-04 12:31:38,Barclays,Underweight,,main,Lowers,182.0,185.0
+2021-10-07 12:47:03,Morgan Stanley,Equal-Weight,,main,Lowers,193.0,213.0
+2021-10-08 08:51:35,Wells Fargo,Equal-Weight,,init,Announces,179.0,0.0
+2021-10-10 14:55:56,Langenberg & Company,Buy,Hold,up,,0.0,0.0
+2021-10-13 14:09:39,Deutsche Bank,Hold,,main,Lowers,195.0,201.0
+2021-10-27 12:56:06,Wells Fargo,Equal-Weight,,main,Raises,180.0,179.0
+2021-10-27 13:03:09,Morgan Stanley,Equal-Weight,,main,Raises,194.0,193.0
+2021-10-27 13:12:19,Credit Suisse,Neutral,,main,Lowers,201.0,202.0
+2021-10-27 13:15:48,Citigroup,Neutral,,main,Lowers,191.0,194.0
+2021-10-27 14:07:31,Deutsche Bank,Hold,,main,Lowers,192.0,195.0
+2021-10-27 14:53:53,RBC Capital,Sector Perform,,main,Lowers,201.0,203.0
+2021-10-28 14:40:58,UBS,Sell,,main,Lowers,167.0,172.0
+2021-12-03 12:44:11,RBC Capital,Sector Perform,,main,Lowers,199.0,201.0
+2021-12-10 14:41:24,Deutsche Bank,Hold,,main,Lowers,182.0,192.0
+2021-12-15 12:20:12,Credit Suisse,Neutral,,main,Lowers,198.0,201.0
+2021-12-17 10:27:51,Mizuho,Neutral,,init,Announces,180.0,0.0
+2022-01-04 13:11:37,Barclays,Underweight,,main,Lowers,177.0,182.0
+2022-01-05 09:56:39,RBC Capital,Underperform,Sector Perform,down,Lowers,166.0,199.0
+2022-01-10 14:56:49,Deutsche Bank,Hold,,main,Raises,192.0,182.0
+2022-01-11 09:59:09,Bernstein,Market Perform,,init,Announces,175.0,0.0
+2022-01-14 15:29:30,Morgan Stanley,Equal-Weight,,main,Lowers,185.0,194.0
+2022-01-25 15:39:19,CFRA,Sell,Hold,down,Lowers,164.0,196.0
+2022-01-26 12:21:42,Barclays,Underweight,,main,Raises,178.0,177.0
+2022-01-26 12:59:09,Wells Fargo,Equal-Weight,,main,Raises,184.0,175.0
+2022-01-26 13:05:40,Credit Suisse,Neutral,,main,Lowers,195.0,198.0
+2022-01-26 14:33:16,Wolfe Research,Underperform,,main,Raises,190.0,189.0
+2022-02-15 11:49:44,Mizuho,Neutral,,main,Lowers,170.0,180.0
+2022-02-15 12:27:10,Barclays,Underweight,,main,Lowers,170.0,178.0
+2022-02-15 12:34:12,Citigroup,Neutral,,main,Lowers,175.0,190.0
+2022-02-15 12:55:52,Deutsche Bank,Hold,,main,Lowers,182.0,189.0
+2022-02-15 12:58:54,Credit Suisse,Neutral,,main,Lowers,182.0,195.0
+2022-02-15 13:00:38,RBC Capital,Underperform,,main,Lowers,147.0,155.0
+2022-02-15 13:02:59,Wells Fargo,Equal-Weight,,main,Lowers,173.0,184.0
+2022-02-16 15:36:59,JP Morgan,Neutral,,main,Lowers,190.0,200.0
+2022-02-17 11:12:58,Morgan Stanley,Underweight,Equal-Weight,down,Announces,150.0,0.0
+2022-03-08 15:35:14,CFRA,Hold,Sell,up,Lowers,155.0,164.0
+2022-03-11 12:25:26,UBS,Sell,,main,Lowers,118.0,168.0
+2022-03-15 12:02:35,Jefferies,Hold,,main,Lowers,161.0,186.0
+2022-04-04 11:12:21,Barclays,Underweight,,main,Lowers,155.0,170.0
+2022-04-07 13:05:26,Morgan Stanley,Underweight,,main,Lowers,145.0,150.0
+2022-04-08 12:39:56,Wells Fargo,Equal-Weight,,main,Lowers,154.0,173.0
+2022-04-12 13:31:20,Wolfe Research,Underperform,,main,Announces,164.0,0.0
+2022-04-14 11:46:16,Deutsche Bank,Hold,,main,Lowers,167.0,180.0
+2022-04-27 10:50:06,RBC Capital,Underperform,,main,Raises,138.0,136.0
+2022-04-27 11:56:52,Morgan Stanley,Underweight,,main,Lowers,138.0,145.0
+2022-04-27 12:21:26,Credit Suisse,Neutral,,main,Lowers,161.0,173.0
+2022-04-27 13:17:14,Citigroup,Neutral,,main,Lowers,151.0,157.0
+2022-04-27 13:37:17,Deutsche Bank,Hold,,main,Lowers,164.0,167.0
+2022-04-27 14:14:00,Barclays,Underweight,,main,Lowers,146.0,155.0
+2022-04-28 11:45:09,Argus Research,Hold,Buy,down,,0.0,0.0
+2022-06-08 13:29:28,Wolfe Research,Underperform,,main,Lowers,148.0,154.0
+2022-06-16 13:24:03,Jefferies,Hold,,main,Lowers,145.0,161.0
+2022-06-29 11:18:29,Wells Fargo,Equal-Weight,,main,Lowers,140.0,156.0
+2022-07-08 10:44:56,Barclays,Underweight,,main,Lowers,143.0,146.0
+2022-07-13 10:50:37,Wells Fargo,Equal-Weight,,main,Lowers,137.0,140.0
+2022-07-13 12:39:32,Deutsche Bank,Hold,,main,Lowers,146.0,164.0
+2022-07-15 12:55:54,Morgan Stanley,Underweight,,main,Lowers,126.0,138.0
+2022-07-18 13:01:32,Mizuho,Neutral,,main,Lowers,130.0,170.0
+2022-07-27 10:41:29,Citigroup,Neutral,,main,Raises,145.0,136.0
+2022-07-27 11:15:46,Barclays,Underweight,,main,Lowers,137.0,143.0
+2022-07-27 11:18:33,Mizuho,Neutral,,main,Raises,140.0,130.0
+2022-07-27 11:20:43,Wells Fargo,Equal-Weight,,main,Raises,144.0,137.0
+2022-07-27 12:19:49,Morgan Stanley,Underweight,,main,Raises,131.0,126.0
+2022-07-27 12:53:23,Deutsche Bank,Hold,,main,Raises,148.0,146.0
+2022-07-27 13:42:25,Credit Suisse,Neutral,,main,Raises,160.0,157.0
+2022-08-25 13:27:34,Wolfe Research,Underperform,,main,Lowers,120.0,123.0
+2022-08-29 13:20:34,Citigroup,Neutral,,main,Maintains,145.0,0.0
+2022-08-29 13:25:53,Morgan Stanley,Underweight,,main,Maintains,131.0,0.0
+2022-09-02 11:56:57,B of A Securities,Underperform,,main,Lowers,140.0,165.0
+2022-09-08 11:25:29,Wells Fargo,Equal-Weight,,main,Lowers,125.0,144.0
+2022-09-09 11:29:11,Deutsche Bank,Hold,,main,Lowers,127.0,155.0
+2022-09-09 13:30:41,UBS,Neutral,Sell,up,Raises,126.0,118.0
+2022-10-03 12:32:57,Barclays,Underweight,,main,Lowers,130.0,137.0
+2022-10-10 13:22:47,Citigroup,Neutral,,main,Lowers,117.0,145.0
+2022-10-11 12:54:25,Goldman Sachs,Neutral,,main,Lowers,129.0,149.0
+2022-10-12 13:49:12,Morgan Stanley,Underweight,,main,Lowers,108.0,131.0
+2022-10-13 13:14:46,Deutsche Bank,Hold,,main,Lowers,126.0,127.0
+2022-10-26 12:03:00,Wells Fargo,Equal-Weight,,main,Lowers,122.0,125.0
+2022-10-26 12:10:20,RBC Capital,Underperform,,main,Raises,113.0,107.0
+2022-10-26 13:35:44,Deutsche Bank,Hold,,main,Raises,127.0,126.0
+2022-10-26 13:44:10,Morgan Stanley,Underweight,,main,Raises,110.0,108.0
+2022-10-26 13:56:59,Mizuho,Neutral,,main,Lowers,130.0,140.0
+2022-10-26 14:20:26,Credit Suisse,Neutral,,main,Lowers,127.0,129.0
+2022-12-09 17:32:24,Citigroup,Neutral,,main,Raises,126.0,117.0
+2023-01-05 14:32:38,Wells Fargo,Equal-Weight,,main,Raises,123.0,122.0
+2023-01-09 14:33:36,Deutsche Bank,Hold,,main,Lowers,120.0,127.0
+2023-01-12 15:18:31,JP Morgan,Neutral,,main,Lowers,120.0,125.0
+2023-01-19 12:21:12,Wells Fargo,Equal-Weight,,main,Raises,125.0,123.0
+2023-01-23 14:23:46,Wolfe Research,Underperform,,main,Lowers,110.0,124.0
+2023-01-25 11:34:19,Barclays,Underweight,,main,Lowers,122.0,130.0
+2023-01-25 12:47:06,Wells Fargo,Equal-Weight,,main,Lowers,115.0,125.0
+2023-01-25 14:24:22,Citigroup,Neutral,,main,Lowers,120.0,126.0
+2023-01-25 14:30:27,Deutsche Bank,Hold,,main,Lowers,119.0,120.0
+2023-01-25 15:11:49,UBS,Neutral,,main,Lowers,115.0,124.0
+2023-01-25 15:14:41,JP Morgan,Neutral,,main,Lowers,105.0,120.0
+2023-01-25 15:16:12,RBC Capital,Underperform,,main,Lowers,106.0,113.0
+2023-01-26 12:20:15,Mizuho,Neutral,,main,Lowers,120.0,130.0
+2023-01-27 14:54:56,Deutsche Bank,Hold,,main,Lowers,189.0,192.0
+2023-03-22 10:09:42,Barclays,Underweight,,main,Lowers,105.0,122.0
+2023-03-30 08:39:26,RBC Capital,Sector Perform,,main,Raises,148.0,143.0
+2023-04-06 11:42:50,Barclays,Underweight,,main,Lowers,103.0,105.0
+2023-04-13 12:41:01,Wells Fargo,Equal-Weight,,main,Lowers,110.0,115.0
+2023-04-19 12:20:20,Morgan Stanley,Underweight,,main,Lowers,103.0,110.0
+2023-04-26 12:33:37,Morgan Stanley,Underweight,,main,Lowers,102.0,103.0
+2023-04-26 13:04:23,RBC Capital,Underperform,,main,Raises,95.0,89.0
+2023-05-22 12:26:59,RBC Capital,Underperform,Underperform,reit,Maintains,95.0,0.0
+2023-06-01 13:57:27,UBS,Neutral,Neutral,main,Lowers,95.0,115.0
+2023-06-27 12:18:17,Morgan Stanley,Underweight,Underweight,main,Lowers,100.0,102.0
+2023-07-10 14:42:53,Barclays,Underweight,Underweight,main,Lowers,93.0,103.0
+2023-07-10 15:35:54,Wells Fargo,Equal-Weight,Equal-Weight,main,Lowers,100.0,110.0
+2023-07-11 10:15:02,B of A Securities,Neutral,Underperform,up,Maintains,110.0,0.0
+2023-07-11 14:29:34,Citigroup,Neutral,Neutral,main,Lowers,100.0,120.0
+2023-07-11 15:24:44,DA Davidson,Buy,,main,Raises,159.0,138.0
+2023-07-14 14:46:50,Morgan Stanley,Underweight,Underweight,reit,Maintains,100.0,100.0
+2023-07-26 13:50:11,RBC Capital,Underperform,Underperform,main,Raises,100.0,95.0
+2023-07-26 14:15:49,Citigroup,Neutral,Neutral,main,Raises,111.0,100.0
+2023-07-26 14:37:42,Morgan Stanley,Underweight,Underweight,main,Raises,102.0,100.0
+2023-08-29 09:04:46,Wolfe Research,Peer Perform,Underperform,up,,0.0,0.0
+2023-08-29 13:40:56,Mizuho,Neutral,Neutral,reit,Maintains,120.0,0.0
+2023-08-31 09:20:26,Morgan Stanley,Equal-Weight,Underweight,up,Raises,113.0,102.0
+2023-09-15 09:55:00,HSBC,Hold,,init,Announces,109.0,0.0
+2023-10-09 16:07:43,Citigroup,Neutral,Neutral,main,Lowers,95.0,111.0
+2023-10-25 14:39:47,Barclays,Underweight,Underweight,main,Raises,98.0,96.0
+2023-10-25 15:29:34,Citigroup,Neutral,Neutral,main,Raises,97.0,95.0
+2023-10-25 16:08:35,RBC Capital,Underperform,Underperform,main,Lowers,83.0,85.0
+2023-10-25 16:20:08,JP Morgan,Neutral,Neutral,main,Raises,105.0,104.0
+2023-12-04 10:18:56,Barclays,Equal-Weight,Underweight,up,Raises,107.0,98.0
+2023-12-19 13:32:10,Wells Fargo,Equal-Weight,Equal-Weight,main,Raises,112.0,100.0
+2024-01-24 15:07:56,Wells Fargo,Equal-Weight,Equal-Weight,main,Lowers,105.0,112.0
+2024-01-24 16:01:30,RBC Capital,Underperform,Underperform,main,Raises,87.0,83.0
+2024-01-24 17:01:53,Mizuho,Neutral,Neutral,main,Lowers,105.0,120.0
+2024-01-24 19:23:10,Citigroup,Neutral,Neutral,main,Lowers,104.0,117.0
+2024-03-07 10:37:50,RBC Capital,Underperform,Underperform,main,Lowers,84.0,85.0
+2024-03-11 10:55:14,Barclays,Equal-Weight,Equal-Weight,main,Raises,111.0,110.0
+2024-03-19 09:57:55,Barclays,Overweight,Equal-Weight,up,Raises,126.0,111.0
+2024-03-20 14:47:21,RBC Capital,Underperform,Underperform,reit,Maintains,84.0,84.0
+2024-03-27 17:23:56,Mizuho,Neutral,Neutral,main,Maintains,105.0,105.0
+2024-04-02 10:37:35,B of A Securities,Neutral,Neutral,main,Lowers,100.0,110.0
+2024-04-02 18:46:34,Barclays,Overweight,Overweight,main,Lowers,107.0,126.0
+2024-04-02 19:34:54,RBC Capital,Underperform,Underperform,main,Lowers,78.0,84.0
+2024-04-08 22:24:50,Citigroup,Neutral,Neutral,main,Raises,98.0,95.31
+2024-04-17 14:50:09,JP Morgan,Neutral,Neutral,main,Lowers,110.0,118.0
+2024-05-01 14:14:56,JP Morgan,Overweight,Neutral,up,Raises,111.0,110.0
+2024-05-01 15:53:21,UBS,Neutral,Neutral,main,Raises,100.0,98.0
+2024-05-01 16:54:57,RBC Capital,Underperform,Underperform,main,Raises,87.0,78.0
+2024-05-01 18:37:08,Citigroup,Neutral,Neutral,main,Raises,100.0,98.0
+2024-05-10 10:26:51,HSBC,Buy,Hold,up,Raises,115.0,91.13
+2024-05-16 18:50:37,Vertical Research,Buy,Hold,up,Raises,140.0,92.0
+2024-05-28 11:52:15,Barclays,Overweight,Overweight,main,Raises,118.0,112.0
+2024-06-07 11:00:37,B of A Securities,Buy,Neutral,up,Raises,120.0,105.0
+2024-06-13 09:43:51,Wolfe Research,Outperform,Peer Perform,up,Announces,125.0,0.0
+2024-07-10 15:31:44,Wells Fargo,Equal-Weight,Equal-Weight,main,Raises,110.0,100.0
+2024-07-11 00:02:11,Barclays,Overweight,Overweight,main,Raises,120.0,118.0
+2024-07-29 14:37:36,RBC Capital,Underperform,Underperform,main,Raises,95.0,93.0
+2024-07-29 16:22:04,B of A Securities,Buy,Buy,main,Raises,143.0,120.0
+2024-07-29 16:33:05,Barclays,Overweight,Overweight,main,Raises,145.0,120.0
+2024-07-29 16:52:52,Citigroup,Neutral,Neutral,main,Raises,133.0,100.0
+2024-07-30 16:50:11,Argus Research,Buy,Hold,up,Announces,145.0,0.0
+2024-07-31 11:42:12,Deutsche Bank,Buy,Hold,up,Raises,150.0,110.0
+2024-09-06 13:28:49,Morgan Stanley,Underweight,,init,Announces,125.0,0.0
+2024-10-02 18:13:16,Barclays,Overweight,Overweight,main,Raises,160.0,145.0
+2024-10-07 20:06:16,Wells Fargo,Equal-Weight,Equal-Weight,main,Raises,140.0,130.0
+2024-10-17 13:17:03,Mizuho,Neutral,Neutral,main,Raises,146.0,105.0
+2024-10-22 15:31:08,Melius Research,Buy,Hold,up,Announces,180.0,0.0
+2024-10-23 13:17:59,Barclays,Overweight,Overweight,main,Raises,165.0,160.0
+2024-10-23 17:22:10,B of A Securities,Buy,Buy,main,Raises,160.0,143.0
+2024-10-23 18:34:40,RBC Capital,Underperform,Underperform,main,Raises,100.0,99.0
+2024-10-28 13:34:10,JP Morgan,Overweight,Overweight,main,Raises,165.0,160.0
+2024-11-13 18:19:09,UBS,Buy,Neutral,up,Raises,184.0,130.0
+2025-01-03 16:41:39,RBC Capital,Underperform,Underperform,main,Lowers,96.0,100.0
+2025-01-08 13:28:23,Barclays,Overweight,Overweight,main,Lowers,161.0,165.0
+2025-01-15 14:00:56,JP Morgan,Overweight,Overweight,main,Lowers,162.0,165.0
+2025-01-22 11:12:56,Wells Fargo,Overweight,Equal-Weight,up,Raises,170.0,140.0
+2025-01-22 12:03:51,JP Morgan,Overweight,Overweight,main,Raises,165.0,162.0
+2025-01-22 12:06:22,Barclays,Overweight,Overweight,main,Raises,165.0,161.0
+2025-01-22 12:50:45,Citigroup,Neutral,Neutral,main,Raises,152.0,142.0
+2025-01-22 13:06:28,B of A Securities,Buy,Buy,main,Raises,175.0,160.0
+2025-01-22 17:09:10,RBC Capital,Underperform,Underperform,reit,Maintains,96.0,96.0
+2025-02-27 16:46:43,RBC Capital,Underperform,Underperform,reit,Maintains,96.0,96.0
+2025-03-06 15:28:28,B of A Securities,Buy,Buy,main,Raises,179.0,175.0
+2025-04-08 16:41:03,JP Morgan,Overweight,Overweight,main,Lowers,140.0,165.0
+2025-04-10 15:37:01,Barclays,Overweight,Overweight,main,Lowers,160.0,165.0
+2025-04-14 20:22:26,Citigroup,Neutral,Neutral,main,Lowers,142.0,152.0
+2025-04-23 09:50:57,Citigroup,Neutral,Neutral,main,Lowers,141.0,142.0
+2025-04-23 13:04:57,Barclays,Overweight,Overweight,main,Raises,164.0,160.0
+2025-04-23 16:26:04,RBC Capital,Underperform,Underperform,main,Raises,100.0,98.0
+2025-05-16 20:54:14,JP Morgan,Overweight,Overweight,main,Raises,167.0,140.0
+2025-05-30 18:13:56,Citigroup,Neutral,Neutral,main,Raises,160.0,141.0
+2025-07-01 13:12:37,Wells Fargo,Overweight,Overweight,main,Raises,170.0,150.0
+2025-07-09 15:58:29,Barclays,Overweight,Overweight,main,Raises,170.0,164.0
+2025-07-21 13:17:13,Barclays,Overweight,Overweight,main,Raises,172.0,170.0
+2025-10-06 13:30:52,Wells Fargo,Overweight,Overweight,main,Raises,176.0,170.0
+2025-10-09 16:45:28,Citigroup,Neutral,Neutral,main,Raises,169.0,160.0
+2025-10-15 12:53:28,JP Morgan,Overweight,Overweight,main,Raises,178.0,175.0
+2025-10-22 13:30:33,Wells Fargo,Overweight,Overweight,main,Raises,183.0,176.0
+2025-10-22 13:44:25,RBC Capital,Underperform,Underperform,main,Raises,130.0,120.0
+2025-10-22 16:59:12,Morgan Stanley,Equal-Weight,Underweight,up,Raises,160.0,130.0
+2025-10-22 17:00:06,Barclays,Overweight,Overweight,main,Raises,180.0,172.0
+2025-10-22 21:06:05,UBS,Buy,Buy,main,Raises,190.0,184.0
+2025-12-04 16:00:32,Barclays,Overweight,Overweight,main,Raises,190.0,180.0
+2025-12-08 13:30:51,Deutsche Bank,Hold,Buy,down,Lowers,178.0,199.0
+2026-01-16 12:41:09,JP Morgan,Neutral,Overweight,down,Announces,182.0,0.0
+2026-01-21 13:20:05,Morgan Stanley,Equal-Weight,Equal-Weight,main,Raises,165.0,160.0
+2026-01-21 14:10:22,Wells Fargo,Overweight,Overweight,main,Lowers,175.0,183.0
+2026-01-21 14:49:25,RBC Capital,Underperform,Underperform,main,Raises,136.0,131.0
+2026-01-21 17:52:12,Deutsche Bank,Hold,Hold,main,Raises,181.0,179.0
+2026-01-21 18:58:34,Citigroup,Neutral,Neutral,main,Lowers,175.0,181.0
+2026-04-01 16:10:25,Wells Fargo,Overweight,Overweight,main,Lowers,160.0,175.0
+2026-04-01 18:53:35,Barclays,Overweight,Overweight,main,Lowers,185.0,190.0
+2026-04-13 15:36:02,Citigroup,Neutral,Neutral,main,Lowers,166.0,175.0
+2026-04-22 14:10:10,RBC Capital,Underperform,Underperform,main,Lowers,133.0,134.0
+2026-04-22 14:58:29,Wells Fargo,Overweight,Overweight,main,Raises,165.0,160.0
+2026-06-10 16:49:10,Bernstein,Underperform,,init,Announces,131.0,0.0

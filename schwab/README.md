@@ -324,9 +324,116 @@ live_scanner.py
    concentration and correlated-assignment risk, expiry laddering
    (small positions free capital in slices), real-chain liquidity
    (bid/ask), and a cash reserve for rolls.
-   Step 1: list the scan's other pending candidates in each signal's
-   prompt (like open positions) + an allocation section in
-   OVERSEER_SYSTEM so the LLM sees opportunity cost.
-   Step 2 (measurable): deterministic ranking — yield/day per collateral
-   $ with a concentration penalty, deploy down the ranking until budget
-   is spent; backtest it with the existing harness.
+   Step 1 — DONE (2026-07-04): each signal's prompt lists the scan's
+   other pending candidates ("Other pending signals this scan", compact
+   per-peer summary via peer_summaries()) and OVERSEER_SYSTEM has a
+   "Capital allocation" section: rejecting an acceptable signal to keep
+   collateral for a stronger peer is explicitly valid; prefer premium/day
+   per collateral $, proven-edge names, diversification, laddering,
+   real-chain quotes; keep ~10% cash reserve.
+   Step 2 — ranking DEPLOYED (2026-07-04), measurement pending. New
+   allocator.py orders each scan's batch deterministically: cash-freeing
+   signals first (RESUME_WHEEL, covered SELL_CALL), then SELL_PUTs by
+   premium/day per collateral $ halved per open position on the symbol,
+   then BUY/HOLD_SHARES. live_scanner ranks the batch before the
+   overseer loop, so high-efficiency candidates get first claim on cash
+   instead of WATCHLIST order.
+
+   Step 3 — portfolio-level harness BUILT and MEASURED (2026-07-04):
+   backtest_portfolio.py runs the wheel across all 18 symbols in date
+   lockstep under ONE shared cash pool (report:
+   data/backtest_portfolio_2026-07-04.txt).
+
+   **Result: the premium-density score LOSES at tight capital.**
+   $30K: watchlist order +$142,368 vs allocator +$94,961 (-$47K);
+   $100K: identical (+$198.5K both — nothing competes, ~500 skips on
+   ~1000 trades). Diagnosis: premium/(strike×dte) is highest on high-IV
+   names, so the allocator funds extra NVDA/GOOGL/KO cycles and NEVER
+   funds UNH — the single best wheel name (+$30.9K under watchlist
+   order, absent from the allocator's per-symbol P&L top-8). Premium
+   density is anti-correlated with realized wheel edge in this universe:
+   quality sideways names have modest density and great outcomes.
+   "Cheap ≠ good" applies to the score itself.
+
+   Score v2 (density × pre-2024 edge prior, floored at 0.05) — MEASURED
+   2026-07-04, verdict: NO robust winner exists. At $30K:
+   - Full history:  watchlist +$142.4K > v2 +$120.5K > v1 +$95.0K
+   - 2023-07+ OOS:  v1 +$28.3K > v2 +$22.8K > watchlist +$20.9K
+   The ranking FLIPS between windows: v1's full-history loss came from
+   missing the 2015-2021 supercycle names that neutral order happened to
+   fund; in the choppy 2023+ window density actually won (+$7.4K); the
+   backward-looking prior mis-ranked UNH (0.14) exactly when it mattered
+   most, so v2 middles in both windows. At $100K all policies tie.
+   Reports: data/backtest_portfolio_v2_full.txt / _v2_oos.txt.
+
+   Decision (minimax regret): keep NEUTRAL put ordering live
+   (score_puts=False). Worst-case regret — neutral $7.4K, v2 $21.9K,
+   v1 $47.4K. Cash-freeing-first tier stays (strictly dominant). The
+   LLM's peer context + allocation field guide (step 1) remains the
+   adaptive layer; revisit only with a prior that's stable across
+   regimes.
+
+5. **The Medic — crisis ETF accumulation** — DEPLOYED 2026-07-04.
+   New NUKED_ZONE role (vault76/armory/medic.py): buy quality dividend
+   ETFs at the panic close (VIX >= 30), hold through WASTELAND, sell on
+   the first RECLAMATION bar. Roster measured by backtest_medic.py over
+   19 episodes 2015-2026 (data/backtest_medic_2026-07-04.txt):
+   MEDIC_ETFS = SCHD +$508 (15/19 wins), VIG +$6,411 (16/19),
+   VYM +$3,580 (16/19). TLT tested -$2,595 (6/19) — flight-to-safety is
+   expensive at panic — and GLD's +$5K is gold-bull-dependent; both
+   excluded. Panic entry beats waiting for the first calm bar
+   (+$10,499 vs +$6,297 on the roster; --entry nuke|calm flag).
+   Scanner emits BUY_ETF/SELL_ETF ($600/ETF, positions in
+   data/paper_medic_holdings.json), AutoOverseer approves by default.
+   Known limit: no 1970s-style multi-year grind in the data window.
+
+6. **Fundamental features for the LGBM advisories** — DEPLOYED 2026-07-05.
+   Borrowed from the WorldQuant alpha playbook's measured pass rates
+   (fundamental 40% > mixed 12.7% > pure technical 5.3%), which matched
+   our own finding that technical-only models sit at AUC ~0.5.
+   fundamentals.py builds earnings_yield (EPS-ttm/price), eps_growth,
+   surprise_last, surprise_mean4 from cached yfinance earnings history
+   (data/fundamentals/, refresh with fetch_fundamentals.py) — as-of
+   joined, report dated D visible strictly after D (no lookahead,
+   unit-tested). Experiment (experiment_fundamentals.py, report
+   data/experiment_fundamentals_2026-07-05.txt): median holdout AUC
+   down 0.521 → 0.546, up 0.517 → 0.570 (15/18 symbols improved);
+   HD/AMZN/MMM/IONQ now 0.61-0.74. load_models() picks the cache up
+   automatically, so the scanner's assign_risk_pct / called_away_pct /
+   model_auc reflect it with no call-site changes. Caveat: single
+   chronological split per symbol — trust the medians, not individual
+   deltas (NVDA down -0.18 may be split noise). Next candidate from the
+   same playbook: turnover/cost accounting in backtests, and role-PnL
+   daily-correlation report.
+
+7. **Analyst features (up-models only, freshness-gated)** — DEPLOYED
+   2026-07-05. Seeking Alpha assessed and rejected (no official API;
+   scrapers are paid/ToS-gray/unbacktestable). Instead: yfinance
+   upgrades_downgrades (dated actions + price targets, 2012→now) →
+   net_upgrades_90d / pt_revisions_90d / pt_gap in fundamentals.py,
+   as-of joined, no lookahead. Experiment
+   (data/experiment_analyst_2026-07-05.txt) vs the deployed tech+fund
+   baseline: up median 0.570 → 0.602, down -0.003 (flat → not deployed
+   for down). Hazard found: stale feeds poison models (IONQ 29 actions
+   dead since 2024-08 → up AUC 0.694 → 0.308), so load_models applies
+   analyst_is_fresh (newest action ≤ 90d old, ≥ 100 actions) — gates
+   out IONQ and META today. Live verified: 16/18 up-models with analyst
+   features, median AUC 0.606.
+
+8. **Option-chain anomaly detector (unusual put flow).** Motivated by
+   the FUTU/TIGR case (2026-05: put volume spiked days before a CSRC
+   penalty announcement — informed flow visible in put/call ratio
+   anomalies). Defensive gate for the Scavenger: don't sell puts into
+   informed bearish flow. Build on data we already pull — Schwab
+   get_option_chain returns per-contract volume/OI/IV every scan:
+   (a) snapshot per watchlist symbol per day → data/chain_stats.csv:
+       total put/call volume, P/C ratio, aggregate volume/OI, and
+       near-dated OTM put concentration (the FUTU signature);
+   (b) after ~20 sessions of baseline, flag z-score anomalies and attach
+       put_call_ratio / uoa_flag to signals + an OVERSEER_SYSTEM guide
+       ("elevated informed put flow → lean SKIP on SELL_PUT").
+   Limits: watchlist-only, scan-time volume (no intraday sweeps), and
+   NOT backtestable — no free historical options-volume data, so it
+   accrues validity through paper trading only. Upgrade path if it
+   earns its keep: Unusual Whales API (paid) for whole-market intraday
+   flow. Start the snapshot collector early — baselines take ~4 weeks.

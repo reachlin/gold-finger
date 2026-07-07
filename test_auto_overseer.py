@@ -79,12 +79,62 @@ def test_overseer_system_documents_lgbm_advisories():
         assert field in OVERSEER_SYSTEM, f"missing field guide for {field}"
 
 
+def test_peer_summaries_excludes_current_and_compacts():
+    from schwab.auto_overseer import peer_summaries
+    cur = {"symbol": "AMZN", "signal": "SELL_PUT", "strike": 221.0,
+           "premium": 2.1}
+    ko  = {"symbol": "KO", "signal": "SELL_PUT", "strike": 79.0,
+           "premium": 0.71, "premium_pct": 0.9, "dte": 30,
+           "assign_risk_pct": 41.0, "close": 83.2}
+    buy = {"symbol": "NVDA", "signal": "BUY", "entry": 199.0,
+           "timesfm_30d_pct": -3.7}
+    peers = peer_summaries([cur, ko, buy], cur)
+    assert len(peers) == 2
+    syms = [p["symbol"] for p in peers]
+    assert "AMZN" not in syms and "KO" in syms and "NVDA" in syms
+    ko_p = peers[syms.index("KO")]
+    assert ko_p["collateral"] == 7900.0        # SELL_PUT gets collateral
+    assert "close" not in ko_p                 # only whitelisted fields
+
+
+def test_build_prompt_lists_peer_signals():
+    from schwab.auto_overseer import build_prompt
+    signal = {"symbol": "AMZN", "signal": "SELL_PUT", "strike": 221.0}
+    peers  = [{"symbol": "KO", "signal": "SELL_PUT", "strike": 79.0,
+               "collateral": 7900.0}]
+    prompt = build_prompt(signal, {"available": 30000, "required": 22100}, {},
+                          peer_signals=peers)
+    assert "Other pending signals this scan (1)" in prompt
+    assert "KO" in prompt and "7,900" in prompt
+
+
+def test_build_prompt_no_peer_section_when_empty():
+    from schwab.auto_overseer import build_prompt
+    signal = {"symbol": "AMZN", "signal": "SELL_PUT", "strike": 221.0}
+    prompt = build_prompt(signal, {"available": 30000, "required": 22100}, {})
+    assert "Other pending signals" not in prompt
+
+
+def test_overseer_system_documents_capital_allocation():
+    from schwab.auto_overseer import OVERSEER_SYSTEM
+    assert "Capital allocation" in OVERSEER_SYSTEM
+    assert "premium/day per collateral dollar" in OVERSEER_SYSTEM
+
+
 def test_overseer_system_documents_router_signals():
     """Router signals: default approve (backtested policy), veto on context."""
     from schwab.auto_overseer import OVERSEER_SYSTEM
     assert "HOLD_SHARES" in OVERSEER_SYSTEM
     assert "RESUME_WHEEL" in OVERSEER_SYSTEM
     assert "default is APPROVE" in OVERSEER_SYSTEM
+
+
+def test_overseer_system_documents_medic_signals():
+    """Medic signals: crisis ETF buys, default approve."""
+    from schwab.auto_overseer import OVERSEER_SYSTEM
+    assert "BUY_ETF" in OVERSEER_SYSTEM
+    assert "SELL_ETF" in OVERSEER_SYSTEM
+    assert "Medic" in OVERSEER_SYSTEM
 
 
 def test_real_order_skipped_for_router_signals(monkeypatch, capsys):
