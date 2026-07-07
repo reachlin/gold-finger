@@ -208,6 +208,18 @@ def _market_closed_for_today() -> bool:
     return _et_hour() >= MARKET_CLOSE_ET
 
 
+def _sleep_until_market_open(now_et):
+    """Sleep until 09:00 ET the next trading day, then return."""
+    next_open = now_et.replace(hour=MARKET_OPEN_ET, minute=0, second=0, microsecond=0)
+    if next_open <= now_et:
+        next_open += timedelta(days=1)
+    while next_open.weekday() >= 5:
+        next_open += timedelta(days=1)
+    secs = (next_open - now_et).total_seconds()
+    print(f"  Market closed. Sleeping {secs/3600:.1f}h until {next_open.strftime('%Y-%m-%d %H:%M ET')}.")
+    time.sleep(secs)
+
+
 # ---------------------------------------------------------------------------
 # Schwab data fetch
 # ---------------------------------------------------------------------------
@@ -964,11 +976,13 @@ def main():
         now = _now_et().strftime("%H:%M:%S ET")
 
         if _market_closed_for_today():
-            _print_eod(portfolio, price_fetcher, scan_count)
-            if portfolio:
-                portfolio.log_scan(scan_num=scan_count, symbols_scanned=0,
-                                   signals_found=0)
-            print("Scanner exiting. Restart tomorrow (9am–4pm ET).")
+            if scan_count > 0:
+                _print_eod(portfolio, price_fetcher, scan_count)
+                if portfolio:
+                    portfolio.log_scan(scan_num=scan_count, symbols_scanned=0,
+                                       signals_found=0)
+            now_et = _now_et()
+            _sleep_until_market_open(now_et)
             sys.exit(0)
 
         if not _is_market_hours():
