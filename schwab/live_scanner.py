@@ -771,13 +771,19 @@ def _send_slack(message: str):
 
 def _check_token_age() -> tuple[str, str]:
     """
-    Return (terminal_line, slack_line) warning if the Schwab token file is
+    Return (terminal_line, slack_line) warning if the Schwab token is
     approaching its 7-day hard expiry.  Empty strings when age is fine.
+
+    Uses creation_timestamp from the JSON — the SDK sets this once during
+    manual OAuth and does NOT update it on access-token refreshes (only
+    mtime changes on refresh, which would always look fresh).
     """
     TOKEN_PATH = os.path.join(os.path.dirname(__file__), "schwab_token.json")
     try:
-        mtime = os.path.getmtime(TOKEN_PATH)
-        age_days = (time.time() - mtime) / 86400
+        import json as _json
+        data = _json.load(open(TOKEN_PATH))
+        created = data["creation_timestamp"]
+        age_days = (time.time() - created) / 86400
         if age_days >= 6:
             msg = (f"Schwab token is {age_days:.1f} days old — "
                    f"expires in ~{7 - age_days:.1f}d. Re-auth soon!")
