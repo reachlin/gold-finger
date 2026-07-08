@@ -769,6 +769,22 @@ def _open_options_lines() -> tuple[list[str], list[str]]:
                              ol.load_holdings(WHEEL_HOLDINGS_PATH))
 
 
+def _send_m5paper(message: str):
+    try:
+        import urllib.request, json as _json
+        url  = "https://rest.ably.io/channels/m5paper/messages"
+        key  = "bdk-Qg.v8dBtQ:cJ3tCFyMNrmHJJy_gSx6ujcobWUDoKXUJPlD6lem-KA"
+        body = _json.dumps({"name": "message", "data": message}).encode()
+        req  = urllib.request.Request(url, data=body,
+                                      headers={"Content-Type": "application/json"})
+        import base64 as _b64
+        req.add_header("Authorization",
+                       "Basic " + _b64.b64encode(key.encode()).decode())
+        urllib.request.urlopen(req, timeout=5)
+    except Exception as exc:
+        print(f"  [M5Paper] failed: {exc}")
+
+
 def _send_slack(message: str):
     try:
         import sys as _sys
@@ -964,6 +980,18 @@ def _print_eod(portfolio, price_fetcher, scan_count: int):
         ] + opts_slack
 
     _send_slack("\n".join(slack_lines))
+
+    if portfolio and _cash_ledger:
+        s       = portfolio.summary(cur_prices)
+        opt_bal = _cash_ledger.balance()
+        opt_pnl = opt_bal - portfolio.starting_capital
+        total   = s["cash"] + opt_pnl
+        _send_m5paper(
+            f"EOD {_now_et().strftime('%m/%d')} | "
+            f"Scans:{scan_count} | "
+            f"Opts:{opt_pnl:+.0f} | "
+            f"Total:${total:,.0f}"
+        )
 
 
 # ---------------------------------------------------------------------------
