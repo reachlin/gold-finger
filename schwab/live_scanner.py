@@ -929,6 +929,12 @@ def _print_eod(portfolio, price_fetcher, scan_count: int):
     print(f"{'='*62}")
     if portfolio:
         portfolio.print_status(cur_prices)
+        if _cash_ledger:
+            opt_bal = _cash_ledger.balance()
+            opt_pnl = opt_bal - portfolio.starting_capital
+            total   = portfolio.cash + opt_pnl
+            print(f"  Options P&L:  ${opt_pnl:+,.2f}  (total ${opt_bal:,.2f})")
+            print(f"  Account total:${total:,.2f}")
 
     pos_term,  pos_slack  = _position_lines(portfolio, price_fetcher)
     opts_term, opts_slack = _open_options_lines()
@@ -939,12 +945,16 @@ def _print_eod(portfolio, price_fetcher, scan_count: int):
     if portfolio:
         s = portfolio.summary(cur_prices)
         pnl_sign = "+" if s["total_pnl_dollar"] >= 0 else ""
+        opt_bal   = _cash_ledger.balance() if _cash_ledger else s["cash"]
+        opt_pnl   = opt_bal - portfolio.starting_capital
+        total     = s["cash"] + opt_pnl
         slack_lines = [
             f"*VAULT 76 — End of Day* {now_str}",
             f"*Scans today:* {scan_count}",
-            f"*Cash:* ${s['cash']:,.2f}  |  "
-            f"*Total:* ${s['total_value']:,.2f}  |  "
-            f"*P&L:* {pnl_sign}${s['total_pnl_dollar']:,.2f} ({pnl_sign}{s['total_pnl_pct']:.2f}%)",
+            f"*Equity cash:* ${s['cash']:,.2f}  |  "
+            f"*Options P&L:* ${opt_pnl:+,.2f}  |  "
+            f"*Account total:* ${total:,.2f}",
+            f"*Equity P&L:* {pnl_sign}${s['total_pnl_dollar']:,.2f} ({pnl_sign}{s['total_pnl_pct']:.2f}%)  |  "
             f"*Realized:* ${s['realized_pnl_dollar']:+,.2f}  |  "
             f"*Unrealized:* ${s['unrealized_pnl_dollar']:+,.2f}",
         ] + pos_slack + opts_slack
