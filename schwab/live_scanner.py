@@ -769,6 +769,25 @@ def _open_options_lines() -> tuple[list[str], list[str]]:
                              ol.load_holdings(WHEEL_HOLDINGS_PATH))
 
 
+def _send_pipboy(title: str, detail: str):
+    try:
+        import urllib.request, json as _json, base64 as _b64
+        key     = os.environ.get("ABLY_API_KEY", "")
+        channel = os.environ.get("PIPBOY_CHANNEL", "pip2026boy:20260708m5paper")
+        if not key:
+            return
+        url  = f"https://rest.ably.io/channels/{urllib.request.quote(channel, safe='')}/messages"
+        body = _json.dumps({"name": "notice",
+                            "data": {"title": title, "detail": detail}}).encode()
+        req  = urllib.request.Request(url, data=body,
+                                      headers={"Content-Type": "application/json"})
+        req.add_header("Authorization",
+                       "Basic " + _b64.b64encode(key.encode()).decode())
+        urllib.request.urlopen(req, timeout=5)
+    except Exception as exc:
+        print(f"  [Pipboy] failed: {exc}")
+
+
 def _send_m5paper(message: str):
     try:
         import urllib.request, json as _json
@@ -932,6 +951,17 @@ def _print_startup(client, paper: bool, portfolio=None, price_fetcher=None):
     if token_slack:
         slack_lines.append(token_slack)
     _send_slack("\n".join(slack_lines))
+
+    if portfolio and _cash_ledger:
+        opt_bal = _cash_ledger.balance()
+        opt_pnl = opt_bal - portfolio.starting_capital
+        total   = portfolio.cash + opt_pnl
+        _send_pipboy(
+            f"Vault 76 started — {_now_et().strftime('%m/%d %H:%M ET')}",
+            f"Regime: {regime_label} | "
+            f"Opts P&L: ${opt_pnl:+.0f} | Total: ${total:,.0f} | "
+            f"Watchlist: {len(WATCHLIST)} symbols"
+        )
 
 
 def _print_eod(portfolio, price_fetcher, scan_count: int):
