@@ -381,3 +381,9 @@
 {"event": "SCAN", "scan_num": 4, "symbols_scanned": 15, "signals_found": 6, "cash": 30000.0, "open_positions": 0, "ts": "2026-07-09T21:48:25"}
 {"event": "SCAN", "scan_num": 1, "symbols_scanned": 15, "signals_found": 7, "cash": 30000.0, "open_positions": 0, "ts": "2026-07-09T21:50:51"}
 {"event": "SCAN", "scan_num": 1, "symbols_scanned": 15, "signals_found": 5, "cash": 30000.0, "open_positions": 0, "ts": "2026-07-09T21:57:54"}
+{"event": "SCAN", "scan_num": 2, "symbols_scanned": 15, "signals_found": 5, "cash": 30000.0, "open_positions": 0, "ts": "2026-07-09T22:04:42"}
+{"event": "SCAN", "scan_num": 3, "symbols_scanned": 15, "signals_found": 5, "cash": 30000.0, "open_positions": 0, "ts": "2026-07-09T22:10:31"}
+{"event": "SCAN", "scan_num": 4, "symbols_scanned": 15, "signals_found": 5, "cash": 30000.0, "open_positions": 0, "ts": "2026-07-09T22:16:26"}
+{"event": "SCAN", "scan_num": 1, "symbols_scanned": 15, "signals_found": 5, "cash": 30000.0, "open_positions": 0, "ts": "2026-07-09T22:19:44"}
+{"event": "SCAN", "scan_num": 2, "symbols_scanned": 15, "signals_found": 5, "cash": 30000.0, "open_positions": 0, "ts": "2026-07-09T22:25:32"}
+{"event": "SCAN", "scan_num": 3, "symbols_scanned": 15, "signals_found": 5, "cash": 30000.0, "open_positions": 0, "ts": "2026-07-09T22:31:59"}
