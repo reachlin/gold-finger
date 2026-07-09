@@ -289,8 +289,26 @@ CASH_LEDGER_PATH = os.path.join(
     os.path.dirname(__file__), "..", "data", "cash_ledger.csv")
 _router_proposed: set = set()
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
+_SCAN_COUNTER_PATH = os.path.join(DATA_DIR, "scan_counter.json")
 
 _cash_ledger = None   # initialised in main() once starting_capital is known
+
+
+def _load_global_scan() -> int:
+    try:
+        import json as _j
+        return int(_j.load(open(_SCAN_COUNTER_PATH)).get("global_scan", 0))
+    except Exception:
+        return 0
+
+
+def _save_global_scan(n: int) -> None:
+    try:
+        import json as _j
+        with open(_SCAN_COUNTER_PATH, "w") as f:
+            _j.dump({"global_scan": n}, f)
+    except Exception:
+        pass
 
 # ---------------------------------------------------------------------------
 # AutoOverseer hook — set by auto_overseer.py to replace interactive input
@@ -1125,6 +1143,7 @@ def main():
     _print_startup(client, paper=args.paper, portfolio=portfolio,
                    price_fetcher=price_fetcher)
     scan_count = 0
+    global_scan = _load_global_scan()
 
     while True:
         now = _now_et().strftime("%H:%M:%S ET")
@@ -1145,9 +1164,11 @@ def main():
             continue
 
         scan_count += 1
+        global_scan += 1
+        _save_global_scan(global_scan)
         regime, spy_df = _fetch_regime_and_spy(client)
         regime_str     = _overseer.describe(regime)
-        print(f"\n[{now}] Scan #{scan_count} — {regime_str} — scanning {len(WATCHLIST)} symbols...")
+        print(f"\n[{now}] Scan #{scan_count} [G:{global_scan}] — {regime_str} — scanning {len(WATCHLIST)} symbols...")
 
         # Fast risk-off check (FinRL #1): suppress new puts if SPY -3% in 3 days
         riskoff_active, riskoff_msg = _check_fast_riskoff(spy_df)
