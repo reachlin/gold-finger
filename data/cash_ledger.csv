@@ -6,3 +6,5 @@ timestamp,event_type,symbol,amount,running_balance,description
 2026-07-07 10:26:51 ET,OPTION_BUYBACK,KO,-27.38,30233.62,buyback KO 2026-07-07: early_exit at 39% of premium (target 39%)
 2026-07-07 10:26:51 ET,OPTION_BUYBACK,KO,-14.2,30219.42,buyback KO 2026-07-07: early_exit at 19% of premium (target 39%)
 2026-07-07 10:26:51 ET,OPTION_BUYBACK,PG,-16.51,30202.91,buyback PG 2026-07-07: early_exit at 14% of premium (target 39%)
+2026-07-09 09:58:36 ET,OPTION_SELL,NVDA,437.5,30640.41,SELL_PUT NVDA strike=$190.0 exp=29d premium=$437.50
+2026-07-09 09:59:06 ET,OPTION_SELL,KO,73.0,30713.41,SELL_PUT KO strike=$78.0 exp=29d premium=$73.00

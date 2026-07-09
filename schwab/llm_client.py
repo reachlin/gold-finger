@@ -35,7 +35,7 @@ class LLMClient:
 
     def __init__(self, provider: str | None = None, model: str | None = None,
                  api_key: str | None = None, base_url: str | None = None,
-                 max_tokens: int = 200):
+                 max_tokens: int = 4096):
         self.provider   = (provider or os.environ.get("LLM_PROVIDER", "anthropic")).lower()
         defaults        = PROVIDER_DEFAULTS.get(self.provider, PROVIDER_DEFAULTS["anthropic"])
         self.model      = model or os.environ.get("LLM_MODEL", defaults["model"])

@@ -218,16 +218,40 @@ def build_prompt(signal: dict, portfolio_state: dict, kronos: dict,
 # ---------------------------------------------------------------------------
 
 def parse_llm_response(text: str) -> tuple[str, str]:
-    """Parse LLM JSON response. Returns ("no", reason) on any failure."""
-    try:
-        parsed = json.loads(text.strip())
-        decision = str(parsed.get("decision", "no")).lower().strip()
-        reason   = str(parsed.get("reason", "no reason given")).strip()
-        if decision not in ("yes", "no"):
-            return "no", f"invalid decision value '{decision}' — defaulting to no"
-        return decision, reason
-    except (json.JSONDecodeError, Exception) as exc:
-        return "no", f"JSON parse failed ({exc}) — defaulting to no"
+    """Parse LLM JSON response. Returns ("no", reason) on any failure.
+
+    Handles common LLM wrapping patterns:
+      - Raw JSON: {"decision": "yes", ...}
+      - Markdown fenced: ```json\\n{...}\\n```
+      - Preamble text followed by JSON on its own line
+    """
+    import re
+    if not text:
+        return "no", "empty response"
+
+    # Strip markdown fences and surrounding whitespace
+    cleaned = re.sub(r"```(?:json)?\s*", "", text).strip()
+
+    # Try the whole cleaned string first
+    candidates = [cleaned]
+
+    # Also try extracting the first {...} block in case of preamble/postamble
+    m = re.search(r"\{[^{}]*\}", cleaned, re.DOTALL)
+    if m:
+        candidates.append(m.group())
+
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate.strip())
+            decision = str(parsed.get("decision", "no")).lower().strip()
+            reason   = str(parsed.get("reason", "no reason given")).strip()
+            if decision not in ("yes", "no"):
+                return "no", f"invalid decision value '{decision}' — defaulting to no"
+            return decision, reason
+        except (json.JSONDecodeError, Exception):
+            continue
+
+    return "no", f"JSON parse failed — defaulting to no (raw: {text[:80]!r})"
 
 
 # ---------------------------------------------------------------------------
