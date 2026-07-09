@@ -126,9 +126,9 @@ Shows: VIX level, earnings proximity, recent headlines, any auto-block condition
 
 ## Environment Setup
 
-**Conda env:** `gold-finger` at `/Users/lincai/anaconda3/envs/gold-finger/`
+**Conda env:** `trader` at `/opt/miniconda3/envs/trader/`
 
-**Secrets in `.env`:**
+**Secrets in `.env`** (repo root, `gold-finger/.env`, gitignored):
 ```
 SCHWAB_CLIENT_ID=...
 SCHWAB_CLIENT_SECRET=...
@@ -136,12 +136,29 @@ SLACK_WEBHOOK_URL=...
 FINNHUB_API_KEY=...      # optional — headlines fallback to RSS if missing
 ```
 
-**Token file:** `schwab/schwab_token.json` — created on first OAuth login, not in git.
+**Token file:** `schwab/schwab_token.json` — created on first OAuth login, gitignored, and
+expires periodically (Schwab refresh tokens are valid ~7 days). Every script except
+`schwab_account.py` calls `schwab.auth.client_from_token_file(...)` directly and will
+crash with an auth/refresh error once it expires or is missing.
 
-**First-time auth:**
-```bash
-/Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/nvda_trader.py --auth
-```
+**Re-auth / get a new token:**
+
+Only `schwab_account.py` knows how to bootstrap a token from scratch — it falls back to
+`schwab.auth.client_from_manual_flow(...)` when `schwab_token.json` is absent. To
+re-auth:
+
+1. Make sure `SCHWAB_CLIENT_ID` / `SCHWAB_CLIENT_SECRET` are set in `../.env`.
+2. Delete the stale token if present: `rm schwab/schwab_token.json`
+3. Run:
+   ```bash
+   /opt/miniconda3/envs/trader/bin/python schwab/schwab_account.py
+   ```
+4. This prints a Schwab authorization URL — open it, log in, and approve access. Schwab
+   redirects to `https://127.0.0.1/...` (the page will fail to load — that's expected).
+   Copy the **full redirected URL** from the browser address bar and paste it back into
+   the prompt.
+5. A fresh `schwab/schwab_token.json` is written. All other scripts pick it up
+   automatically via `client_from_token_file`.
 
 ---
 
