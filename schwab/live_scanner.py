@@ -1168,7 +1168,9 @@ def main():
         _save_global_scan(global_scan)
         regime, spy_df = _fetch_regime_and_spy(client)
         regime_str     = _overseer.describe(regime)
-        print(f"\n[{now}] Scan #{scan_count} [G:{global_scan}] — {regime_str} — scanning {len(WATCHLIST)} symbols...")
+        print(f"\n{'━'*70}")
+        print(f"  SCAN #{scan_count} [G:{global_scan}]  {now}  |  {regime_str}  |  {len(WATCHLIST)} symbols")
+        print(f"{'━'*70}")
 
         # Fast risk-off check (FinRL #1): suppress new puts if SPY -3% in 3 days
         riskoff_active, riskoff_msg = _check_fast_riskoff(spy_df)
@@ -1382,7 +1384,9 @@ def main():
             cur_prices = _get_current_prices(portfolio, price_fetcher)
             portfolio.print_status(cur_prices)
 
-        print(f"  Next scan in {SCAN_INTERVAL_MIN} min.")
+        print(f"{'─'*70}")
+        print(f"  ■ END SCAN #{scan_count} [G:{global_scan}]  —  next in {SCAN_INTERVAL_MIN} min.")
+        print(f"{'─'*70}")
         time.sleep(SCAN_INTERVAL_MIN * 60)
 
 
