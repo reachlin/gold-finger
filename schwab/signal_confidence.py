@@ -17,6 +17,7 @@ Per-type scorers:
   score_sell_put(signal, kronos_buf) -> int
   score_buy(signal)                  -> int
   score_sell_call(signal)            -> int
+  score_buy_call(signal)             -> int
 """
 
 
@@ -29,6 +30,8 @@ def score(signal: dict, kronos_buf: float | None = None) -> int:
         return score_buy(signal)
     if sig == "SELL_CALL":
         return score_sell_call(signal)
+    if sig == "BUY_CALL":
+        return score_buy_call(signal)
     return 0
 
 
@@ -291,6 +294,104 @@ def score_sell_call(signal: dict) -> int:
             adj -= 3
         elif timesfm < -4:
             adj += 3                # weak outlook → selling call is smart
+    s += max(-5, min(5, adj))
+    return max(0, min(100, s))
+
+
+def score_buy_call(signal: dict) -> int:
+    """
+    BUY_CALL (Hunter VCP breakout) quality score (0–100).
+
+    Calibrated against backtest distribution (n=32, 2019–2026):
+      vcp_tight_pct  p25=3.5%, p50=5.4%, p75=6.7%
+      breakout_vol   p25=1.51×, p50=1.68×, p75=1.99×
+      adx            p25=23.8, p50=26.6, p75=37.1
+      rsi            p25=70.2, p50=73.0, p75=76.5  ← high by design at breakout
+      premium_pct    p25=3.7%, p50=4.8%, p75=7.2%
+
+    Weights (sum = 100 base, ±5 TimesFM adjustment):
+      VCP base quality    30 pts — vcp_tight_pct; tighter = more compressed = better
+      Breakout conviction 25 pts — vol_ratio; volume surge confirms real breakout
+      Trend strength      20 pts — ADX before base; stronger = cleaner momentum
+      RSI momentum zone   15 pts — 65-78 is the sweet spot at VCP breakout day
+      Premium cost        10 pts — premium_pct of close; cheaper = more asymmetry
+      TimesFM             ±5 pts — bullish bias boosts; bearish penalises
+    """
+    adx          = float(signal.get("adx", 25))
+    rsi          = float(signal.get("rsi", 72))
+    premium_pct  = float(signal.get("premium_pct", 5.0))
+    vcp_tight    = float(signal.get("vcp_tight_pct", 5.5))
+    breakout_vol = float(signal.get("breakout_vol", 1.6))
+    timesfm      = signal.get("timesfm_30d_pct")
+
+    s = 0
+
+    # ── VCP base quality (30 pts) ─────────────────────────────────────────────
+    # Tighter 5-bar rolling range in the consolidation zone = more compressed base
+    if vcp_tight < 2.5:
+        s += 30                    # very tight — institutional accumulation
+    elif vcp_tight < 3.5:
+        s += 24                    # above p25: solid base
+    elif vcp_tight < 5.5:
+        s += 16                    # near median: acceptable
+    elif vcp_tight < 7.0:
+        s += 8                     # loose — VCP still valid but lower quality
+    # >= 7.0: base too wide, 0 pts
+
+    # ── Breakout conviction (25 pts) ─────────────────────────────────────────
+    # vol_ratio: today's volume vs 20-day average
+    if breakout_vol >= 2.5:
+        s += 25                    # strong institutional buying
+    elif breakout_vol >= 2.0:
+        s += 20                    # above p75: convincing breakout
+    elif breakout_vol >= 1.6:
+        s += 13                    # near p50: reasonable
+    else:                          # 1.4–1.6: at minimum threshold
+        s += 6
+
+    # ── Trend strength (20 pts) ───────────────────────────────────────────────
+    if adx > 40:
+        s += 20
+    elif adx > 32:
+        s += 16
+    elif adx > 25:
+        s += 10                    # near p50: trend confirmed but not strong
+    else:                          # 20–25: minimum ADX; marginal trend
+        s += 5
+
+    # ── RSI momentum zone (15 pts) ────────────────────────────────────────────
+    # VCP breakouts fire with RSI 65-80 by design; sweet spot is 65-78
+    if 65 <= rsi <= 78:
+        s += 15
+    elif 60 <= rsi < 65 or 78 < rsi <= 80:
+        s += 9
+    elif 55 <= rsi < 60:
+        s += 4
+    # < 55 or > 80 (blocked by filter): 0
+
+    # ── Premium cost (10 pts) ────────────────────────────────────────────────
+    # Cheaper call relative to stock price = more leverage room
+    if premium_pct < 3.0:
+        s += 10
+    elif premium_pct < 5.0:
+        s += 7                     # near p50: reasonable
+    elif premium_pct < 7.5:
+        s += 4                     # above p75: getting expensive
+    elif premium_pct < 10.0:
+        s += 1
+    # >= 10%: near max allowed, 0
+
+    # ── TimesFM adjustment (capped ±5) ────────────────────────────────────────
+    adj = 0
+    if timesfm is not None:
+        if timesfm > 8:
+            adj += 5
+        elif timesfm > 4:
+            adj += 3
+        elif timesfm < -5:
+            adj -= 5
+        elif timesfm < -2:
+            adj -= 3
     s += max(-5, min(5, adj))
     return max(0, min(100, s))
 
