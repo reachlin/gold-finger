@@ -47,6 +47,7 @@ from vault76.overseer import Overseer
 from vault76.armory.raider import Raider
 from vault76.armory.scavenger import Scavenger
 from vault76.armory.medic import Medic, MEDIC_ETFS
+from vault76.armory.hunter import Hunter, SECTOR_MAP
 
 SCAN_INTERVAL_MIN = 5
 MARKET_OPEN_ET    = 9
@@ -169,6 +170,39 @@ def _kronos_advisory(s: dict, kronos_cache: dict) -> tuple[bool, str]:
 
 
 # ---------------------------------------------------------------------------
+# Sector ETF cache — for Hunter's three-pillar sector-strength check
+# ---------------------------------------------------------------------------
+
+_sector_cache: dict = {}   # etf → pd.DataFrame with indicators
+
+
+def _load_sector_cache() -> None:
+    """Load pre-downloaded sector ETF CSVs into memory once at startup."""
+    global _sector_cache
+    etfs = set(SECTOR_MAP.values())
+    for etf in etfs:
+        path = os.path.join(os.path.dirname(__file__), "..", "data",
+                            f"{etf.lower()}_history.csv")
+        if not os.path.exists(path):
+            continue
+        try:
+            df = pd.read_csv(path, parse_dates=["datetime"])
+            df = compute_indicators(df).dropna().reset_index(drop=True)
+            _sector_cache[etf] = df
+        except Exception as exc:
+            print(f"  [sector] {etf}: {exc}")
+
+
+def _sector_above_ema50(etf: str) -> bool:
+    """True if the sector ETF's latest close ≥ EMA50 (from cached CSV)."""
+    df = _sector_cache.get(etf)
+    if df is None or df.empty:
+        return True   # no data — don't block
+    row = df.iloc[-1]
+    return bool(row["close"] >= row["ema50"])
+
+
+# ---------------------------------------------------------------------------
 # Market hours
 # ---------------------------------------------------------------------------
 
@@ -265,6 +299,7 @@ def _fetch_with_indicators(client, symbol: str) -> pd.DataFrame | None:
 _overseer  = Overseer()
 _raider    = Raider()
 _scavenger = Scavenger()
+_hunter    = Hunter()
 _medic     = Medic()
 
 # The Medic: crisis accumulation — budget per ETF per NUKED_ZONE episode,
@@ -455,6 +490,19 @@ def _scan_all(client, regime: str = Overseer.RECLAMATION,
                     r["model_auc"] = auc
             r["confidence"] = signal_confidence.score(r)
             signals.append(r)
+        # The Hunter: buy calls on VCP momentum breakouts.
+        # Only fires in RECLAMATION; sector-strength is advisory (not a gate).
+        if regime == Overseer.RECLAMATION:
+            h = _hunter.scan(symbol, df_ind, regime=regime)
+            if h["signal"] != "NONE":
+                if tfm_pct is not None:
+                    h["timesfm_30d_pct"] = tfm_pct
+                sector_etf = SECTOR_MAP.get(symbol)
+                h["sector_etf"] = sector_etf
+                h["sector_ok"]  = _sector_above_ema50(sector_etf) if sector_etf else True
+                h["confidence"] = signal_confidence.score(h)
+                signals.append(h)
+
         # The Scavenger: sell options on sideways stocks.
         # Model signals are re-quoted against the real Schwab chain — real
         # strike/premium/IV/delta, or dropped if the real premium is too thin.
@@ -675,6 +723,22 @@ def _print_signal(s: dict, paper: bool = False, kronos_cache: dict | None = None
                   + (f", AUC {s['model_auc']}" if s.get("model_auc") else "")
                   + ")")
 
+    elif sig == "BUY_CALL":
+        sector_flag = ""
+        if s.get("sector_etf"):
+            ok = s.get("sector_ok", True)
+            sector_flag = f"  sector {s['sector_etf']} {'✓' if ok else '⚠ BELOW EMA50'}"
+        print(f"STRIKE:  ${s['strike']}  ATM call  {s.get('dte', 35)} DTE{sector_flag}")
+        print(f"PREMIUM: ${s['premium']}/sh  (${s.get('cost_per_ct', s['premium']*100):.0f}/contract)  "
+              f"{s['premium_pct']:.1f}% of close")
+        print(f"EXIT T1: ${s['exit_25pct']}/sh (+50%) — sell 25% of position")
+        print(f"EXIT T2: ${s['exit_50pct']}/sh (+100%) — sell 50% of remaining")
+        print(f"STOP:    ${s['stop_premium']}/sh (-50% on premium)")
+        print(f"VCP:     tightest base {s.get('vcp_tight_pct', '?')}%  "
+              f"breakout vol ×{s.get('breakout_vol', '?')}")
+        print(f"HV:      {s.get('hv', '?')}%  ADX: {s.get('adx', '?')}  RSI: {s.get('rsi', '?')}")
+        print(f"QUOTE:   model (Black-Scholes on HV) — verify real chain before entry")
+
     elif sig == "HOLD_SHARES":
         print(f"SHARES:  {s['shares']}  (≈${s['shares'] * s.get('close', 0):,.0f})")
         print(f"ROUTER:  TimesFM 30d {s['timesfm_30d_pct']:+.1f}%  "
@@ -759,9 +823,15 @@ def _committed_collateral() -> float:
 
 
 def _collateral_required(s: dict) -> float:
-    """Return cash collateral required for a signal. 0 for non-cash-securing signals."""
+    """Return cash required for a signal.
+    SELL_PUT: strike × 100 (collateral locked).
+    BUY_CALL: cost_per_ct (debit paid upfront).
+    Other: 0.
+    """
     if s.get("signal") == "SELL_PUT":
         return float(s.get("strike", 0)) * 100
+    if s.get("signal") == "BUY_CALL":
+        return float(s.get("cost_per_ct", 0))
     return 0.0
 
 
@@ -1130,6 +1200,11 @@ def main():
     global _current_kronos_cache
     _current_kronos_cache = kronos_cache
 
+    # Sector ETF cache for Hunter three-pillar check (loaded from disk, no API call)
+    print("Loading sector ETF cache for Hunter...", flush=True)
+    _load_sector_cache()
+    print(f"  Sector cache: {list(_sector_cache.keys())}", flush=True)
+
     # TimesFM zero-shot 30-day forecasts — second opinion next to Kronos
     global _timesfm_cache
     _timesfm_cache = timesfm_advisor.load_cache(WATCHLIST, DATA_DIR)
@@ -1338,6 +1413,23 @@ def main():
                         else:
                             print(f"  Suggested: {sig} {s['symbol']} ${s['strike']} strike, "
                                   f"${s['dte']}d DTE — collect ${s['premium']*100:.0f}/contract")
+                    elif sig == "BUY_CALL":
+                        cost = float(s.get("cost_per_ct", s.get("premium", 0) * 100))
+                        print(f"APPROVED: {s['symbol']} BUY_CALL strike=${s['strike']} "
+                              f"premium=${s['premium']}/sh  cost=${cost:.0f}/contract")
+                        if args.paper:
+                            _log_option_trade(s, verdict="APPROVED")
+                            print(f"  [PAPER] Logged to {OPTION_LEDGER_PATH}")
+                            if _cash_ledger:
+                                _cash_ledger.record(
+                                    "OPTION_BUY", s["symbol"], -cost,
+                                    f"BUY_CALL {s['symbol']} strike=${s['strike']} "
+                                    f"exp={s.get('dte','?')}d cost=${cost:.2f}"
+                                )
+                        else:
+                            print(f"  Suggested: BUY 1 call {s['symbol']} ${s['strike']} "
+                                  f"strike  {s.get('dte',35)}d DTE — pay ${cost:.0f}/contract")
+
                     elif sig == "HOLD_SHARES":
                         wheel_router.enter_hold(
                             ROUTER_HOLDS_PATH, s["symbol"], s["shares"],
@@ -1386,7 +1478,7 @@ def main():
                             s.get("stop", 0), s.get("rsi", 0), s.get("adx", 0),
                             verdict="SKIPPED",
                         )
-                    elif sig in ("SELL_PUT", "SELL_CALL") and args.paper:
+                    elif sig in ("SELL_PUT", "SELL_CALL", "BUY_CALL") and args.paper:
                         _log_option_trade(s, verdict="SKIPPED")
                     print(VERDICT_SKIP)
 

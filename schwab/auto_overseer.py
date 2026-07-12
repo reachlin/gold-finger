@@ -132,6 +132,11 @@ ADX, RSI, HV, assignment risk, premium yield, and forward models:
 - <40 LOW  — weak setup, lean NO unless a compelling override exists
 Use the confidence score as your primary input. Do not re-derive it from scratch.
 
+BUY_CALL exception: backtest shows HIGH-scored BUY_CALL signals can fail when
+macro timing is poor (technically perfect VCP in a deteriorating environment).
+For BUY_CALL, treat MED (40–69) as the sweet spot and HIGH (≥70) as a caution
+flag — verify the regime is firmly RECLAMATION and sector is also trending.
+
 ## Response format — ONLY valid JSON, no other text
 {"decision": "yes", "reason": "brief reason under 15 words"}
 or
@@ -146,7 +151,7 @@ or
 # efficiency and risk, without the full signal dump
 PEER_FIELDS = ("signal", "strike", "premium", "premium_pct", "dte",
                "assign_risk_pct", "called_away_pct", "timesfm_30d_pct",
-               "shares", "entry")
+               "shares", "entry", "cost_per_ct", "sector_ok")
 
 
 def peer_summaries(all_signals: list[dict], current: dict) -> list[dict]:
