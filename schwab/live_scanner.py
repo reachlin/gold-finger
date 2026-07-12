@@ -42,6 +42,7 @@ import wheel_router
 import allocator
 import cash_ledger as cl
 from chain_quotes import requote_signal
+import signal_confidence
 from vault76.overseer import Overseer
 from vault76.armory.raider import Raider
 from vault76.armory.scavenger import Scavenger
@@ -452,6 +453,7 @@ def _scan_all(client, regime: str = Overseer.RECLAMATION,
                 auc = assignment_risk.model_auc(_assign_models, symbol)
                 if auc is not None:
                     r["model_auc"] = auc
+            r["confidence"] = signal_confidence.score(r)
             signals.append(r)
         # The Scavenger: sell options on sideways stocks.
         # Model signals are re-quoted against the real Schwab chain — real
@@ -472,6 +474,8 @@ def _scan_all(client, regime: str = Overseer.RECLAMATION,
                     auc = assignment_risk.model_auc(_assign_models, symbol)
                     if auc is not None:
                         s["model_auc"] = auc
+                kronos_buf = _current_kronos_cache.get(symbol, {}).get("buf_pct")
+                s["confidence"] = signal_confidence.score(s, kronos_buf=kronos_buf)
                 signals.append(s)
         # Wheel phase 2: assigned shares → sell covered calls
         # (also suppressed while a router hold is active — don't cap the run)
@@ -491,6 +495,7 @@ def _scan_all(client, regime: str = Overseer.RECLAMATION,
                         auc = assignment_risk.model_auc(_upside_models, symbol)
                         if auc is not None:
                             c["model_auc"] = auc
+                    c["confidence"] = signal_confidence.score(c)
                     signals.append(c)
 
     # The Medic: crisis accumulation of dividend ETFs. Buys only in
@@ -606,6 +611,11 @@ def _print_signal(s: dict, paper: bool = False, kronos_cache: dict | None = None
     print(f"TIME:    {now}{mode_tag}")
     print(f"SYMBOL:  {s['symbol']}  [{card.upper()}]")
     print(f"ACTION:  {sig}")
+    if s.get("confidence") is not None:
+        conf = s["confidence"]
+        t    = signal_confidence.tier(conf)
+        bar  = "█" * (conf // 10) + "░" * (10 - conf // 10)
+        print(f"CONF:    {conf:3d}/100  [{t:<4}]  {bar}")
     print(f"CLOSE:   ${s.get('close', '?')}")
 
     if sig == "BUY":
@@ -729,6 +739,7 @@ def _log_option_trade(s: dict, verdict: str):
         "dte":         s.get("dte", ""),
         "hv":          s.get("hv", ""),
         "adx":         s.get("adx", ""),
+        "confidence":  s.get("confidence", ""),
         "regime":      s.get("regime", ""),
         "verdict":     verdict,
         "reason":      s.get("reason", ""),
