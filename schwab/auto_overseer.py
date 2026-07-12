@@ -124,6 +124,14 @@ broken market plumbing). These are small budget positions, not collateral.
   strongly positive on a SELL_CALL → shares likely called away / upside
   capped. Treat as a trend hint, not a price target.
 
+## Confidence score (pre-computed)
+Each signal includes a composite confidence score (0–100) already weighing
+ADX, RSI, HV, assignment risk, premium yield, and forward models:
+- ≥70 HIGH — strong setup across all indicators, lean YES
+- 40–69 MED — acceptable but imperfect, use other fields to decide
+- <40 LOW  — weak setup, lean NO unless a compelling override exists
+Use the confidence score as your primary input. Do not re-derive it from scratch.
+
 ## Response format — ONLY valid JSON, no other text
 {"decision": "yes", "reason": "brief reason under 15 words"}
 or
@@ -162,7 +170,14 @@ def build_prompt(signal: dict, portfolio_state: dict, kronos: dict,
                  open_positions: list[dict] | None = None,
                  peer_signals: list[dict] | None = None) -> str:
     lines = ["## Signal"]
+    # Confidence score at the top — primary decision input
+    conf = signal.get("confidence")
+    if conf is not None:
+        from signal_confidence import tier as _tier
+        lines.append(f"  confidence: {conf}/100  [{_tier(conf)}]")
     for k, v in signal.items():
+        if k == "confidence":
+            continue                # already shown above
         lines.append(f"  {k}: {v}")
 
     lines.append("\n## Portfolio state")

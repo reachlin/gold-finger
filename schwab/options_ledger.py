@@ -39,7 +39,7 @@ from options_pricer import (
 FIELDNAMES = [
     "date", "symbol", "signal", "close", "strike",
     "premium_sh", "premium_ct", "premium_pct", "dte", "hv", "adx",
-    "regime", "verdict", "reason", "pnl", "ref",
+    "confidence", "regime", "verdict", "reason", "pnl", "ref",
 ]
 
 _OPEN_VERDICT = "APPROVED"
