@@ -151,7 +151,7 @@ or
 # efficiency and risk, without the full signal dump
 PEER_FIELDS = ("signal", "strike", "premium", "premium_pct", "dte",
                "assign_risk_pct", "called_away_pct", "timesfm_30d_pct",
-               "shares", "entry")
+               "shares", "entry", "cost_per_ct", "sector_ok")
 
 
 def peer_summaries(all_signals: list[dict], current: dict) -> list[dict]:
