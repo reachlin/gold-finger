@@ -1086,6 +1086,10 @@ def _print_eod(portfolio, price_fetcher, scan_count: int):
 
     for line in opts_term:
         print(line)
+    if portfolio:
+        committed = _committed_collateral()
+        free      = portfolio.cash - committed
+        print(f"  Committed collateral: ${committed:,.0f}  |  Free cash: ${free:,.0f}")
 
     if portfolio:
         s = portfolio.summary(cur_prices)
@@ -1486,6 +1490,17 @@ def main():
         if portfolio:
             cur_prices = _get_current_prices(portfolio, price_fetcher)
             portfolio.print_status(cur_prices)
+            # Show open options + committed collateral so the display matches
+            # the budget tracker (which reads from the ledger CSV).
+            opts_term, _ = _open_options_lines()
+            committed    = _committed_collateral()
+            free         = portfolio.cash - committed
+            print(f"\n  ┌─ Options / Collateral " + "─" * 35)
+            for line in opts_term:
+                print(f"  │{line[1:]}" if line.startswith(" ") else f"  │ {line}")
+            print(f"  │ Committed:  ${committed:>10,.0f}  collateral locked")
+            print(f"  │ Free cash:  ${free:>10,.0f}  available for new puts")
+            print("  └" + "─" * 57)
 
         print(f"{'─'*70}")
         print(f"  ■ END SCAN #{scan_count} [G:{global_scan}]  —  next in {SCAN_INTERVAL_MIN} min.")
