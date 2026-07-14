@@ -1246,7 +1246,8 @@ def main():
                                        signals_found=0)
             now_et = _now_et()
             _sleep_until_market_open(now_et)
-            sys.exit(0)
+            scan_count = 0
+            continue
 
         if not _is_market_hours():
             print(f"[{now}] Pre-market — waiting for open (9am ET). Sleeping 5 min.")
