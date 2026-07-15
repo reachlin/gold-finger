@@ -1254,6 +1254,10 @@ def main():
             time.sleep(300)
             continue
 
+        if scan_count == 0:
+            _print_startup(client, paper=args.paper, portfolio=portfolio,
+                           price_fetcher=price_fetcher)
+
         scan_count += 1
         global_scan += 1
         _save_global_scan(global_scan)
