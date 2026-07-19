@@ -27,6 +27,7 @@ import sys
 import json
 import time
 import argparse
+from datetime import datetime, date, timedelta
 
 # LightGBM and PyTorch each bundle their own OpenMP on macOS; training the
 # LGBM advisories before loading Kronos/TimesFM deadlocked torch forever on
@@ -40,6 +41,23 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+_DATA_DIR           = os.path.join(os.path.dirname(__file__), "..", "data")
+PENDING_ORDERS_PATH = os.path.join(_DATA_DIR, "pending_orders.json")
+SLACK_MENTION       = "<@U02DQJ9KKFZ>"   # user's Slack ID for trade notifications
+
+
+def _load_pending() -> list:
+    if not os.path.exists(PENDING_ORDERS_PATH):
+        return []
+    with open(PENDING_ORDERS_PATH) as f:
+        return json.load(f)
+
+
+def _save_pending(orders: list):
+    os.makedirs(_DATA_DIR, exist_ok=True)
+    with open(PENDING_ORDERS_PATH, "w") as f:
+        json.dump(orders, f, indent=2)
 
 
 # ---------------------------------------------------------------------------
@@ -289,12 +307,14 @@ class AutoOverseer:
 
     def __init__(self, provider: str | None = None, model: str | None = None,
                  api_key: str | None = None, base_url: str | None = None,
-                 paper: bool = True):
+                 paper: bool = True, semi: bool = False):
         from llm_client import LLMClient
-        self.llm    = LLMClient(provider=provider, model=model,
-                                api_key=api_key, base_url=base_url)
-        self.paper  = paper
-        print(f"  [AutoOverseer] LLM: {self.llm}  paper={paper}")
+        self.llm   = LLMClient(provider=provider, model=model,
+                               api_key=api_key, base_url=base_url)
+        self.paper = paper
+        self.semi  = semi   # semi-auto: notify Slack, human places, we watch fill
+        mode = "paper" if paper else ("semi-auto" if semi else "real")
+        print(f"  [AutoOverseer] LLM: {self.llm}  mode={mode}")
 
     def decide(self, s: dict) -> str:
         """
@@ -352,7 +372,10 @@ class AutoOverseer:
               f"{icon} {verdict.upper()}  —  {reason}")
 
         if verdict == "y" and not self.paper:
-            self._place_real_order(s)
+            if self.semi:
+                self._notify_trade(s)
+            else:
+                self._place_real_order(s)
 
         return verdict
 
@@ -595,6 +618,224 @@ class AutoOverseer:
         # Post-trade: confirm fill, reconcile ledger vs Schwab
         self._post_trade_reconcile(client, account_hash, occ_sym, s)
 
+    # -----------------------------------------------------------------------
+    # Semi-auto mode
+    # -----------------------------------------------------------------------
+
+    def _notify_trade(self, s: dict):
+        """
+        Semi-auto mode: send a Slack mention with full order details for ALL
+        signal types (options and equity), save to pending_orders.json so
+        the scan hook can watch for fills on options; equity signals are
+        informational only (no automated fill detection).
+        """
+        import live_scanner as scanner
+
+        sig    = s.get("signal", "NONE")
+        symbol = s["symbol"]
+        conf   = s.get("confidence", "?")
+
+        # --- Options (SELL_PUT, SELL_CALL, BUY_CALL) ---
+        if sig in ("SELL_PUT", "SELL_CALL", "BUY_CALL"):
+            if s.get("expiry"):
+                exp_date = date.fromisoformat(s["expiry"])
+            else:
+                exp_date = date.today() + timedelta(days=int(s.get("dte", 30)))
+
+            occ_sym = build_occ_symbol(symbol, exp_date, sig, float(s["strike"]))
+            bid     = s.get("bid")
+            ask     = s.get("ask")
+            premium = float(s.get("premium", 0))
+
+            if sig in ("SELL_PUT", "SELL_CALL"):
+                # Sell: use BID (guaranteed fill)
+                limit      = round(float(bid), 2) if bid and float(bid) > 0 else round(premium * 0.95, 2)
+                collat     = float(s.get("strike", 0)) * 100
+                action_str = "SELL_TO_OPEN"
+                price_note = f"*Limit (BID):* ${limit:.2f}/sh  |  *Mid:* ${premium:.2f}  |  *Ask:* ${ask or '?'}"
+                size_note  = f"*Collateral:* ${collat:,.0f}"
+            else:
+                # BUY_CALL: use ASK (you're buying)
+                limit      = round(float(ask), 2) if ask and float(ask) > 0 else round(premium * 1.05, 2)
+                cost       = float(s.get("cost_per_ct", limit * 100))
+                action_str = "BUY_TO_OPEN"
+                price_note = f"*Limit (ASK):* ${limit:.2f}/sh  |  *Mid:* ${premium:.2f}  |  *Bid:* ${bid or '?'}"
+                size_note  = f"*Cost/contract:* ${cost:,.0f}"
+
+            msg = (
+                f"{SLACK_MENTION} 🔔 *{sig} — PLACE MANUALLY*\n"
+                f"*Action:* {action_str}  |  *Symbol:* {symbol}\n"
+                f"*Strike:* ${s['strike']}  |  *Expiry:* {s.get('expiry', exp_date)}  ({s.get('dte', '?')} DTE)\n"
+                f"{price_note}\n"
+                f"{size_note}  |  *Confidence:* {conf}/100\n"
+                f"*OCC symbol:* `{occ_sym}`\n"
+                f"→ {action_str} limit @ ${limit:.2f} on Schwab — "
+                f"I'll watch for the fill and log it."
+            )
+            scanner._send_slack(msg)
+            print(f"\n  [Semi-auto] Slack → {symbol} {sig} ${s['strike']} "
+                  f"limit ${limit:.2f}  OCC: {occ_sym}")
+
+            pending = _load_pending()
+            pending.append({
+                "symbol":      symbol,
+                "signal":      sig,
+                "strike":      float(s["strike"]),
+                "expiry":      s.get("expiry", exp_date.isoformat()),
+                "dte":         int(s.get("dte", 30)),
+                "premium":     premium,
+                "bid":         float(bid) if bid else None,
+                "ask":         float(ask) if ask else None,
+                "limit":       limit,
+                "occ_sym":     occ_sym,
+                "confidence":  conf,
+                "notified_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "signal_data": {k: v for k, v in s.items()
+                                if isinstance(v, (str, int, float, bool, type(None)))},
+            })
+            _save_pending(pending)
+
+        # --- Equity signals (BUY, HOLD_SHARES, RESUME_WHEEL, BUY_ETF, SELL_ETF) ---
+        else:
+            entry  = s.get("entry") or s.get("close", "?")
+            shares = s.get("shares", 1)
+            action_map = {
+                "BUY":          f"BUY {shares} shares @ ~${entry}",
+                "HOLD_SHARES":  f"HOLD {shares} shares (no action)",
+                "RESUME_WHEEL": f"RESUME WHEEL — hold {shares} shares",
+                "BUY_ETF":      f"BUY {shares} shares of {symbol} ETF @ ~${entry}",
+                "SELL_ETF":     f"SELL {shares} shares of {symbol} ETF @ ~${entry}",
+            }
+            action_str = action_map.get(sig, f"{sig} {symbol}")
+            regime     = s.get("regime", "?")
+            msg = (
+                f"{SLACK_MENTION} 📊 *{sig} — MANUAL ACTION*\n"
+                f"*Symbol:* {symbol}  |  *Action:* {action_str}\n"
+                f"*Regime:* {regime}  |  *Confidence:* {conf}/100\n"
+                f"*Reason:* {s.get('reason', '')}\n"
+                f"→ This is advisory — place manually if you agree."
+            )
+            scanner._send_slack(msg)
+            print(f"\n  [Semi-auto] Slack → {symbol} {sig} (equity, advisory only)")
+
+    def check_pending_orders(self):
+        """
+        Scan hook: check Schwab orders for fills matching any pending notification.
+        Called at the start of every scan cycle.
+        """
+        pending = _load_pending()
+        if not pending:
+            return
+
+        import live_scanner as scanner
+        import options_ledger as ol
+
+        client = getattr(scanner, "_current_client", None)
+        if client is None:
+            return
+
+        account_hash = self._get_account_hash(client)
+        if not account_hash:
+            return
+
+        # Fetch recent orders (last 2 days to catch same-day and next-day fills)
+        try:
+            now  = datetime.now()
+            resp = client.get_orders_for_account(
+                account_hash,
+                from_entered_datetime=now - timedelta(days=2),
+                to_entered_datetime=now + timedelta(minutes=5),
+            )
+            resp.raise_for_status()
+            schwab_orders = resp.json()
+        except Exception as exc:
+            print(f"  [Semi-auto] order poll error: {exc}")
+            return
+
+        still_pending = []
+        for entry in pending:
+            occ_norm = entry["occ_sym"].replace(" ", "")
+            filled   = False
+            fill_price = None
+
+            for o in schwab_orders:
+                if o.get("status") not in ("FILLED", "WORKING", "PENDING_ACTIVATION",
+                                           "QUEUED", "ACCEPTED"):
+                    continue
+                for leg in o.get("orderLegCollection", []):
+                    leg_sym = leg.get("instrument", {}).get("symbol", "").replace(" ", "")
+                    if leg_sym != occ_norm:
+                        continue
+                    if o.get("status") == "FILLED":
+                        acts = o.get("orderActivityCollection", [])
+                        if acts:
+                            exec_legs = acts[0].get("executionLegs", [])
+                            fill_price = exec_legs[0].get("price") if exec_legs else o.get("price")
+                        fill_price = fill_price or o.get("price") or entry["limit"]
+                        filled = True
+                    break
+                if filled:
+                    break
+
+            if not filled:
+                still_pending.append(entry)
+                continue
+
+            # Filled — log to options ledger and notify Slack
+            fill_price = float(fill_price or entry["limit"])
+            sig_data   = entry.get("signal_data", {})
+            sig_data.update({
+                "symbol":      entry["symbol"],
+                "signal":      entry["signal"],
+                "strike":      entry["strike"],
+                "premium":     fill_price,
+                "premium_ct":  round(fill_price * 100, 2),
+                "dte":         entry["dte"],
+                "hv":          sig_data.get("hv", 0),
+                "adx":         sig_data.get("adx", 0),
+                "confidence":  entry.get("confidence"),
+                "regime":      sig_data.get("regime", ""),
+                "reason":      "semi-auto: manual fill confirmed",
+            })
+            ol.append_row(scanner.OPTION_LEDGER_PATH, {
+                "date":        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "symbol":      entry["symbol"],
+                "signal":      entry["signal"],
+                "close":       sig_data.get("close", ""),
+                "strike":      entry["strike"],
+                "premium_sh":  fill_price,
+                "premium_ct":  round(fill_price * 100, 2),
+                "premium_pct": sig_data.get("premium_pct", ""),
+                "dte":         entry["dte"],
+                "hv":          sig_data.get("hv", ""),
+                "adx":         sig_data.get("adx", ""),
+                "confidence":  entry.get("confidence", ""),
+                "regime":      sig_data.get("regime", ""),
+                "verdict":     "APPROVED",
+                "reason":      "semi-auto: manual fill confirmed",
+            })
+
+            msg = (
+                f"{SLACK_MENTION} ✅ *FILL CONFIRMED — logged to ledger*\n"
+                f"*{entry['symbol']} {entry['signal']}* "
+                f"${entry['strike']} exp {entry['expiry']}\n"
+                f"*Fill price:* ${fill_price:.2f}/sh  (${fill_price*100:.0f}/contract)\n"
+                f"*Collateral committed:* ${entry['strike']*100:,.0f}"
+            )
+            scanner._send_slack(msg)
+            print(f"\n  [Semi-auto] ✅ Fill logged: {entry['symbol']} {entry['signal']} "
+                  f"${entry['strike']} @ ${fill_price:.2f}")
+
+            # Post-fill reconcile
+            self._post_trade_reconcile(client, account_hash, entry["occ_sym"], sig_data)
+
+        _save_pending(still_pending)
+
+        if still_pending:
+            print(f"  [Semi-auto] {len(still_pending)} pending order(s) awaiting fill: "
+                  + ", ".join(f"{e['symbol']} {e['signal']} ${e['strike']}"
+                               for e in still_pending))
+
 
 # ---------------------------------------------------------------------------
 # OCC option symbol
@@ -723,6 +964,9 @@ def main():
                             help="Paper trading mode (default, safe)")
     mode_group.add_argument("--real", action="store_true",
                             help="Real trading mode (requires REALLY_REAL=true env var)")
+    mode_group.add_argument("--semi", action="store_true",
+                            help="Semi-auto: LLM approves, Slack notifies you, you place manually, "
+                                 "overseer watches for fill and logs to ledger")
 
     parser.add_argument("--provider", default=None,
                         help="LLM provider: anthropic | openai | deepseek | openai_compatible")
@@ -732,9 +976,10 @@ def main():
                         help="Base URL for openai_compatible endpoints")
     args = parser.parse_args()
 
-    paper = not args.real
+    paper = not args.real and not args.semi
+    semi  = args.semi
 
-    if not paper and os.environ.get("REALLY_REAL", "").lower() != "true":
+    if args.real and os.environ.get("REALLY_REAL", "").lower() != "true":
         print("⚠  Real mode selected but REALLY_REAL env var is not 'true'.")
         print("   Orders will be logged but NOT placed. Set REALLY_REAL=true to enable.")
 
@@ -744,6 +989,7 @@ def main():
         model=args.model,
         base_url=args.base_url,
         paper=paper,
+        semi=semi,
     )
 
     # Patch sys.argv so live_scanner.main() parses the right flags
@@ -753,6 +999,8 @@ def main():
 
     import live_scanner as scanner
     scanner.set_decision_fn(overseer.decide)
+    if semi:
+        scanner.set_scan_hook_fn(overseer.check_pending_orders)
     provider_tag = overseer.llm.provider
     scanner._slack_prefix = f"`({provider_tag})`\n"
 

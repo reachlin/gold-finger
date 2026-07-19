@@ -351,6 +351,7 @@ def _save_global_scan(n: int) -> None:
 # ---------------------------------------------------------------------------
 
 _decision_fn       = None   # callable(signal: dict) -> "y" | "n" | "q"
+_scan_hook_fn      = None   # callable() — called at start of each scan cycle
 _current_scan_signals: list = []  # this scan's signals — AutoOverseer reads
                                   # them to show each signal its competitors
 _current_portfolio = None   # populated in main() after PaperPortfolio init
@@ -363,6 +364,12 @@ def set_decision_fn(fn):
     """Replace the interactive y/n prompt with an automated decision function."""
     global _decision_fn
     _decision_fn = fn
+
+
+def set_scan_hook_fn(fn):
+    """Register a callback fired at the start of each scan (e.g. pending-order check)."""
+    global _scan_hook_fn
+    _scan_hook_fn = fn
 
 
 def _fetch_regime_and_spy(client) -> tuple[str, "pd.DataFrame | None"]:
@@ -1257,6 +1264,12 @@ def main():
         if scan_count == 0:
             _print_startup(client, paper=args.paper, portfolio=portfolio,
                            price_fetcher=price_fetcher)
+
+        if _scan_hook_fn is not None:
+            try:
+                _scan_hook_fn()
+            except Exception as _hook_exc:
+                print(f"  [ScanHook] error: {_hook_exc}")
 
         scan_count += 1
         global_scan += 1
