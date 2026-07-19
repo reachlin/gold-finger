@@ -356,14 +356,176 @@ class AutoOverseer:
 
         return verdict
 
+    def _get_account_hash(self, client) -> str | None:
+        try:
+            accts = client.get_account_numbers().json()
+            if not accts:
+                return None
+            return accts[0]["hashValue"]
+        except Exception as exc:
+            print(f"  [AutoOverseer] ⚠ get_account_numbers failed: {exc}")
+            return None
+
+    def _pre_trade_check(self, client, account_hash: str, s: dict) -> tuple[bool, str]:
+        """
+        Verify Schwab account state before placing an order.
+        Checks: (1) cash covers collateral, (2) no duplicate short already open.
+        Returns (ok, message).
+        """
+        try:
+            resp = client.get_account(
+                account_hash,
+                fields=client.Account.Fields.POSITIONS,
+            )
+            resp.raise_for_status()
+            acct = resp.json()
+        except Exception as exc:
+            return False, f"Cannot fetch Schwab account: {exc}"
+
+        sec = acct.get("securitiesAccount", {})
+
+        # Cash / collateral check
+        balances = sec.get("currentBalances", {})
+        cash = float(balances.get("cashBalance", 0)
+                     or balances.get("availableFundsNonMarginableTrade", 0)
+                     or balances.get("availableFunds", 0))
+        collateral_needed = float(s.get("strike", 0)) * 100
+        if cash < collateral_needed:
+            return False, (f"Schwab cash ${cash:,.0f} < "
+                           f"collateral needed ${collateral_needed:,.0f} — abort")
+
+        # Duplicate short position check
+        signal    = s.get("signal", "SELL_PUT")
+        put_call  = "PUT" if signal == "SELL_PUT" else "CALL"
+        strike    = float(s["strike"])
+        symbol    = s["symbol"].upper()
+        for pos in sec.get("positions", []):
+            inst = pos.get("instrument", {})
+            if inst.get("assetType") != "OPTION":
+                continue
+            if (inst.get("putCall", "").upper() == put_call
+                    and abs(float(inst.get("strikePrice", -1)) - strike) < 0.01
+                    and float(pos.get("shortQuantity", 0)) > 0
+                    and symbol in inst.get("symbol", "").upper()):
+                return False, (f"Duplicate: Schwab already has short "
+                               f"{inst.get('symbol')} — skipping")
+
+        # Cross-check local committed collateral vs Schwab cash
+        try:
+            import options_ledger as ol
+            import live_scanner as scanner
+            committed = ol.committed_collateral(ol.read_rows(scanner.OPTION_LEDGER_PATH))
+            free_local = cash - committed
+            if free_local < collateral_needed:
+                return False, (f"Local ledger says only ${free_local:,.0f} free "
+                               f"after ${committed:,.0f} committed — abort")
+        except Exception:
+            pass
+
+        return True, (f"Pre-check OK — Schwab cash ${cash:,.0f}, "
+                      f"collateral needed ${collateral_needed:,.0f}")
+
+    def _post_trade_reconcile(self, client, account_hash: str,
+                              occ_sym: str, s: dict):
+        """
+        After order placement: poll for fill confirmation (up to 60s),
+        then compare Schwab positions against the local options ledger.
+        """
+        from datetime import datetime, timedelta, date
+        import options_ledger as ol
+        import live_scanner as scanner
+
+        # Poll for fill
+        filled     = False
+        fill_price = None
+        occ_norm   = occ_sym.replace(" ", "")
+        for _ in range(12):   # 12 × 5s = 60s
+            time.sleep(5)
+            try:
+                now  = datetime.now()
+                resp = client.get_orders_for_account(
+                    account_hash,
+                    from_entered_datetime=now - timedelta(minutes=5),
+                    to_entered_datetime=now + timedelta(minutes=1),
+                )
+                resp.raise_for_status()
+                for o in resp.json():
+                    for leg in o.get("orderLegCollection", []):
+                        if occ_norm in leg.get("instrument", {}).get("symbol", "").replace(" ", ""):
+                            if o.get("status") == "FILLED":
+                                acts = o.get("orderActivityCollection", [])
+                                if acts:
+                                    legs2 = acts[0].get("executionLegs", [])
+                                    fill_price = legs2[0].get("price") if legs2 else o.get("price")
+                                filled = True
+                                break
+                    if filled:
+                        break
+            except Exception as exc:
+                print(f"  [Reconcile] poll error: {exc}")
+            if filled:
+                break
+
+        if filled:
+            print(f"  [Reconcile] ✅ Fill confirmed: {occ_sym}  fill ${fill_price}")
+        else:
+            print(f"  [Reconcile] ⚠ Fill not confirmed within 60s — verify on Schwab")
+
+        # Compare Schwab positions vs local ledger
+        try:
+            resp = client.get_account(account_hash,
+                                      fields=client.Account.Fields.POSITIONS)
+            resp.raise_for_status()
+            acct = resp.json()
+            schwab_shorts: set[str] = set()
+            for pos in acct.get("securitiesAccount", {}).get("positions", []):
+                inst = pos.get("instrument", {})
+                if (inst.get("assetType") == "OPTION"
+                        and float(pos.get("shortQuantity", 0)) > 0):
+                    schwab_shorts.add(inst.get("symbol", "").replace(" ", ""))
+
+            local_opens = ol.open_options(ol.read_rows(scanner.OPTION_LEDGER_PATH))
+            for row in local_opens:
+                try:
+                    opened   = date.fromisoformat(row["date"][:10])
+                    exp      = opened + timedelta(days=int(float(row["dte"])))
+                    local_occ = build_occ_symbol(
+                        row["symbol"], exp, row["signal"], float(row["strike"])
+                    ).replace(" ", "")
+                    if local_occ not in schwab_shorts:
+                        print(f"  [Reconcile] ⚠ LOCAL ledger has {local_occ} "
+                              f"but NOT found on Schwab")
+                except Exception:
+                    pass
+
+            for sym in schwab_shorts:
+                found = any(
+                    sym == build_occ_symbol(
+                        r["symbol"],
+                        date.fromisoformat(r["date"][:10]) + timedelta(days=int(float(r["dte"]))),
+                        r["signal"], float(r["strike"])
+                    ).replace(" ", "")
+                    for r in local_opens
+                    if r.get("date") and r.get("dte") and r.get("strike")
+                )
+                if not found:
+                    print(f"  [Reconcile] ⚠ Schwab has SHORT {sym} "
+                          f"but NOT in local ledger — manual action needed")
+        except Exception as exc:
+            print(f"  [Reconcile] position comparison error: {exc}")
+
     def _place_real_order(self, s: dict):
         """
         Place a real Schwab options SELL_TO_OPEN order.
         Requires REALLY_REAL=true env var as a hard safety gate.
+
+        Limit price: uses live BID from the Schwab chain quote (s["bid"]).
+        BID is the price a market maker will immediately pay — guaranteed
+        fill. Mid-price is more optimistic but may sit unfilled all day.
+        Falls back to premium * 0.95 when no live bid is available (model
+        priced signals).
         """
         if s.get("signal") not in ("SELL_PUT", "SELL_CALL"):
-            # Router/equity signals are strategy-state changes, not options
-            # orders — the scanner prints the suggested share trade instead.
             print(f"  [AutoOverseer] {s.get('signal')} — no automated real "
                   f"order; manage the share trade manually")
             return
@@ -377,19 +539,42 @@ class AutoOverseer:
             print("  [AutoOverseer] ⚠ No Schwab client available — cannot place real order")
             return
 
+        account_hash = self._get_account_hash(client)
+        if not account_hash:
+            print("  [AutoOverseer] ⚠ No accounts found")
+            return
+
+        # Pre-trade check: cash, no duplicate, local ledger consistency
+        ok, msg = self._pre_trade_check(client, account_hash, s)
+        print(f"  [Pre-trade] {msg}")
+        if not ok:
+            return
+
         try:
             from datetime import date, timedelta
-            exp_date = date.today() + timedelta(days=int(s.get("dte", 30)))
-            occ_sym  = build_occ_symbol(s["symbol"], exp_date,
-                                        s.get("signal", "SELL_PUT"),
-                                        float(s["strike"]))
-
-            # Schwab order spec for SELL_TO_OPEN limit
             from schwab.orders.options import option_sell_to_open_limit
             from schwab.orders.common import Duration, Session
+
+            # Use exact expiry from chain quote when available
+            if s.get("expiry"):
+                exp_date = date.fromisoformat(s["expiry"])
+            else:
+                exp_date = date.today() + timedelta(days=int(s.get("dte", 30)))
+
+            occ_sym = build_occ_symbol(s["symbol"], exp_date,
+                                       s.get("signal", "SELL_PUT"),
+                                       float(s["strike"]))
+
+            # Limit price: BID (guaranteed fill for SELL_TO_OPEN).
+            # Mid-price is optimistic and often sits unfilled for liquid puts.
+            bid     = s.get("bid")
             premium = float(s.get("premium", 0))
-            # 5% below the signal's theoretical premium to improve fill odds
-            limit   = round(premium * 0.95, 2)
+            if bid and float(bid) > 0 and s.get("quote_source") == "schwab_chain":
+                limit = round(float(bid), 2)
+                price_src = f"bid ${limit:.2f}"
+            else:
+                limit = round(premium * 0.95, 2)
+                price_src = f"model×0.95 ${limit:.2f}"
 
             order = (
                 option_sell_to_open_limit(occ_sym, 1, limit)
@@ -398,19 +583,17 @@ class AutoOverseer:
                 .build()
             )
 
-            # Get account hash
-            accts = client.get_account_numbers().json()
-            if not accts:
-                print("  [AutoOverseer] ⚠ No accounts found")
-                return
-            account_hash = accts[0]["hashValue"]
-
             resp = client.place_order(account_hash, order)
             resp.raise_for_status()
-            print(f"  [AutoOverseer] ✅ REAL ORDER PLACED: {occ_sym}  limit ${limit:.2f}")
+            print(f"  [AutoOverseer] ✅ REAL ORDER PLACED: {occ_sym}  "
+                  f"limit {price_src}  (mid ${premium:.2f}  ask ${s.get('ask', '?')})")
 
         except Exception as exc:
             print(f"  [AutoOverseer] ⚠ Real order failed: {exc}")
+            return
+
+        # Post-trade: confirm fill, reconcile ledger vs Schwab
+        self._post_trade_reconcile(client, account_hash, occ_sym, s)
 
 
 # ---------------------------------------------------------------------------
