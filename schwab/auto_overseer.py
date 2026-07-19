@@ -42,9 +42,24 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-_DATA_DIR           = os.path.join(os.path.dirname(__file__), "..", "data")
-PENDING_ORDERS_PATH = os.path.join(_DATA_DIR, "pending_orders.json")
-SLACK_MENTION       = "<@U02DQJ9KKFZ>"   # user's Slack ID for trade notifications
+_DATA_DIR            = os.path.join(os.path.dirname(__file__), "..", "data")
+PENDING_ORDERS_PATH  = os.path.join(_DATA_DIR, "pending_orders.json")
+_TRADE_COUNTER_PATH  = os.path.join(_DATA_DIR, "trade_counter.json")
+SLACK_MENTION        = "<@U02DQJ9KKFZ>"   # user's Slack ID for trade notifications
+
+
+def _next_trade_id() -> str:
+    """Return next sequential trade ID like T0001, T0002, …"""
+    os.makedirs(_DATA_DIR, exist_ok=True)
+    try:
+        with open(_TRADE_COUNTER_PATH) as f:
+            n = json.load(f).get("counter", 0)
+    except Exception:
+        n = 0
+    n += 1
+    with open(_TRADE_COUNTER_PATH, "w") as f:
+        json.dump({"counter": n}, f)
+    return f"T{n:04d}"
 
 
 def _load_pending() -> list:
@@ -662,22 +677,25 @@ class AutoOverseer:
                 price_note = f"*Limit (ASK):* ${limit:.2f}/sh  |  *Mid:* ${premium:.2f}  |  *Bid:* ${bid or '?'}"
                 size_note  = f"*Cost/contract:* ${cost:,.0f}"
 
+            trade_id = _next_trade_id()
             msg = (
                 f"{SLACK_MENTION} 🔔 *{sig} — PLACE MANUALLY*\n"
+                f"*Trade ID:* `{trade_id}`\n"
                 f"*Action:* {action_str}  |  *Symbol:* {symbol}\n"
                 f"*Strike:* ${s['strike']}  |  *Expiry:* {s.get('expiry', exp_date)}  ({s.get('dte', '?')} DTE)\n"
                 f"{price_note}\n"
                 f"{size_note}  |  *Confidence:* {conf}/100\n"
                 f"*OCC symbol:* `{occ_sym}`\n"
                 f"→ {action_str} limit @ ${limit:.2f} on Schwab — "
-                f"I'll watch for the fill and log it."
+                f"or say *place order {trade_id} with price {limit:.2f}* to place here."
             )
             scanner._send_slack(msg)
-            print(f"\n  [Semi-auto] Slack → {symbol} {sig} ${s['strike']} "
+            print(f"\n  [Semi-auto] Slack → {trade_id}  {symbol} {sig} ${s['strike']} "
                   f"limit ${limit:.2f}  OCC: {occ_sym}")
 
             pending = _load_pending()
             pending.append({
+                "trade_id":    trade_id,
                 "symbol":      symbol,
                 "signal":      sig,
                 "strike":      float(s["strike"]),
