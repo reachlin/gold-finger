@@ -829,12 +829,43 @@ class AutoOverseer:
             # Post-fill reconcile
             self._post_trade_reconcile(client, account_hash, entry["occ_sym"], sig_data)
 
-        _save_pending(still_pending)
+        # Auto-expire: drop orders notified before today's market open (4am ET cutoff)
+        from zoneinfo import ZoneInfo
+        now_et   = datetime.now(ZoneInfo("America/New_York"))
+        cutoff   = now_et.replace(hour=4, minute=0, second=0, microsecond=0)
+        live, expired = [], []
+        for entry in still_pending:
+            try:
+                notified = datetime.fromisoformat(entry["notified_at"])
+                # Make naive datetime comparable (treat notified_at as ET)
+                if notified.tzinfo is None:
+                    notified = notified.replace(tzinfo=ZoneInfo("America/New_York"))
+                if notified < cutoff:
+                    expired.append(entry)
+                else:
+                    live.append(entry)
+            except Exception:
+                live.append(entry)
 
-        if still_pending:
-            print(f"  [Semi-auto] {len(still_pending)} pending order(s) awaiting fill: "
+        if expired:
+            exp_lines = "\n".join(
+                f"  • {e['symbol']} {e['signal']} ${e['strike']}  "
+                f"(notified {e['notified_at']})"
+                for e in expired
+            )
+            msg = (f"{SLACK_MENTION} ⏰ *Pending orders expired unfilled:*\n"
+                   f"{exp_lines}\n"
+                   f"Removed from watch list.")
+            scanner._send_slack(msg)
+            print(f"  [Semi-auto] {len(expired)} pending order(s) expired: "
+                  + ", ".join(f"{e['symbol']} {e['signal']}" for e in expired))
+
+        _save_pending(live)
+
+        if live:
+            print(f"  [Semi-auto] {len(live)} pending order(s) awaiting fill: "
                   + ", ".join(f"{e['symbol']} {e['signal']} ${e['strike']}"
-                               for e in still_pending))
+                               for e in live))
 
 
 # ---------------------------------------------------------------------------

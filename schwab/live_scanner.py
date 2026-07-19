@@ -829,6 +829,36 @@ def _committed_collateral() -> float:
     return ol.committed_collateral(ol.read_rows(OPTION_LEDGER_PATH))
 
 
+_PENDING_ORDERS_PATH = os.path.join(DATA_DIR, "pending_orders.json")
+
+
+def _pending_collateral() -> float:
+    """
+    Cash locked by options orders notified via Slack but not yet confirmed
+    filled (pending_orders.json).  Must be counted to prevent overdraft when
+    a second signal arrives before the first is filled.
+    SELL_PUT  → strike × 100 per contract (cash-secured)
+    BUY_CALL  → limit × 100 per contract  (debit)
+    SELL_CALL → 0 (covered by shares the user already holds)
+    """
+    if not os.path.exists(_PENDING_ORDERS_PATH):
+        return 0.0
+    try:
+        import json as _json
+        with open(_PENDING_ORDERS_PATH) as _f:
+            orders = _json.load(_f)
+    except Exception:
+        return 0.0
+    total = 0.0
+    for o in orders:
+        sig = o.get("signal", "")
+        if sig == "SELL_PUT":
+            total += float(o.get("strike", 0)) * 100
+        elif sig == "BUY_CALL":
+            total += float(o.get("limit", o.get("premium", 0))) * 100
+    return total
+
+
 def _collateral_required(s: dict) -> float:
     """Return cash required for a signal.
     SELL_PUT: strike × 100 (collateral locked).
@@ -851,15 +881,19 @@ def _budget_check(s: dict, portfolio_cash: float) -> tuple[bool, str]:
     if required == 0:
         return True, ""
     committed = _committed_collateral()
-    available = portfolio_cash - committed
+    pending   = _pending_collateral()
+    available = portfolio_cash - committed - pending
     if required > available:
+        pending_note = f" + ${pending:,.0f} pending" if pending > 0 else ""
         msg = (f"BUDGET BLOCK: need ${required:,.0f} collateral "
                f"(strike ${s.get('strike')} × 100), "
                f"only ${available:,.0f} free "
-               f"(${portfolio_cash:,.0f} cash − ${committed:,.0f} committed). "
+               f"(${portfolio_cash:,.0f} cash − ${committed:,.0f} committed"
+               f"{pending_note}). "
                f"No margin / no naked contracts.")
         return False, msg
-    return True, f"Collateral OK: ${required:,.0f} of ${available:,.0f} available"
+    pending_note = f" (incl ${pending:,.0f} pending)" if pending > 0 else ""
+    return True, f"Collateral OK: ${required:,.0f} of ${available:,.0f} available{pending_note}"
 
 
 # ---------------------------------------------------------------------------
