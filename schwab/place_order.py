@@ -84,6 +84,29 @@ def _get_account_hash(client) -> str | None:
     return accounts[0]["hashValue"]
 
 
+def _check_amateur_hour() -> tuple[bool, str]:
+    """
+    Block order placement during amateur hour (9:30–10:30 ET) and pre-market.
+    Pre-market DAY orders execute at open = same problem.
+    Returns (blocked, reason).
+    """
+    from zoneinfo import ZoneInfo
+    from datetime import time as dtime
+    now_et = datetime.now(ZoneInfo("America/New_York")).time()
+    market_open  = dtime(9, 30)
+    safe_open    = dtime(10, 30)
+    market_close = dtime(16, 0)
+    if now_et < market_open:
+        return True, (f"Pre-market ({now_et.strftime('%H:%M')} ET) — DAY orders "
+                      f"execute at open (9:30 ET = amateur hour). Wait until 10:30 ET.")
+    if market_open <= now_et < safe_open:
+        return True, (f"Amateur hour ({now_et.strftime('%H:%M')} ET) — first 60 min "
+                      f"are volatile. Wait until 10:30 ET.")
+    if now_et >= market_close:
+        return True, (f"Market closed ({now_et.strftime('%H:%M')} ET).")
+    return False, ""
+
+
 def cmd_list():
     orders = _load_pending()
     if not orders:
@@ -111,6 +134,11 @@ def cmd_place(trade_id: str, price_override: float | None, skip_confirm: bool = 
     symbol  = entry["symbol"]
     occ_sym = entry["occ_sym"]
     limit   = price_override if price_override is not None else entry["limit"]
+
+    blocked, reason = _check_amateur_hour()
+    if blocked:
+        print(f"\n  ⛔ Cannot place order: {reason}")
+        sys.exit(1)
 
     print(f"\n  Trade:    {trade_id}  {sig}  {symbol}")
     print(f"  OCC:      {occ_sym}")
