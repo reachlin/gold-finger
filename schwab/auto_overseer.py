@@ -388,7 +388,16 @@ class AutoOverseer:
 
         if verdict == "y" and not self.paper:
             if self.semi:
-                self._notify_trade(s)
+                # Suppress signals during pre-market and amateur hour (first 60 min)
+                from zoneinfo import ZoneInfo
+                from datetime import time as _time
+                _now_et = datetime.now(ZoneInfo("America/New_York")).time()
+                _safe   = _time(10, 30)
+                if _now_et < _safe:
+                    print(f"  [Semi-auto] ⏸ Amateur hour ({_now_et.strftime('%H:%M')} ET) "
+                          f"— signal held, will retry after 10:30 ET.")
+                else:
+                    self._notify_trade(s)
             else:
                 self._place_real_order(s)
 
