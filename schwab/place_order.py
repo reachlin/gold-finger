@@ -207,16 +207,102 @@ def cmd_place(trade_id: str, price_override: float | None, skip_confirm: bool = 
     )
 
 
+def cmd_cancel(trade_id: str):
+    """Cancel a live Schwab order by trade ID and remove it from pending."""
+    from datetime import timedelta
+
+    orders = _load_pending()
+    match = [o for o in orders if o.get("trade_id", "").upper() == trade_id.upper()]
+    if not match:
+        print(f"  Error: trade {trade_id} not found in pending orders.")
+        print("  Run `python schwab/place_order.py list` to see pending trades.")
+        sys.exit(1)
+    entry = match[0]
+    occ_sym = entry["occ_sym"]
+    occ_norm = occ_sym.replace(" ", "")
+
+    print(f"\n  Cancelling: {trade_id}  {entry['signal']}  {entry['symbol']}")
+    print(f"  OCC: {occ_sym}")
+
+    try:
+        client = _schwab_client()
+    except Exception as e:
+        print(f"  Error: could not connect to Schwab: {e}")
+        sys.exit(1)
+
+    account_hash = _get_account_hash(client)
+    if not account_hash:
+        print("  Error: no accounts found on this token.")
+        sys.exit(1)
+
+    # Find the matching open order on Schwab
+    now = datetime.now()
+    try:
+        resp = client.get_orders_for_account(
+            account_hash,
+            from_entered_datetime=now - timedelta(hours=8),
+            to_entered_datetime=now + timedelta(minutes=5),
+        )
+        resp.raise_for_status()
+        schwab_orders = resp.json()
+    except Exception as e:
+        print(f"  Error fetching Schwab orders: {e}")
+        sys.exit(1)
+
+    order_id = None
+    for o in schwab_orders:
+        if o.get("status") not in ("WORKING", "QUEUED", "ACCEPTED", "PENDING_ACTIVATION"):
+            continue
+        for leg in o.get("orderLegCollection", []):
+            sym = leg.get("instrument", {}).get("symbol", "").replace(" ", "")
+            if occ_norm in sym or sym in occ_norm:
+                order_id = o["orderId"]
+                break
+        if order_id:
+            break
+
+    if order_id is None:
+        print(f"  ⚠ No open Schwab order found for {occ_sym}.")
+        print(f"    It may already be filled or cancelled. Removing from pending only.")
+    else:
+        try:
+            resp = client.cancel_order(order_id, account_hash)
+            resp.raise_for_status()
+            print(f"  ✅ Schwab order {order_id} cancelled.")
+        except Exception as e:
+            print(f"  Error cancelling Schwab order: {e}")
+            sys.exit(1)
+
+    # Remove from pending_orders.json
+    remaining = [o for o in orders if o.get("trade_id", "").upper() != trade_id.upper()]
+    _save_pending(remaining)
+    print(f"  Removed {trade_id} from pending orders.")
+
+    _send_slack(
+        f"{SLACK_MENTION} 🚫 *Order cancelled: {trade_id}*\n"
+        f"{entry['signal']}  `{occ_sym}`  — removed from watch list."
+    )
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Place a pending semi-auto trade.")
-    parser.add_argument("command", nargs="?", help="trade_id or 'list'")
+    parser = argparse.ArgumentParser(description="Manage pending semi-auto trades.")
+    parser.add_argument("command", nargs="?", help="trade_id, 'list', or 'cancel <id>'")
+    parser.add_argument("trade_id", nargs="?", help="Trade ID for cancel subcommand")
     parser.add_argument("--price", type=float, help="Override limit price")
     parser.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt")
     args = parser.parse_args()
 
-    if not args.command or args.command.lower() == "list":
+    cmd = (args.command or "list").lower()
+
+    if cmd == "list":
         cmd_list()
+    elif cmd == "cancel":
+        if not args.trade_id:
+            print("Usage: place_order.py cancel <trade_id>")
+            sys.exit(1)
+        cmd_cancel(args.trade_id.upper())
     else:
+        # treat first arg as trade_id for placement
         cmd_place(args.command.upper(), args.price, skip_confirm=args.yes)
 
 
