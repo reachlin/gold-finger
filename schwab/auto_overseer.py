@@ -808,6 +808,11 @@ class AutoOverseer:
                 still_pending.append(entry)
                 continue
 
+            # Remove from pending immediately so a crash in reconcile doesn't
+            # leave a stale entry that blocks future collateral checks.
+            _save_pending([e for e in pending if e.get("trade_id") != entry.get("trade_id")])
+            pending = _load_pending()  # re-sync in case multiple fills this cycle
+
             # Filled — log to options ledger and notify Slack
             fill_price = float(fill_price or entry["limit"])
             sig_data   = entry.get("signal_data", {})
