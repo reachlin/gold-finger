@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
+load_dotenv(os.path.expanduser("~/.claude/.env"), override=False)
 
 DATA_DIR           = os.path.join(os.path.dirname(__file__), "..", "data")
 PENDING_PATH       = os.path.join(DATA_DIR, "pending_orders.json")
@@ -57,12 +58,21 @@ def _send_slack(msg: str):
 
 
 def _schwab_client():
-    import schwab as schwab_lib
-    return schwab_lib.auth.client_from_token_file(
-        TOKEN_PATH,
-        os.environ["SCHWAB_CLIENT_ID"],
-        os.environ["SCHWAB_CLIENT_SECRET"],
-    )
+    import sys
+    _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    _removed = [p for p in sys.path if os.path.abspath(p) == _project_root]
+    for p in _removed:
+        sys.path.remove(p)
+    _local_schwab = sys.modules.pop("schwab", None)
+    import schwab as _schwab_lib
+    sys.modules["schwab"] = _local_schwab
+    for p in _removed:
+        sys.path.insert(0, p)
+
+    token_path    = os.path.join(os.path.dirname(__file__), "schwab_token.json")
+    client_id     = os.environ["SCHWAB_CLIENT_ID"]
+    client_secret = os.environ["SCHWAB_CLIENT_SECRET"]
+    return _schwab_lib.auth.client_from_token_file(token_path, client_id, client_secret)
 
 
 def _get_account_hash(client) -> str | None:
@@ -88,7 +98,7 @@ def cmd_list():
               f"{o.get('limit','?'):>8}  {o.get('notified_at','?')}")
 
 
-def cmd_place(trade_id: str, price_override: float | None):
+def cmd_place(trade_id: str, price_override: float | None, skip_confirm: bool = False):
     orders = _load_pending()
     match = [o for o in orders if o.get("trade_id", "").upper() == trade_id.upper()]
     if not match:
@@ -111,10 +121,11 @@ def cmd_place(trade_id: str, price_override: float | None):
         print(f"  Bid/Ask:  ${entry['bid']:.2f} / ${entry.get('ask','?')}")
     print()
 
-    confirm = input("  Place this order? [y/N] ").strip().lower()
-    if confirm not in ("y", "yes"):
-        print("  Cancelled — no order placed.")
-        return
+    if not skip_confirm:
+        confirm = input("  Place this order? [y/N] ").strip().lower()
+        if confirm not in ("y", "yes"):
+            print("  Cancelled — no order placed.")
+            return
 
     try:
         client = _schwab_client()
@@ -136,14 +147,14 @@ def cmd_place(trade_id: str, price_override: float | None):
 
         if sig in ("SELL_PUT", "SELL_CALL"):
             order = (
-                option_sell_to_open_limit(occ_sym, 1, limit)
+                option_sell_to_open_limit(occ_sym, 1, f"{limit:.2f}")
                 .set_duration(Duration.DAY)
                 .set_session(Session.NORMAL)
                 .build()
             )
         elif sig == "BUY_CALL":
             order = (
-                option_buy_to_open_limit(occ_sym, 1, limit)
+                option_buy_to_open_limit(occ_sym, 1, f"{limit:.2f}")
                 .set_duration(Duration.DAY)
                 .set_session(Session.NORMAL)
                 .build()
@@ -172,12 +183,13 @@ def main():
     parser = argparse.ArgumentParser(description="Place a pending semi-auto trade.")
     parser.add_argument("command", nargs="?", help="trade_id or 'list'")
     parser.add_argument("--price", type=float, help="Override limit price")
+    parser.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt")
     args = parser.parse_args()
 
     if not args.command or args.command.lower() == "list":
         cmd_list()
     else:
-        cmd_place(args.command.upper(), args.price)
+        cmd_place(args.command.upper(), args.price, skip_confirm=args.yes)
 
 
 if __name__ == "__main__":
