@@ -3,8 +3,8 @@
 ## Vault 76 — US Options & Equity Trading (Schwab)
 
 A Fallout 76-themed trading arsenal for US equities and options, connected to
-Charles Schwab via their official API. Paper-trading first; real capital after
-4–6 weeks of validation.
+Charles Schwab via their official API. $10K real capital deployed (2026-06-26);
+semi-auto live since 2026-07-20.
 
 ### Architecture
 
@@ -14,12 +14,96 @@ Charles Schwab via their official API. Paper-trading first; real capital after
 | **The Raider** | `vault76/armory/raider.py` | Pullback-in-trend strategy (EMA/RSI/ADX) |
 | **The Maggie** | `vault76/armory/maggie.py` | Qullamaggie-style breakout strategy (run-up + consolidation + volume breakout) |
 | **The Scavenger** | `vault76/armory/scavenger.py` | Wheel strategy (cash-secured put → covered call) |
+| **The Hunter** | `vault76/armory/hunter.py` | VCP momentum breakout — BUY_CALL when price breaks out of a tight base |
 | **Relative Strength Screener** | `schwab/relative_strength_screener.py` | Ranks a universe by 1/3/6-month returns; feeds The Maggie's leader screen |
 | **Live Scanner** | `schwab/live_scanner.py` | Real-time scan loop with Vault 76 Daily Briefing to Slack |
+| **Auto Overseer** | `schwab/auto_overseer.py` | LLM-driven decision engine (DeepSeek/Claude/GPT-4o); approves/rejects signals using Kronos prediction + Vault 8 weekly range + open positions |
 | **Vault 20** | `vault20/vault20.py` | Manual position tracker for any broker without API |
 | **Option Finder** | `vault20/option_finder.py` | Schwab option chain screener with real Greeks + IV rank |
 | **Backtest** | `schwab/backtest_scavenger.py` | Walk-forward wheel strategy backtest with early-exit |
 | **Backtest** | `schwab/backtest_maggie.py` | Walk-forward breakout strategy backtest |
+| **Backtest** | `schwab/backtest_hunter.py` | VCP BUY_CALL historical scan backtest |
+
+### Vault 8 — Weekly Range Predictor
+
+Predict next week's (low, high) price band for blue-chip stocks using a
+multi-stock BiLSTM + attention model trained on 49 tickers (max history).
+Buy near the predicted low, sell near the predicted high within the same week.
+
+| Component | File | Description |
+|---|---|---|
+| **The Responder** | `vault8/armory/responder.py` | Role: scans blue chips, produces BUY_WEEK_LOW signals with entry/target/stop |
+| **Weekly Range Model** | `vault8/weekly_range_model.py` | BiLSTM (2 layers, attention) trained with pinball loss; 49 stocks, 89K samples |
+| **Blue Chip Downloader** | `vault8/download_bluechips.py` | Downloads max-history OHLCV for 50 Dow 30 + mega-cap ETFs via yfinance |
+| **Backtest** | `vault8/backtest_weekly_range.py` | Oracle backtest — buy weekly low, sell weekly high; validates opportunity size |
+
+**Auto-wired into overseer startup**: when the overseer starts and the current
+ISO week has no Vault 8 scan yet, it runs the Responder across all 50 blue chips,
+posts top signals to Slack, and saves results to `data/vault8_weekly_signals.json`.
+Each vault76 LLM decision also receives the Vault 8 weekly range for the same
+symbol (if available) in its prompt.
+
+Oracle results (buy every weekly low, sell every weekly high):
+- IONQ: 18.5% median weekly range, CAGR 1,451,698%
+- AMD: 10.4% range, CAGR 30,712%
+- NVDA: 8.0% range, CAGR 9,088%
+
+BiLSTM model capture rates (% of oracle range captured on validation set):
+- SPY 36.8%, KO 34.9%, GLD 34.4%, JNJ 34.3%, PG 34.1%
+
+### Semi-Auto Trading Flow
+
+```
+Overseer scans → LLM approves → Slack mention with Trade ID (T000X)
+  → user places manually via "place order T000X"
+  → overseer watches Schwab for fill
+  → auto-logs to paper_options_ledger.csv
+```
+
+**Guard rails:**
+- Amateur hour (9:30–10:30 ET): signals suppressed, order placement blocked
+- Collateral guard: pending unplaced orders count against budget (no double-booking)
+- Auto-expire: pending orders older than 1 trading day are cancelled via Slack mention
+- Budget limit: `$600/trade` configurable; pending + committed collateral both deducted
+
+### Trade Management
+
+```bash
+# List pending trades waiting to be placed
+python schwab/place_order.py list
+
+# Place a specific trade (skip confirmation — Slack approval IS the confirm)
+python schwab/place_order.py T0001 --yes
+
+# Place with a custom price
+python schwab/place_order.py T0001 --price 2.35 --yes
+
+# Cancel a live order at Schwab + remove from pending
+python schwab/place_order.py cancel T0001
+
+# List / cancel pending orders (manage_pending is the simpler CLI)
+python schwab/manage_pending.py list
+python schwab/manage_pending.py cancel 0
+python schwab/manage_pending.py cancel all
+```
+
+### Auto Overseer usage
+
+```bash
+# Semi-auto: LLM decides, human places, overseer watches fills
+python schwab/auto_overseer.py --semi
+
+# Paper mode (safe default — no real orders)
+python schwab/auto_overseer.py --paper
+
+# Use a different LLM provider
+python schwab/auto_overseer.py --semi --provider deepseek
+python schwab/auto_overseer.py --semi --provider anthropic --model claude-opus-4-8
+
+# Run in tmux with caffeinate (recommended — prevents macOS sleep)
+tmux new-session -d -s overseer -x 220 -y 50 \
+  "caffeinate -is env PYTHONUNBUFFERED=1 python schwab/auto_overseer.py --semi 2>&1 | tee data/overseer.log"
+```
 
 ### Option Finder usage
 
