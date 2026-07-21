@@ -1,0 +1,127 @@
+
+=== Vault 8 — Training (multi-stock, 49 tickers) ===
+
+  [Data] AAPL: 2359 weekly bars
+  [Data] MSFT: 2085 weekly bars
+  [Data] UNH: 2159 weekly bars
+  [Data] GS: 1400 weekly bars
+  [Data] HD: 2313 weekly bars
+  [Data] MCD: 3100 weekly bars
+  [Data] CAT: 3348 weekly bars
+  [Data] CRM: 1132 weekly bars
+  [Data] V: 937 weekly bars
+  [Data] AMGN: 2228 weekly bars
+  [Data] HON: 3348 weekly bars
+  [Data] AXP: 2804 weekly bars
+  [Data] TRV: 2624 weekly bars
+  [Data] JPM: 2398 weekly bars
+  [Data] IBM: 3348 weekly bars
+  [Data] JNJ: 3341 weekly bars
+  [Data] WMT: 2792 weekly bars
+  [Data] PG: 3348 weekly bars
+  [Data] CVX: 3347 weekly bars
+  [Data] MRK: 3348 weekly bars
+  [Data] DIS: 3348 weekly bars
+  [Data] NKE: 2361 weekly bars
+  [Data] MMM: 3344 weekly bars
+  [Data] KO: 3348 weekly bars
+  [Data] BA: 3348 weekly bars
+  [Data] CSCO: 1880 weekly bars
+  [Data] VZ: 2206 weekly bars
+  [Data] INTC: 2398 weekly bars
+  [Data] NVDA: 1414 weekly bars
+  [Data] GOOGL: 1124 weekly bars
+  [Data] AMZN: 1502 weekly bars
+  [Data] META: 720 weekly bars
+  [Data] TSLA: 819 weekly bars
+  [Data] AMD: 2397 weekly bars
+  [Data] AVGO: 865 weekly bars
+  [Data] QCOM: 1785 weekly bars
+  [Data] TXN: 2804 weekly bars
+  [Data] LLY: 2804 weekly bars
+  [Data] ABT: 2398 weekly bars
+  [Data] TMO: 2398 weekly bars
+  [Data] ABBV: 688 weekly bars
+  [Data] BRKB: 1555 weekly bars
+  [Data] BAC: 2767 weekly bars
+  [Data] WFC: 2804 weekly bars
+  [Data] COST: 2069 weekly bars
+  [Data] XOM: 3348 weekly bars
+  [Data] SPY: 1726 weekly bars
+  [Data] QQQ: 1407 weekly bars
+  [Data] GLD: 1111 weekly bars
+
+  Train samples: 89629  |  Val samples: 22427
+  Device: mps
+
+  Epoch  10/80  train=0.0107  val=0.0090
+           ↑ saved (best val=0.0090)
+  Epoch  20/80  train=0.0107  val=0.0090
+  Epoch  30/80  train=0.0107  val=0.0090
+  Epoch  40/80  train=0.0107  val=0.0090
+           ↑ saved (best val=0.0090)
+  Epoch  50/80  train=0.0107  val=0.0090
+  Epoch  60/80  train=0.0107  val=0.0090
+           ↑ saved (best val=0.0090)
+  Epoch  70/80  train=0.0107  val=0.0089
+           ↑ saved (best val=0.0089)
+  Epoch  80/80  train=0.0107  val=0.0089
+           ↑ saved (best val=0.0089)
+
+  Training complete. Best val loss: 0.0089
+  Model saved → /Users/lincai/dev/private/gold-finger/vault8/vault8_weekly_range.pt
+
+=== Per-stock validation performance ===
+
+Ticker  Val weeks  Capture %  Sane range %  MAE low (%)  MAE high (%)
+   SPY        344  36.799999         100.0         1.19          1.23
+    KO        668  34.900002         100.0         1.18          1.27
+   GLD        221  34.400002         100.0         1.07          1.27
+   JNJ        667  34.299999         100.0         1.26          1.31
+    PG        668  34.099998         100.0         1.24          1.30
+   MCD        619  33.700001         100.0         1.33          1.36
+  BRKB        310  32.900002         100.0         1.29          1.35
+   HON        668  32.799999         100.0         1.58          1.57
+   WMT        557  32.500000         100.0         1.37          1.72
+    VZ        440  32.400002         100.0         1.62          1.47
+   TRV        523  32.000000         100.0         1.64          1.64
+   IBM        668  32.000000         100.0         1.69          1.81
+     V        186  31.900000         100.0         1.39          1.57
+   MMM        667  31.900000         100.0         1.70          1.69
+   QQQ        280  31.700001         100.0         1.52          1.61
+   MRK        668  31.299999         100.0         1.66          1.68
+  CSCO        375  31.000000         100.0         1.81          1.97
+   DIS        668  30.799999         100.0         1.88          1.84
+   XOM        668  30.700001         100.0         1.85          1.95
+  COST        412  30.600000         100.0         1.57          1.87
+   ABT        478  30.500000         100.0         1.77          1.78
+   AXP        559  30.500000         100.0         2.02          2.14
+  AMGN        444  30.400000         100.0         1.86          1.98
+   CVX        668  30.400000         100.0         1.91          1.87
+  MSFT        416  30.299999         100.0         1.86          2.11
+  ABBV        136  30.299999         100.0         1.70          2.24
+   TMO        478  30.000000         100.0         2.01          2.07
+  AAPL        470  30.000000         100.0         1.81          2.38
+   JPM        478  30.000000         100.0         1.81          2.04
+    HD        461  29.400000         100.0         1.88          1.94
+   WFC        559  29.400000         100.0         2.24          2.28
+   TXN        559  29.400000         100.0         1.96          2.26
+   LLY        559  29.299999         100.0         1.98          2.43
+   CAT        668  29.100000         100.0         2.10          2.34
+   UNH        430  29.000000         100.0         2.25          2.27
+   BAC        552  29.000000         100.0         2.16          2.31
+   NKE        471  28.900000         100.0         2.31          2.39
+    GS        279  28.799999         100.0         1.98          2.36
+  AMZN        299  28.600000         100.0         2.55          2.54
+    BA        668  28.299999         100.0         2.49          2.77
+  INTC        478  27.900000         100.0         2.92          3.45
+   CRM        225  27.299999         100.0         2.87          2.92
+  QCOM        356  27.299999         100.0         2.74          3.29
+ GOOGL        223  27.200001         100.0         2.28          2.84
+  META        143  27.100000         100.0         2.57          3.23
+  AVGO        172  25.299999         100.0         3.02          4.36
+  TSLA        162  25.299999         100.0         3.81          4.67
+  NVDA        281  25.200001         100.0         3.26          4.54
+   AMD        478  24.600000         100.0         3.77          4.92
+
+  Per-stock eval saved → /Users/lincai/dev/private/gold-finger/vault8/vault8_per_stock_eval.csv
