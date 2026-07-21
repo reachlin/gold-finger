@@ -45,6 +45,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 _DATA_DIR            = os.path.join(os.path.dirname(__file__), "..", "data")
 PENDING_ORDERS_PATH  = os.path.join(_DATA_DIR, "pending_orders.json")
 _TRADE_COUNTER_PATH  = os.path.join(_DATA_DIR, "trade_counter.json")
+_VAULT8_SIGNALS_PATH = os.path.join(_DATA_DIR, "vault8_weekly_signals.json")
 SLACK_MENTION        = "<@U02DQJ9KKFZ>"   # user's Slack ID for trade notifications
 
 
@@ -206,7 +207,8 @@ def peer_summaries(all_signals: list[dict], current: dict) -> list[dict]:
 
 def build_prompt(signal: dict, portfolio_state: dict, kronos: dict,
                  open_positions: list[dict] | None = None,
-                 peer_signals: list[dict] | None = None) -> str:
+                 peer_signals: list[dict] | None = None,
+                 vault8_range: dict | None = None) -> str:
     lines = ["## Signal"]
     # Confidence score at the top — primary decision input
     conf = signal.get("confidence")
@@ -261,6 +263,15 @@ def build_prompt(signal: dict, portfolio_state: dict, kronos: dict,
         lines.append(f"  Strike buffer vs floor:  {kronos.get('buf_pct', 0):+.1f}%")
         warn = kronos.get("warn", False)
         lines.append(f"  Assignment warning:      {'YES — strike above predicted support' if warn else 'NO'}")
+
+    if vault8_range:
+        lines.append("\n## Vault 8 — Weekly range prediction (BiLSTM)")
+        lines.append(f"  Predicted low  (entry):  ${vault8_range.get('entry', 0):.2f}")
+        lines.append(f"  Predicted high (target): ${vault8_range.get('target', 0):.2f}")
+        lines.append(f"  Predicted range:         {vault8_range.get('pred_range_pct', 0):.1f}%")
+        lines.append(f"  Base compression:        {vault8_range.get('base_range', 0):.1f}%")
+        lines.append(f"  Vault 8 confidence:      {vault8_range.get('confidence', 0)}/100")
+        lines.append(f"  Stop:                    ${vault8_range.get('stop', 0):.2f}")
 
     lines.append("\nApprove or skip this trade?")
     return "\n".join(lines)
@@ -375,9 +386,13 @@ class AutoOverseer:
         # Competing signals from the same scan — set by live_scanner's loop
         peers = peer_summaries(getattr(scanner, "_current_scan_signals", []), s)
 
+        # Vault 8 weekly range prediction for this symbol (if available)
+        vault8_range = _load_vault8_range(sym)
+
         prompt   = build_prompt(s, portfolio_state, kronos,
                                 open_positions=open_positions,
-                                peer_signals=peers)
+                                peer_signals=peers,
+                                vault8_range=vault8_range)
         raw      = self.llm.chat(system=OVERSEER_SYSTEM, user=prompt)
         decision, reason = parse_llm_response(raw) if raw else ("no", "LLM returned empty response")
 
@@ -1013,6 +1028,142 @@ def _check_market_open(llm: "LLMClient", send_slack) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Vault 8 — weekly range oracle helpers
+# ---------------------------------------------------------------------------
+
+def _load_vault8_range(symbol: str) -> dict | None:
+    """Return this week's Vault 8 range prediction for symbol, or None."""
+    try:
+        with open(_VAULT8_SIGNALS_PATH) as f:
+            data = json.load(f)
+    except Exception:
+        return None
+    from datetime import date as _date
+    iso_week = _date.today().isocalendar()
+    week_key = f"{iso_week.year}-W{iso_week.week:02d}"
+    signals  = data.get(week_key, [])
+    for sig in signals:
+        if sig.get("symbol", "").upper() == symbol.upper():
+            return sig
+    return None
+
+
+def _maybe_run_vault8_weekly(send_slack) -> None:
+    """
+    If today is Monday and vault8 weekly signals don't exist for this week,
+    run the Responder across all blue chips and post results to Slack.
+    Called once at overseer startup; safe to call every restart.
+    """
+    from zoneinfo import ZoneInfo
+    from datetime import date as _date
+    import pandas as pd
+
+    now_et   = datetime.now(ZoneInfo("America/New_York"))
+    today    = now_et.date()
+    iso      = today.isocalendar()
+    week_key = f"{iso.year}-W{iso.week:02d}"
+
+    # Check if already ran this week
+    try:
+        with open(_VAULT8_SIGNALS_PATH) as f:
+            existing = json.load(f)
+        if week_key in existing:
+            print(f"  [Vault8] Weekly scan already done for {week_key} — skipping.")
+            return
+    except Exception:
+        existing = {}
+
+    # Only auto-run on Monday (weekday 0 in Python)
+    if today.weekday() != 0:
+        print(f"  [Vault8] Not Monday ({today.strftime('%A')}) — skipping weekly scan.")
+        return
+
+    print(f"\n  [Vault8] Monday startup — running weekly range scan for {week_key}...")
+
+    # Determine regime from VIX
+    regime = "RECLAMATION"
+    try:
+        import yfinance as yf
+        vix_hist = yf.Ticker("^VIX").history(period="2d")
+        if not vix_hist.empty:
+            vix = float(vix_hist["Close"].iloc[-1])
+            if vix >= 30.0:
+                regime = "NUKED_ZONE"
+            elif vix >= 20.0:
+                regime = "WASTELAND"
+            print(f"  [Vault8] VIX={vix:.1f} → regime={regime}")
+    except Exception as e:
+        print(f"  [Vault8] VIX fetch failed ({e}) — defaulting to RECLAMATION")
+
+    if regime == "NUKED_ZONE":
+        msg = f"*Vault 8 Weekly Scan — {week_key}*\n⚠ VIX ≥ 30, NUKED_ZONE — Responder benched. No weekly range signals."
+        send_slack(msg)
+        existing[week_key] = []
+        with open(_VAULT8_SIGNALS_PATH, "w") as f:
+            json.dump(existing, f, indent=2)
+        return
+
+    # Load Responder
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from vault8.armory.responder import Responder
+    responder = Responder()
+
+    # Blue chip universe — same as download_bluechips.py (skip BRK-B filename quirk)
+    BLUE_CHIPS = [
+        "AAPL","MSFT","UNH","GS","HD","MCD","CAT","CRM","V","AMGN",
+        "HON","AXP","TRV","JPM","IBM","JNJ","WMT","PG","CVX","MRK",
+        "DIS","NKE","MMM","KO","BA","CSCO","VZ","INTC","DOW",
+        "NVDA","GOOGL","AMZN","META","TSLA","AMD","AVGO","QCOM","TXN",
+        "LLY","ABT","TMO","ABBV","BRKB","BAC","WFC","COST","XOM",
+        "SPY","QQQ","GLD",
+    ]
+
+    results = []
+    for ticker in BLUE_CHIPS:
+        csv_path = os.path.join(_DATA_DIR, f"{ticker.lower()}_history.csv")
+        if not os.path.exists(csv_path):
+            continue
+        try:
+            df  = pd.read_csv(csv_path, parse_dates=["datetime"])
+            sig = responder.scan(ticker, df, regime=regime)
+            if sig.get("signal") == "BUY_WEEK_LOW":
+                results.append(sig)
+                print(f"  [Vault8]   {ticker:<6} entry=${sig['entry']:.2f}"
+                      f" target=${sig['target']:.2f}"
+                      f" range={sig['pred_range_pct']:.1f}%"
+                      f" conf={sig['confidence']}")
+        except Exception as e:
+            print(f"  [Vault8]   {ticker} error: {e}")
+
+    # Sort by confidence desc
+    results.sort(key=lambda x: x.get("confidence", 0), reverse=True)
+
+    # Save to disk keyed by ISO week
+    existing[week_key] = results
+    os.makedirs(_DATA_DIR, exist_ok=True)
+    with open(_VAULT8_SIGNALS_PATH, "w") as f:
+        json.dump(existing, f, indent=2)
+
+    print(f"  [Vault8] {len(results)} signals saved → {_VAULT8_SIGNALS_PATH}")
+
+    # Post top signals to Slack
+    if not results:
+        send_slack(f"*Vault 8 Weekly Scan — {week_key}*\nRegime: {regime}\nNo tradeable weekly ranges found (all stocks too volatile or model inconclusive).")
+        return
+
+    top_n = results[:10]
+    lines = [f"*Vault 8 — Weekly Range Signals ({week_key})*", f"Regime: {regime}  |  {len(results)} tradeable stocks\n"]
+    for r in top_n:
+        lines.append(
+            f"• `{r['symbol']:<6}` entry ${r['entry']:.2f} → sell ${r['target']:.2f}"
+            f"  ({r['pred_range_pct']:.1f}% range)  conf={r['confidence']}"
+        )
+    if len(results) > 10:
+        lines.append(f"_(+{len(results)-10} more — see {_VAULT8_SIGNALS_PATH})_")
+    send_slack("\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -1070,6 +1221,9 @@ def main():
     # Market-open check via LLM before starting the scan loop
     if not _check_market_open(overseer.llm, scanner._send_slack):
         return
+
+    # Vault 8 — run weekly range scan on Monday if not yet done this week
+    _maybe_run_vault8_weekly(scanner._send_slack)
 
     scanner.main()
 
