@@ -1050,9 +1050,9 @@ def _load_vault8_range(symbol: str) -> dict | None:
 
 def _maybe_run_vault8_weekly(send_slack) -> None:
     """
-    If today is Monday and vault8 weekly signals don't exist for this week,
+    If vault8 weekly signals don't exist for the current ISO week,
     run the Responder across all blue chips and post results to Slack.
-    Called once at overseer startup; safe to call every restart.
+    Called at every overseer startup; idempotent — skips if week already scanned.
     """
     from zoneinfo import ZoneInfo
     from datetime import date as _date
@@ -1073,12 +1073,7 @@ def _maybe_run_vault8_weekly(send_slack) -> None:
     except Exception:
         existing = {}
 
-    # Only auto-run on Monday (weekday 0 in Python)
-    if today.weekday() != 0:
-        print(f"  [Vault8] Not Monday ({today.strftime('%A')}) — skipping weekly scan.")
-        return
-
-    print(f"\n  [Vault8] Monday startup — running weekly range scan for {week_key}...")
+    print(f"\n  [Vault8] No prediction for {week_key} — running weekly range scan ({today.strftime('%A')})...")
 
     # Determine regime from VIX
     regime = "RECLAMATION"
