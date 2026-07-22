@@ -52,7 +52,14 @@ from vault76.armory.hunter import Hunter, SECTOR_MAP
 SCAN_INTERVAL_MIN = 5
 MARKET_OPEN_ET    = 9
 MARKET_CLOSE_ET   = 16
-BUDGET_PER_TRADE  = 600     # USD per Raider BUY trade
+BUDGET_PCT_MIN    = 0.10    # 10% of capital at lowest confidence
+BUDGET_PCT_MAX    = 0.20    # 20% of capital at highest confidence
+
+
+def _equity_budget(confidence, capital: float) -> float:
+    """Return dollar budget for an equity BUY: 10–20% of capital scaled by confidence."""
+    pct = BUDGET_PCT_MIN + (min(max(confidence or 0, 0), 100) / 100) * (BUDGET_PCT_MAX - BUDGET_PCT_MIN)
+    return round(capital * pct, 2)
 
 SIGNAL_START = "===SIGNAL_START==="
 SIGNAL_END   = "===SIGNAL_END==="
@@ -469,7 +476,8 @@ def _scan_all(client, regime: str = Overseer.RECLAMATION,
                    "close": round(close, 2), "timesfm_30d_pct": tfm_pct,
                    "router_tau": wheel_router.ROUTER_TAU}
             if action == "HOLD_SHARES":
-                sig["shares"] = max(1, int(BUDGET_PER_TRADE / close))
+                _cap = _current_portfolio.cash if _current_portfolio else 30_000.0
+                sig["shares"] = max(1, int(_equity_budget(sig.get("confidence", 50), _cap) / close))
                 sig["reason"] = (f"Router: TimesFM 30d forecast {tfm_pct:+.1f}% >= "
                                  f"{wheel_router.ROUTER_TAU}% — hold shares "
                                  f"uncapped instead of wheeling")
@@ -1049,7 +1057,7 @@ def _print_startup(client, paper: bool, portfolio=None, price_fetcher=None):
     print(f"  Regime:          {regime_label}")
     print(f"  Active cards:    {cards_str}")
     print(f"  Watchlist ({len(WATCHLIST)}):   {', '.join(WATCHLIST)}")
-    print(f"  Scan interval:   {SCAN_INTERVAL_MIN} min  |  Budget: ${BUDGET_PER_TRADE}/trade")
+    print(f"  Scan interval:   {SCAN_INTERVAL_MIN} min  |  Equity sizing: {int(BUDGET_PCT_MIN*100)}–{int(BUDGET_PCT_MAX*100)}% of capital by confidence")
     if portfolio:
         opt_bal = _cash_ledger.balance() if _cash_ledger else portfolio.cash
         total   = portfolio.cash + (opt_bal - portfolio.starting_capital)
@@ -1081,7 +1089,7 @@ def _print_startup(client, paper: bool, portfolio=None, price_fetcher=None):
         f"*Regime:* {regime_label}",
         f"*Active cards:* {cards_str}",
         f"*Watchlist ({len(WATCHLIST)}):* {', '.join(WATCHLIST)}",
-        f"*Scan interval:* {SCAN_INTERVAL_MIN} min | *Budget/trade:* ${BUDGET_PER_TRADE}",
+        f"*Scan interval:* {SCAN_INTERVAL_MIN} min | *Equity sizing:* {int(BUDGET_PCT_MIN*100)}–{int(BUDGET_PCT_MAX*100)}% of capital by confidence",
     ]
     if portfolio:
         opt_bal = _cash_ledger.balance() if _cash_ledger else portfolio.cash
@@ -1468,7 +1476,11 @@ def main():
                 elif verdict == "y":
                     print(f"\n{VERDICT_OK}")
                     if sig == "BUY":
-                        shares = max(1, int(BUDGET_PER_TRADE / s["entry"]))
+                        _cap = portfolio.cash if portfolio else 30_000.0
+                        _budget = _equity_budget(s.get("confidence", 50), _cap)
+                        shares = max(1, int(_budget / s["entry"]))
+                        print(f"  [Sizing] conf={s.get('confidence',50)} → "
+                              f"${_budget:,.0f} ({_budget/_cap*100:.0f}% of ${_cap:,.0f}) → {shares} shares")
                         print(f"APPROVED: {s['symbol']} BUY @ ${s['entry']}")
                         if portfolio:
                             pos = portfolio.open_position(
