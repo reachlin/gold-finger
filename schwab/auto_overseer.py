@@ -1072,11 +1072,38 @@ class AutoOverseer:
             signal = opening["signal"]
             dte    = int(float(opening["dte"]))
             expiry = date.fromisoformat(opening["date"][:10]) + timedelta(days=dte)
-            key    = f"{sym}_{strike}_{expiry}"
+            key     = f"{sym}_{strike}_{expiry}"
             if key in close_pending:
                 continue
 
             occ_sym  = build_occ_symbol(sym, expiry, signal, strike)
+            occ_norm = occ_sym.replace(" ", "")
+
+            # Also check Schwab live orders — skip if BUY_TO_CLOSE already working
+            try:
+                now = datetime.now()
+                o_resp = client.get_orders_for_account(
+                    account_hash,
+                    from_entered_datetime=now - timedelta(days=1),
+                    to_entered_datetime=now + timedelta(minutes=5),
+                )
+                o_resp.raise_for_status()
+                live_orders = o_resp.json()
+                already_open = any(
+                    o.get("status") in ("WORKING", "QUEUED", "ACCEPTED", "PENDING_ACTIVATION")
+                    and any(
+                        leg.get("instruction") == "BUY_TO_CLOSE"
+                        and leg.get("instrument", {}).get("symbol", "").replace(" ", "") == occ_norm
+                        for leg in o.get("orderLegCollection", [])
+                    )
+                    for o in live_orders
+                )
+                if already_open:
+                    print(f"  [Semi-auto] ⏳ BUY_TO_CLOSE already working on Schwab for {sym} — skipping")
+                    continue
+            except Exception as exc:
+                print(f"  [Semi-auto] ⚠ order check failed for {sym}: {exc}")
+                # Don't skip — try placing anyway
             put_call = "C" if signal == "SELL_CALL" else "P"
 
             # Fetch live option quote from Schwab
