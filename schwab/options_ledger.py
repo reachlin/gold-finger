@@ -195,7 +195,8 @@ def _close_row(opening: dict, reason: str, pnl: float, verdict: str = "CLOSED",
 
 def process_expirations(ledger_path: str, holdings_path: str,
                         fetch_quote, today: date | None = None,
-                        r: float = RISK_FREE_RATE) -> list[dict]:
+                        r: float = RISK_FREE_RATE,
+                        dry_run: bool = False) -> list[dict]:
     """
     Walk all open options once and settle whatever is due:
 
@@ -242,10 +243,14 @@ def process_expirations(ledger_path: str, holdings_path: str,
         if event is None:
             continue
         events.append(event)
-        for out_row in event.pop("_rows"):
-            append_row(ledger_path, out_row)
+        if not dry_run:
+            for out_row in event.pop("_rows"):
+                append_row(ledger_path, out_row)
+        else:
+            event.pop("_rows", None)
 
-    save_holdings(holdings_path, holdings)
+    if not dry_run:
+        save_holdings(holdings_path, holdings)
     return events
 
 
