@@ -1064,18 +1064,22 @@ class AutoOverseer:
                 entry_iv = 0.30
 
             from options_pricer import adaptive_profit_target
-            target_pct = adaptive_profit_target(entry_iv, dte)
-            if mark > entry_prem * target_pct:
-                continue  # not at target yet
+            target_pct   = adaptive_profit_target(entry_iv, dte)
+            target_price = round(entry_prem * target_pct, 2)
+            close_factor = 1.5  # place order when within 50% above target
+            if mark > target_price * close_factor:
+                continue  # not close enough yet
 
             days_left = max((expiry - today).days, 0)
-            pnl_est   = round((entry_prem - mark) * 100, 2)
-            limit     = round(mark + 0.01, 2)
+            pnl_est   = round((entry_prem - target_price) * 100, 2)
+            # Limit at target price — order sits and waits for the fill
+            limit     = target_price
 
-            print(f"\n  [Semi-auto] 🎯 Profit target hit: {sym} ${strike} "
-                  f"mark=${mark:.2f} vs entry ${entry_prem:.2f} "
-                  f"({(1-mark/entry_prem)*100:.0f}% profit, target {target_pct*100:.0f}%)"
-                  f" — placing BUY_TO_CLOSE limit ${limit:.2f}")
+            status = "hit" if mark <= target_price else "near"
+            print(f"\n  [Semi-auto] 🎯 Target {status}: {sym} ${strike} "
+                  f"mark=${mark:.2f} target=${target_price:.2f} entry=${entry_prem:.2f} "
+                  f"({(1-mark/entry_prem)*100:.0f}% profit so far)"
+                  f" — BUY_TO_CLOSE limit ${limit:.2f} DAY+EXT")
 
             try:
                 from schwab.orders.options import option_buy_to_close_limit
@@ -1083,7 +1087,7 @@ class AutoOverseer:
                 order = (
                     option_buy_to_close_limit(occ_sym, 1, f"{limit:.2f}")
                     .set_duration(Duration.DAY)
-                    .set_session(Session.NORMAL)
+                    .set_session(Session.SEAMLESS)
                     .build()
                 )
                 resp = client.place_order(account_hash, order)
@@ -1120,11 +1124,10 @@ class AutoOverseer:
 
             scanner._send_slack(
                 f"{SLACK_MENTION} 🎯 *BUY_TO_CLOSE placed — {trade_id}*\n"
-                f"*{sym} ${strike} ({signal})* — profit target reached\n"
-                f"*Mark:* ${mark:.2f} vs entry ${entry_prem:.2f} "
-                f"({(1-mark/entry_prem)*100:.0f}% profit)\n"
-                f"*Close limit:* ${limit:.2f}  |  DTE remaining: {days_left}\n"
-                f"*Est. P&L:* +${pnl_est:,.2f}"
+                f"*{sym} ${strike} ({signal})* — target {'hit' if mark <= target_price else 'near'}\n"
+                f"*Mark:* ${mark:.2f}  *Target:* ${target_price:.2f}  *Entry:* ${entry_prem:.2f}\n"
+                f"*Limit:* ${limit:.2f} (DAY+EXT)  |  DTE: {days_left}\n"
+                f"*Est. P&L at fill:* +${pnl_est:,.2f}"
             )
             print(f"  [Semi-auto] ✅ BUY_TO_CLOSE placed: {trade_id}  {sym} ${strike}"
                   f"  limit ${limit:.2f}  est P&L +${pnl_est:.2f}")
