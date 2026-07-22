@@ -85,6 +85,59 @@ def _get_account_hash(client) -> str | None:
     return accounts[0]["hashValue"]
 
 
+def _get_schwab_option_positions(client, account_hash: str) -> list[dict]:
+    """Fetch open option positions from Schwab. Returns list of position dicts."""
+    try:
+        resp = client.get_account(account_hash, fields=["positions"])
+        resp.raise_for_status()
+        data = resp.json()
+        positions = data.get("securitiesAccount", {}).get("positions", [])
+        return [
+            p for p in positions
+            if p.get("instrument", {}).get("assetType") == "OPTION"
+            and p.get("longQuantity", 0) + p.get("shortQuantity", 0) > 0
+        ]
+    except Exception as e:
+        print(f"  [Warning] Could not fetch Schwab positions: {e}")
+        return []
+
+
+def _check_conflict_position(schwab_positions: list[dict], entry: dict) -> str | None:
+    """
+    Check if Schwab already has an open position that conflicts with this order.
+    Returns a warning string if conflict found, else None.
+    """
+    sig    = entry["signal"]
+    symbol = entry["symbol"].upper()
+    strike = float(entry.get("strike", 0))
+
+    opt_type = None
+    if sig == "SELL_PUT":
+        opt_type = "P"
+    elif sig in ("SELL_CALL", "BUY_CALL"):
+        opt_type = "C"
+
+    for pos in schwab_positions:
+        inst = pos.get("instrument", {})
+        desc = inst.get("description", "")
+        sym  = inst.get("underlyingSymbol", "").upper()
+        occ  = inst.get("symbol", "")
+        short_qty = float(pos.get("shortQuantity", 0))
+        long_qty  = float(pos.get("longQuantity",  0))
+        qty = short_qty + long_qty
+        if sym != symbol or qty == 0:
+            continue
+        # Check option type matches
+        if opt_type and len(occ) > 15:
+            occ_type = occ[15] if len(occ) > 15 else ""
+            if occ_type != opt_type:
+                continue
+        return (f"Schwab already has open {symbol} option position: "
+                f"{desc or occ}  qty={qty:.0f}  "
+                f"(short={short_qty:.0f}, long={long_qty:.0f})")
+    return None
+
+
 def _check_amateur_hour() -> tuple[bool, str]:
     """
     Block order placement during amateur hour (9:30–10:30 ET) and pre-market.
@@ -165,6 +218,14 @@ def cmd_place(trade_id: str, price_override: float | None, skip_confirm: bool = 
     account_hash = _get_account_hash(client)
     if not account_hash:
         print("  Error: no accounts found on this token.")
+        sys.exit(1)
+
+    # Guard: check Schwab for existing conflicting positions before placing
+    schwab_positions = _get_schwab_option_positions(client, account_hash)
+    conflict = _check_conflict_position(schwab_positions, entry)
+    if conflict:
+        print(f"\n  ⛔ BLOCKED — {conflict}")
+        print("  Close or reconcile the existing position before placing a new one.")
         sys.exit(1)
 
     try:

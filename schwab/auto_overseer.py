@@ -676,6 +676,19 @@ class AutoOverseer:
 
         # --- Options (SELL_PUT, SELL_CALL, BUY_CALL) ---
         if sig in ("SELL_PUT", "SELL_CALL", "BUY_CALL"):
+            # Guard: check Schwab for an existing position before notifying
+            client = getattr(scanner, "_current_client", None)
+            if client is not None:
+                account_hash = self._get_account_hash(client)
+                if account_hash:
+                    ok, pre_msg = self._pre_trade_check(client, account_hash, s)
+                    if not ok:
+                        print(f"  [Semi-auto] ⛔ Pre-trade check failed: {pre_msg} — skipping")
+                        scanner._send_slack(
+                            f"{SLACK_MENTION} ⛔ *{sig} {symbol} blocked* — {pre_msg}"
+                        )
+                        return
+
             if s.get("expiry"):
                 exp_date = date.fromisoformat(s["expiry"])
             else:
