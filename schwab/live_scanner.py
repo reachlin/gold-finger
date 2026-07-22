@@ -1448,7 +1448,13 @@ def main():
                 if budget_msg:
                     print(f"  ✓ {budget_msg}")
 
-                verdict = _decision_fn(s) if _decision_fn is not None else _wait_for_verdict()
+                # Close signals (SELL equity, BUY_TO_CLOSE options) need no approval
+                _close_signals = {"SELL", "BUY_TO_CLOSE"}
+                if s["signal"] in _close_signals:
+                    verdict = "y"
+                    print(f"  ✅ Auto-approved close — no LLM needed")
+                else:
+                    verdict = _decision_fn(s) if _decision_fn is not None else _wait_for_verdict()
                 sig = s["signal"]
 
                 if verdict == "q":

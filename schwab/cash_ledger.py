@@ -34,6 +34,7 @@ def _now() -> str:
 class CashLedger:
     def __init__(self, path: str, starting_capital: float = 30_000.0):
         self.path = path
+        self.starting_capital = starting_capital
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
         if not os.path.exists(path):
