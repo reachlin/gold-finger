@@ -862,6 +862,20 @@ class AutoOverseer:
                 "reason":      "semi-auto: manual fill confirmed",
             })
 
+            # Record premium to cash ledger
+            try:
+                import cash_ledger as cl
+                _cl = getattr(scanner, "_cash_ledger", None)
+                if _cl is not None:
+                    premium_ct = round(fill_price * 100, 2)
+                    _cl.record(
+                        "OPTION_SELL", entry["symbol"], premium_ct,
+                        f"{entry['signal']} {entry['symbol']} strike=${entry['strike']} "
+                        f"exp={entry['dte']}d premium=${premium_ct:.2f} (semi-auto)"
+                    )
+            except Exception as exc:
+                print(f"  [Semi-auto] cash ledger write failed: {exc}")
+
             msg = (
                 f"{SLACK_MENTION} ✅ *FILL CONFIRMED — logged to ledger*\n"
                 f"*{entry['symbol']} {entry['signal']}* "
