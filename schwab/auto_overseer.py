@@ -791,7 +791,13 @@ class AutoOverseer:
         if not account_hash:
             return
 
-        # Always check open positions for profit targets (runs even if no pending orders)
+        # Reconcile local ledger against real Schwab positions (source of truth)
+        try:
+            self._reconcile_schwab_positions(client, account_hash)
+        except Exception as exc:
+            print(f"  [Semi-auto] ⚠ Schwab reconciliation failed: {exc}")
+
+        # Check profit targets and auto-place BUY_TO_CLOSE when within range
         try:
             self._check_and_close_positions(client, account_hash, _load_pending())
         except Exception as exc:
@@ -1040,6 +1046,141 @@ class AutoOverseer:
             print(f"  [Semi-auto] {len(live)} pending order(s) awaiting fill: "
                   + ", ".join(f"{e['symbol']} {e['signal']} ${e['strike']}"
                                for e in live))
+
+    def _reconcile_schwab_positions(self, client, account_hash: str) -> None:
+        """
+        Source-of-truth reconciliation every scan cycle:
+        1. Fetch real Schwab option positions.
+        2. For each locally APPROVED position that's no longer on Schwab,
+           find the close price from recent order history and write a CLOSED row.
+        3. Alert if Schwab has an option position not in our ledger (manual trade).
+        """
+        import live_scanner as scanner
+        import options_ledger as ol
+        from datetime import date, timedelta
+        from options_ledger import _close_row
+
+        # --- Fetch real Schwab positions ---
+        try:
+            resp = client.get_account(account_hash,
+                                      fields=client.Account.Fields.POSITIONS)
+            resp.raise_for_status()
+            schwab_positions = resp.json().get("securitiesAccount", {}).get("positions", [])
+        except Exception as exc:
+            print(f"  [Reconcile] ⚠ Could not fetch Schwab positions: {exc}")
+            return
+
+        # Build set of Schwab option symbols currently open (normalised, no spaces)
+        schwab_option_syms = set()
+        for pos in schwab_positions:
+            inst = pos.get("instrument", {})
+            if inst.get("assetType") != "OPTION":
+                continue
+            qty = float(pos.get("shortQuantity", 0)) + float(pos.get("longQuantity", 0))
+            if qty > 0:
+                schwab_option_syms.add(inst.get("symbol", "").replace(" ", ""))
+
+        # --- Compare with local open ledger positions ---
+        rows  = ol.read_rows(scanner.OPTION_LEDGER_PATH)
+        opens = list(ol.open_options(rows))
+        if not opens:
+            return
+
+        today = datetime.utcnow().date()
+
+        for opening in opens:
+            sym    = opening["symbol"]
+            strike = float(opening["strike"])
+            signal = opening["signal"]
+            dte    = int(float(opening["dte"]))
+            expiry = date.fromisoformat(opening["date"][:10]) + timedelta(days=dte)
+            occ    = build_occ_symbol(sym, expiry, signal, strike)
+            occ_norm = occ.replace(" ", "")
+
+            if occ_norm in schwab_option_syms:
+                continue  # still open on Schwab — all good
+
+            # Position not on Schwab → it was closed. Find fill price from order history.
+            fill_price = None
+            try:
+                now = datetime.now()
+                o_resp = client.get_orders_for_account(
+                    account_hash,
+                    from_entered_datetime=now - timedelta(days=7),
+                    to_entered_datetime=now + timedelta(minutes=5),
+                )
+                o_resp.raise_for_status()
+                for o in o_resp.json():
+                    if o.get("status") != "FILLED":
+                        continue
+                    for leg in o.get("orderLegCollection", []):
+                        if leg.get("instrument", {}).get("symbol", "").replace(" ", "") != occ_norm:
+                            continue
+                        acts = o.get("orderActivityCollection", [])
+                        if acts:
+                            exec_legs = acts[0].get("executionLegs", [])
+                            fill_price = float(exec_legs[0]["price"]) if exec_legs else None
+                        fill_price = fill_price or float(o.get("price", 0)) or None
+                        break
+                    if fill_price is not None:
+                        break
+            except Exception as exc:
+                print(f"  [Reconcile] ⚠ Order history fetch failed for {sym}: {exc}")
+
+            entry_prem = float(opening["premium_sh"])
+            if fill_price is None:
+                # Couldn't find fill — use 0 (expired worthless) or flag it
+                fill_price = 0.0
+                print(f"  [Reconcile] ⚠ {sym} ${strike} closed on Schwab but no fill found — assuming expired worthless")
+
+            pnl = round((entry_prem - fill_price) * 100, 2)
+            action = "expired_worthless" if fill_price == 0.0 else "closed_on_schwab"
+            close_row = _close_row(opening,
+                                   f"{action} at ${fill_price:.2f} (reconciled from Schwab)",
+                                   pnl)
+            ol.append_row(scanner.OPTION_LEDGER_PATH, close_row)
+
+            # Update cash ledger
+            _cl = getattr(scanner, "_cash_ledger", None)
+            if _cl is not None:
+                import cash_ledger as cl
+                event_type = "OPTION_EXPIRE" if fill_price == 0.0 else "OPTION_BUYBACK"
+                _cl.record(event_type, sym, pnl,
+                           f"{signal} ${strike} {action} at ${fill_price:.2f}")
+
+            scanner._send_slack(
+                f"{SLACK_MENTION} 📋 *Reconciled: {sym} ${strike} {signal} CLOSED*\n"
+                f"Position no longer on Schwab — recorded fill ${fill_price:.2f}\n"
+                f"P&L: {'+' if pnl >= 0 else ''}{pnl:.2f}"
+            )
+            print(f"  [Reconcile] {sym} ${strike} closed on Schwab (fill ${fill_price:.2f}, P&L ${pnl:+.2f}) — ledger updated")
+
+        # --- Alert on Schwab positions not in our ledger ---
+        local_occ_norms = set()
+        for opening in opens:
+            try:
+                dte    = int(float(opening["dte"]))
+                expiry = date.fromisoformat(opening["date"][:10]) + timedelta(days=dte)
+                occ    = build_occ_symbol(opening["symbol"], expiry,
+                                          opening["signal"], float(opening["strike"]))
+                local_occ_norms.add(occ.replace(" ", ""))
+            except Exception:
+                pass
+
+        for pos in schwab_positions:
+            inst = pos.get("instrument", {})
+            if inst.get("assetType") != "OPTION":
+                continue
+            qty = float(pos.get("shortQuantity", 0)) + float(pos.get("longQuantity", 0))
+            if qty == 0:
+                continue
+            sym = inst.get("symbol", "").replace(" ", "")
+            if sym not in local_occ_norms:
+                print(f"  [Reconcile] ⚠ Schwab has option {sym} not in local ledger — manual trade?")
+                scanner._send_slack(
+                    f"{SLACK_MENTION} ⚠ *Unknown Schwab position:* `{sym}`\n"
+                    f"Not in local ledger — was this placed manually?"
+                )
 
     def _check_and_close_positions(self, client, account_hash: str,
                                     pending: list[dict]) -> None:
