@@ -914,13 +914,26 @@ def _budget_check(s: dict, portfolio_cash: float) -> tuple[bool, str]:
 # Startup banner
 # ---------------------------------------------------------------------------
 
-def _open_options_lines() -> tuple[list[str], list[str]]:
+def _open_options_lines(client=None) -> tuple[list[str], list[str]]:
     """
     Formatted lines for open option positions + wheel holdings.
+    When client is provided, fetches live Schwab option prices to show
+    current mark and profit target on each line.
     Returns (terminal_lines, slack_lines).
     """
+    fetch_option_quote = None
+    if client is not None:
+        def fetch_option_quote(occ_sym: str):
+            try:
+                resp = client.get_quotes([occ_sym])
+                resp.raise_for_status()
+                return resp.json().get(occ_sym, {}).get("quote")
+            except Exception:
+                return None
+
     return ol.position_lines(ol.read_rows(OPTION_LEDGER_PATH),
-                             ol.load_holdings(WHEEL_HOLDINGS_PATH))
+                             ol.load_holdings(WHEEL_HOLDINGS_PATH),
+                             fetch_option_quote=fetch_option_quote)
 
 
 def _send_pipboy(title: str, detail: str):
@@ -1052,7 +1065,7 @@ def _print_startup(client, paper: bool, portfolio=None, price_fetcher=None):
     cards_str    = ", ".join(c.upper() for c in cards) if cards else "NONE — stand down"
 
     pos_term,  pos_slack  = _position_lines(portfolio, price_fetcher)
-    opts_term, opts_slack = _open_options_lines()
+    opts_term, opts_slack = _open_options_lines(client)
 
     # ── Terminal banner ──────────────────────────────────────────────────────
     sep = "=" * 62
@@ -1143,7 +1156,7 @@ def _print_startup(client, paper: bool, portfolio=None, price_fetcher=None):
         )
 
 
-def _print_eod(portfolio, price_fetcher, scan_count: int):
+def _print_eod(client, portfolio, price_fetcher, scan_count: int):
     """Print end-of-day summary and post it to Slack."""
     now_str = _display_now()
 
@@ -1172,7 +1185,7 @@ def _print_eod(portfolio, price_fetcher, scan_count: int):
               + (f"  (−${pending:,.0f} pending)" if pending else ""))
 
     pos_term,  pos_slack  = _position_lines(portfolio, price_fetcher)
-    opts_term, opts_slack = _open_options_lines()
+    opts_term, opts_slack = _open_options_lines(client)
 
     for line in opts_term:
         print(line)
@@ -1346,7 +1359,7 @@ def main():
 
         if _market_closed_for_today():
             if scan_count > 0:
-                _print_eod(portfolio, price_fetcher, scan_count)
+                _print_eod(client, portfolio, price_fetcher, scan_count)
                 if portfolio:
                     portfolio.log_scan(scan_num=scan_count, symbols_scanned=0,
                                        signals_found=0)
@@ -1619,7 +1632,7 @@ def main():
             portfolio.print_status(cur_prices)
             # Show open options + committed collateral so the display matches
             # the budget tracker (which reads from the ledger CSV).
-            opts_term, _ = _open_options_lines()
+            opts_term, _ = _open_options_lines(client)
             committed    = _committed_collateral()
             free         = portfolio.cash - committed
             print(f"\n  ┌─ Options / Collateral " + "─" * 35)

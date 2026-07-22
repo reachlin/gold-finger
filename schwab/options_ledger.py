@@ -347,8 +347,14 @@ def _try_early_exit(opening: dict, close: float, hv: float,
 # ---------------------------------------------------------------------------
 
 def position_lines(rows: list[dict], holdings: dict,
-                   today: date | None = None) -> tuple[list[str], list[str]]:
-    """(terminal_lines, slack_lines) for open options + wheel holdings."""
+                   today: date | None = None,
+                   fetch_option_quote=None) -> tuple[list[str], list[str]]:
+    """(terminal_lines, slack_lines) for open options + wheel holdings.
+
+    fetch_option_quote(occ_sym) → {"mark": float, "bid": float} or None
+    When provided, each position line includes current mark and profit target.
+    """
+    from options_pricer import adaptive_profit_target
     today = today or _now_et().date()
     opens = open_options(rows)
 
@@ -377,10 +383,39 @@ def position_lines(rows: list[dict], holdings: dict,
                 prem_str = f"${float(prem):.0f}"
             except Exception:
                 prem_str = str(prem)
+
+            # Current price + target
+            price_str = ""
+            if fetch_option_quote is not None:
+                try:
+                    root     = sym.ljust(6)
+                    exp_d    = _expiry_date(r)
+                    pc       = "C" if sig == "SELL_CALL" else "P"
+                    occ      = f"{root}{exp_d.strftime('%y%m%d')}{pc}{int(float(strike)*1000):08d}"
+                    q        = fetch_option_quote(occ)
+                    if q:
+                        mark       = float(q.get("mark") or q.get("markPrice") or 0)
+                        entry_prem = float(r.get("premium_sh", 0))
+                        entry_dte  = int(float(r.get("dte", 30)))
+                        try:
+                            entry_iv = float(r.get("hv", 30)) / 100
+                        except (ValueError, TypeError):
+                            entry_iv = 0.30
+                        tgt_pct  = adaptive_profit_target(entry_iv, entry_dte)
+                        tgt_mark = round(entry_prem * tgt_pct, 2)
+                        profit   = (entry_prem - mark) * SHARES_PER_CONTRACT if mark > 0 else 0
+                        pct_done = (1 - mark / entry_prem) * 100 if entry_prem > 0 and mark > 0 else 0
+                        if mark > 0:
+                            price_str = (f"  mark ${mark:.2f} → target ${tgt_mark:.2f}"
+                                         f"  P&L ${profit:+.0f} ({pct_done:.0f}%)")
+                except Exception:
+                    pass
+
             term.append(f"    {sym:<6} {sig}  strike ${strike}  prem {prem_str}"
-                        f"  collat {collat}  {exp_str}  [opened {opened}]")
+                        f"  collat {collat}  {exp_str}  [opened {opened}]{price_str}")
             slack.append(f"  • {sym} {sig} ${strike} | prem {prem_str}"
-                         f" | collat {collat} | {exp_str}")
+                         f" | collat {collat} | {exp_str}"
+                         + (f" | {price_str.strip()}" if price_str else ""))
 
     if holdings:
         term.append(f"  Wheel holdings ({len(holdings)}):")
