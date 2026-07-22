@@ -1079,7 +1079,7 @@ class AutoOverseer:
             print(f"\n  [Semi-auto] 🎯 Target {status}: {sym} ${strike} "
                   f"mark=${mark:.2f} target=${target_price:.2f} entry=${entry_prem:.2f} "
                   f"({(1-mark/entry_prem)*100:.0f}% profit so far)"
-                  f" — BUY_TO_CLOSE limit ${limit:.2f} DAY+EXT")
+                  f" — BUY_TO_CLOSE limit ${limit:.2f} DAY")
 
             try:
                 from schwab.orders.options import option_buy_to_close_limit
@@ -1087,7 +1087,7 @@ class AutoOverseer:
                 order = (
                     option_buy_to_close_limit(occ_sym, 1, f"{limit:.2f}")
                     .set_duration(Duration.DAY)
-                    .set_session(Session.SEAMLESS)
+                    .set_session(Session.NORMAL)
                     .build()
                 )
                 resp = client.place_order(account_hash, order)
@@ -1126,7 +1126,7 @@ class AutoOverseer:
                 f"{SLACK_MENTION} 🎯 *BUY_TO_CLOSE placed — {trade_id}*\n"
                 f"*{sym} ${strike} ({signal})* — target {'hit' if mark <= target_price else 'near'}\n"
                 f"*Mark:* ${mark:.2f}  *Target:* ${target_price:.2f}  *Entry:* ${entry_prem:.2f}\n"
-                f"*Limit:* ${limit:.2f} (DAY+EXT)  |  DTE: {days_left}\n"
+                f"*Limit:* ${limit:.2f} (DAY order)  |  DTE: {days_left}\n"
                 f"*Est. P&L at fill:* +${pnl_est:,.2f}"
             )
             print(f"  [Semi-auto] ✅ BUY_TO_CLOSE placed: {trade_id}  {sym} ${strike}"
