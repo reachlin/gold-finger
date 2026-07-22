@@ -1057,6 +1057,11 @@ def _print_startup(client, paper: bool, portfolio=None, price_fetcher=None):
         print(f"  Options P&L:     ${opt_bal - portfolio.starting_capital:+,.2f}"
               f"  (total ${opt_bal:,.2f})")
         print(f"  Account total:   ${total:,.2f}")
+    elif _cash_ledger:
+        opt_bal  = _cash_ledger.balance()
+        opt_pnl  = opt_bal - _cash_ledger.starting_capital
+        print(f"  Starting capital:${_cash_ledger.starting_capital:,.2f}")
+        print(f"  Options P&L:     ${opt_pnl:+,.2f}  (total ${opt_bal:,.2f})")
     for line in pos_term:
         print(line)
     for line in opts_term:
@@ -1085,6 +1090,14 @@ def _print_startup(client, paper: bool, portfolio=None, price_fetcher=None):
             f"*Equity cash:* ${portfolio.cash:,.2f} | "
             f"*Options P&L:* ${opt_bal - portfolio.starting_capital:+,.2f} | "
             f"*Total:* ${total:,.2f}"
+        )
+    elif _cash_ledger:
+        opt_bal = _cash_ledger.balance()
+        opt_pnl = opt_bal - _cash_ledger.starting_capital
+        slack_lines.append(
+            f"*Starting capital:* ${_cash_ledger.starting_capital:,.2f} | "
+            f"*Options P&L:* ${opt_pnl:+,.2f} | "
+            f"*Total:* ${opt_bal:,.2f}"
         )
     slack_lines += pos_slack
     slack_lines += opts_slack
@@ -1121,15 +1134,23 @@ def _print_eod(portfolio, price_fetcher, scan_count: int):
             total   = portfolio.cash + opt_pnl
             print(f"  Options P&L:  ${opt_pnl:+,.2f}  (total ${opt_bal:,.2f})")
             print(f"  Account total:${total:,.2f}")
+    elif _cash_ledger:
+        opt_bal = _cash_ledger.balance()
+        opt_pnl = opt_bal - _cash_ledger.starting_capital
+        print(f"  Starting capital:${_cash_ledger.starting_capital:,.2f}")
+        print(f"  Options P&L:     ${opt_pnl:+,.2f}  (total ${opt_bal:,.2f})")
 
     pos_term,  pos_slack  = _position_lines(portfolio, price_fetcher)
     opts_term, opts_slack = _open_options_lines()
 
     for line in opts_term:
         print(line)
+    committed = _committed_collateral()
     if portfolio:
-        committed = _committed_collateral()
-        free      = portfolio.cash - committed
+        free = portfolio.cash - committed
+        print(f"  Committed collateral: ${committed:,.0f}  |  Free cash: ${free:,.0f}")
+    elif _cash_ledger:
+        free = _cash_ledger.starting_capital - committed
         print(f"  Committed collateral: ${committed:,.0f}  |  Free cash: ${free:,.0f}")
 
     if portfolio:
@@ -1148,6 +1169,17 @@ def _print_eod(portfolio, price_fetcher, scan_count: int):
             f"*Realized:* ${s['realized_pnl_dollar']:+,.2f}  |  "
             f"*Unrealized:* ${s['unrealized_pnl_dollar']:+,.2f}",
         ] + pos_slack + opts_slack
+    elif _cash_ledger:
+        opt_bal  = _cash_ledger.balance()
+        opt_pnl  = opt_bal - _cash_ledger.starting_capital
+        slack_lines = [
+            f"*VAULT 76 — End of Day* {now_str}",
+            f"*Scans today:* {scan_count}",
+            f"*Starting capital:* ${_cash_ledger.starting_capital:,.2f}  |  "
+            f"*Options P&L:* ${opt_pnl:+,.2f}  |  "
+            f"*Total:* ${opt_bal:,.2f}",
+            f"*Committed:* ${committed:,.0f}  |  *Free cash:* ${_cash_ledger.starting_capital - committed:,.0f}",
+        ] + opts_slack
     else:
         slack_lines = [
             f"*VAULT 76 — End of Day* {now_str}  (scans: {scan_count})",

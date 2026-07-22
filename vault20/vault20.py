@@ -85,7 +85,7 @@ class Ledger:
 
     def summary(self, prices: dict | None = None) -> dict:
         total_cost     = sum(p["entry"] * p["shares"] for p in self.open)
-        realized_pnl   = sum(t["pnl_dollar"] for t in self.closed)
+        realized_pnl   = sum(t["pnl_dollar"] for t in self.closed if t.get("pnl_dollar") is not None)
         unrealized_pnl = 0.0
 
         if prices:
@@ -94,7 +94,7 @@ class Ledger:
                 if cur is not None:
                     unrealized_pnl += (cur - p["entry"]) * p["shares"]
 
-        wins = [t for t in self.closed if t["pnl_dollar"] > 0]
+        wins = [t for t in self.closed if t.get("pnl_dollar") is not None and t["pnl_dollar"] > 0]
         return {
             "open_count":     len(self.open),
             "closed_count":   len(self.closed),
