@@ -800,24 +800,39 @@ class AutoOverseer:
             filled   = False
             fill_price = None
 
+            rejected = False
             for o in schwab_orders:
-                if o.get("status") not in ("FILLED", "WORKING", "PENDING_ACTIVATION",
-                                           "QUEUED", "ACCEPTED"):
-                    continue
+                status = o.get("status", "")
                 for leg in o.get("orderLegCollection", []):
                     leg_sym = leg.get("instrument", {}).get("symbol", "").replace(" ", "")
                     if leg_sym != occ_norm:
                         continue
-                    if o.get("status") == "FILLED":
+                    if status == "FILLED":
                         acts = o.get("orderActivityCollection", [])
                         if acts:
                             exec_legs = acts[0].get("executionLegs", [])
                             fill_price = exec_legs[0].get("price") if exec_legs else o.get("price")
                         fill_price = fill_price or o.get("price") or entry["limit"]
                         filled = True
+                    elif status == "REJECTED":
+                        reason = o.get("statusDescription", "no reason given")
+                        print(f"  [Semi-auto] ❌ Order REJECTED by Schwab: {entry['symbol']} "
+                              f"{entry['signal']} — {reason}")
+                        scanner._send_slack(
+                            f"{SLACK_MENTION} ❌ *Order REJECTED — {entry.get('trade_id','')}*\n"
+                            f"{entry['symbol']} {entry['signal']} ${entry['strike']}\n"
+                            f"Reason: {reason}"
+                        )
+                        rejected = True
                     break
-                if filled:
+                if filled or rejected:
                     break
+
+            if rejected:
+                # Drop from pending — no fill coming
+                _save_pending([e for e in pending if e.get("trade_id") != entry.get("trade_id")])
+                pending = _load_pending()
+                continue
 
             if not filled:
                 still_pending.append(entry)
