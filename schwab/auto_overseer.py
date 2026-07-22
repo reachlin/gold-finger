@@ -775,13 +775,10 @@ class AutoOverseer:
 
     def check_pending_orders(self):
         """
-        Scan hook: check Schwab orders for fills matching any pending notification.
+        Scan hook: check Schwab orders for fills matching any pending notification,
+        and auto-place BUY_TO_CLOSE orders when profit targets are hit.
         Called at the start of every scan cycle.
         """
-        pending = _load_pending()
-        if not pending:
-            return
-
         import live_scanner as scanner
         import options_ledger as ol
 
@@ -791,6 +788,16 @@ class AutoOverseer:
 
         account_hash = self._get_account_hash(client)
         if not account_hash:
+            return
+
+        # Always check open positions for profit targets (runs even if no pending orders)
+        try:
+            self._check_and_close_positions(client, account_hash, _load_pending())
+        except Exception as exc:
+            print(f"  [Semi-auto] ⚠ auto-close check failed: {exc}")
+
+        pending = _load_pending()
+        if not pending:
             return
 
         # Fetch recent orders (last 2 days to catch same-day and next-day fills)
@@ -997,12 +1004,6 @@ class AutoOverseer:
             print(f"  [Semi-auto] {len(live)} pending order(s) awaiting fill: "
                   + ", ".join(f"{e['symbol']} {e['signal']} ${e['strike']}"
                                for e in live))
-
-        # Check open ledger positions for profit targets and auto-close via Schwab
-        try:
-            self._check_and_close_positions(client, account_hash, _load_pending())
-        except Exception as exc:
-            print(f"  [Semi-auto] ⚠ auto-close check failed: {exc}")
 
     def _check_and_close_positions(self, client, account_hash: str,
                                     pending: list[dict]) -> None:
