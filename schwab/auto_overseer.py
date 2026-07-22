@@ -742,11 +742,12 @@ class AutoOverseer:
                 "bid":         float(bid) if bid else None,
                 "ask":         float(ask) if ask else None,
                 "limit":       limit,
-                "occ_sym":     occ_sym,
-                "confidence":  conf,
-                "notified_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "signal_data": {k: v for k, v in s.items()
-                                if isinstance(v, (str, int, float, bool, type(None)))},
+                "occ_sym":         occ_sym,
+                "schwab_order_id": None,  # set by place_order.py after Schwab placement
+                "confidence":      conf,
+                "notified_at":     datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "signal_data":     {k: v for k, v in s.items()
+                                    if isinstance(v, (str, int, float, bool, type(None)))},
             })
             _save_pending(pending)
 
@@ -816,35 +817,70 @@ class AutoOverseer:
 
         still_pending = []
         for entry in pending:
-            occ_norm = entry["occ_sym"].replace(" ", "")
-            filled   = False
-            fill_price = None
+            occ_norm        = entry["occ_sym"].replace(" ", "")
+            schwab_order_id = entry.get("schwab_order_id")
+            filled          = False
+            fill_price      = None
+            rejected        = False
 
-            rejected = False
+            # Parse the notified_at time so we only look at orders placed AFTER this entry
+            try:
+                from zoneinfo import ZoneInfo
+                notified_dt = datetime.fromisoformat(entry["notified_at"])
+                if notified_dt.tzinfo is None:
+                    notified_dt = notified_dt.replace(tzinfo=ZoneInfo("America/New_York"))
+            except Exception:
+                notified_dt = None
+
             for o in schwab_orders:
                 status = o.get("status", "")
-                for leg in o.get("orderLegCollection", []):
-                    leg_sym = leg.get("instrument", {}).get("symbol", "").replace(" ", "")
-                    if leg_sym != occ_norm:
+
+                # If we have a Schwab order ID, match exactly; otherwise fall back to OCC+recency
+                if schwab_order_id:
+                    o_id = str(o.get("orderId", ""))
+                    if o_id != str(schwab_order_id):
                         continue
-                    if status == "FILLED":
-                        acts = o.get("orderActivityCollection", [])
-                        if acts:
-                            exec_legs = acts[0].get("executionLegs", [])
-                            fill_price = exec_legs[0].get("price") if exec_legs else o.get("price")
-                        fill_price = fill_price or o.get("price") or entry["limit"]
-                        filled = True
-                    elif status == "REJECTED":
-                        reason = o.get("statusDescription", "no reason given")
-                        print(f"  [Semi-auto] ❌ Order REJECTED by Schwab: {entry['symbol']} "
-                              f"{entry['signal']} — {reason}")
-                        scanner._send_slack(
-                            f"{SLACK_MENTION} ❌ *Order REJECTED — {entry.get('trade_id','')}*\n"
-                            f"{entry['symbol']} {entry['signal']} ${entry['strike']}\n"
-                            f"Reason: {reason}"
-                        )
-                        rejected = True
-                    break
+                else:
+                    # Filter by recency: skip orders entered before this pending entry
+                    if notified_dt is not None:
+                        entered_ms = o.get("enteredTime")
+                        if entered_ms:
+                            try:
+                                entered_dt = datetime.fromtimestamp(
+                                    entered_ms / 1000,
+                                    tz=ZoneInfo("America/New_York")
+                                )
+                                if entered_dt < notified_dt:
+                                    continue
+                            except Exception:
+                                pass
+                    matched = False
+                    for leg in o.get("orderLegCollection", []):
+                        leg_sym = leg.get("instrument", {}).get("symbol", "").replace(" ", "")
+                        if leg_sym == occ_norm:
+                            matched = True
+                            break
+                    if not matched:
+                        continue
+
+                if status == "FILLED":
+                    acts = o.get("orderActivityCollection", [])
+                    if acts:
+                        exec_legs = acts[0].get("executionLegs", [])
+                        fill_price = exec_legs[0].get("price") if exec_legs else o.get("price")
+                    fill_price = fill_price or o.get("price") or entry["limit"]
+                    filled = True
+                elif status == "REJECTED":
+                    reason = o.get("statusDescription", "no reason given")
+                    print(f"  [Semi-auto] ❌ Order REJECTED by Schwab: {entry['symbol']} "
+                          f"{entry['signal']} — {reason}")
+                    scanner._send_slack(
+                        f"{SLACK_MENTION} ❌ *Order REJECTED — {entry.get('trade_id','')}*\n"
+                        f"{entry['symbol']} {entry['signal']} ${entry['strike']}\n"
+                        f"Reason: {reason}"
+                    )
+                    rejected = True
+
                 if filled or rejected:
                     break
 
@@ -1092,6 +1128,9 @@ class AutoOverseer:
                 )
                 resp = client.place_order(account_hash, order)
                 resp.raise_for_status()
+                # Extract Schwab order ID from Location header
+                location = resp.headers.get("Location", "")
+                schwab_order_id = location.rstrip("/").split("/")[-1] if location else None
             except Exception as exc:
                 print(f"  [Semi-auto] ❌ BUY_TO_CLOSE failed: {exc}")
                 scanner._send_slack(
@@ -1111,12 +1150,13 @@ class AutoOverseer:
                 "bid":         bid,
                 "ask":         None,
                 "limit":       limit,
-                "occ_sym":     occ_sym,
-                "confidence":  None,
-                "notified_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "opening_ref": ol.row_key(opening),
-                "signal_data": {k: v for k, v in opening.items()
-                                if isinstance(v, (str, int, float, bool, type(None)))},
+                "occ_sym":        occ_sym,
+                "schwab_order_id": schwab_order_id,
+                "confidence":     None,
+                "notified_at":    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "opening_ref":    ol.row_key(opening),
+                "signal_data":    {k: v for k, v in opening.items()
+                                   if isinstance(v, (str, int, float, bool, type(None)))},
             }
             all_pending = _load_pending()
             all_pending.append(new_entry)

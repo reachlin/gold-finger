@@ -255,10 +255,22 @@ def cmd_place(trade_id: str, price_override: float | None, skip_confirm: bool = 
 
         resp = client.place_order(account_hash, order)
         resp.raise_for_status()
+        location = resp.headers.get("Location", "")
+        schwab_order_id = location.rstrip("/").split("/")[-1] if location else None
 
     except Exception as e:
         print(f"  ✗ Order placement failed: {e}")
         sys.exit(1)
+
+    # Write Schwab order ID back to pending so the fill hook matches by ID not OCC symbol
+    if schwab_order_id:
+        all_pending = _load_pending()
+        for p in all_pending:
+            if p.get("trade_id") == trade_id:
+                p["schwab_order_id"] = schwab_order_id
+                break
+        _save_pending(all_pending)
+        print(f"  Schwab order ID: {schwab_order_id}")
 
     print(f"\n  ✅ Order placed: {trade_id}  {sig}  {occ_sym}  limit ${limit:.2f}")
     print(f"  The scan hook will detect the fill and log it to the ledger.")
