@@ -1338,7 +1338,7 @@ def main():
 
     # Settle overnight expiries/assignments before the briefing
     try:
-        _process_option_ledger(client)
+        _process_option_ledger(client, paper=args.paper)
     except Exception as exc:
         print(f"  [WHEEL] ledger processing failed: {exc}")
 
