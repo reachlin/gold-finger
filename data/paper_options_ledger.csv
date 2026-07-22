@@ -1,3 +1,10 @@
 date,symbol,signal,close,strike,premium_sh,premium_ct,premium_pct,dte,hv,adx,confidence,regime,verdict,reason,pnl,ref
 2026-07-20 22:37:05,NVDA,SELL_PUT,205.75,195.0,5.25,525.0,2.58,32,37.7,14.3,73,,APPROVED,semi-auto: manual fill confirmed,,
 2026-07-20 22:38:25,KO,SELL_PUT,82.14,78.0,0.65,65.0,0.77,25,27.7,15.9,77,,APPROVED,semi-auto: manual fill confirmed,,
+2026-07-22 12:10:36,NVDA,SELL_PUT,213.18,202.5,4.95,495.0,2.32,30,35.8,13.3,65,,BUDGET_BLOCK,sideways stock — sell 5% OTM put for income (The Scavenger),,
+2026-07-22 12:10:36,AMD,SELL_PUT,556.63,530.0,40.15,4015.0,7.21,30,73.0,16.3,43,,BUDGET_BLOCK,sideways stock — sell 5% OTM put for income (The Scavenger),,
+2026-07-22 12:10:36,META,SELL_PUT,629.43,600.0,23.775,2377.5,3.78,30,52.9,15.1,64,,BUDGET_BLOCK,sideways stock — sell 5% OTM put for income (The Scavenger),,
+2026-07-22 12:10:36,MSFT,SELL_PUT,388.93,370.0,11.5,1150.0,2.96,30,35.2,12.7,69,,BUDGET_BLOCK,sideways stock — sell 5% OTM put for income (The Scavenger),,
+2026-07-22 12:10:36,GOOGL,SELL_PUT,347.78,330.0,7.725,772.5,2.22,30,32.4,11.0,82,,BUDGET_BLOCK,sideways stock — sell 5% OTM put for income (The Scavenger),,
+2026-07-22 12:10:36,KO,SELL_PUT,82.5,78.0,0.58,58.0,0.7,30,27.6,14.2,75,,BUDGET_BLOCK,sideways stock — sell 5% OTM put for income (The Scavenger),,
+2026-07-22 12:10:36,PG,SELL_PUT,150.25,143.0,2.055,205.5,1.37,30,24.7,10.9,70,,BUDGET_BLOCK,sideways stock — sell 5% OTM put for income (The Scavenger),,

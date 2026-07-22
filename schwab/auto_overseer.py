@@ -856,8 +856,50 @@ class AutoOverseer:
             _save_pending([e for e in pending if e.get("trade_id") != entry.get("trade_id")])
             pending = _load_pending()  # re-sync in case multiple fills this cycle
 
-            # Filled — log to options ledger and notify Slack
+            # Filled — handle based on signal type
             fill_price = float(fill_price or entry["limit"])
+
+            if entry["signal"] == "BUY_TO_CLOSE":
+                # Write CLOSED row to ledger and OPTION_BUYBACK to cash ledger
+                opening_ref = entry.get("opening_ref", "")
+                ledger_rows = ol.read_rows(scanner.OPTION_LEDGER_PATH)
+                matches = [r for r in ledger_rows
+                           if ol.row_key(r) == opening_ref
+                           and r.get("verdict") == "APPROVED"]
+                if matches:
+                    opening_row = matches[0]
+                    entry_prem  = float(opening_row["premium_sh"])
+                    buyback_pnl = round((entry_prem - fill_price) * 100, 2)
+                    from options_ledger import _close_row
+                    close_row = _close_row(
+                        opening_row,
+                        f"early_exit BUY_TO_CLOSE (semi-auto) bought back at ${fill_price:.2f}"
+                        f" vs ${entry_prem:.2f} entry",
+                        buyback_pnl,
+                    )
+                    ol.append_row(scanner.OPTION_LEDGER_PATH, close_row)
+                    _cl = getattr(scanner, "_cash_ledger", None)
+                    if _cl is not None:
+                        import cash_ledger as cl
+                        _cl.record(
+                            "OPTION_BUYBACK", entry["symbol"], buyback_pnl,
+                            f"BUY_TO_CLOSE {opening_row['signal']} ${entry['strike']}"
+                            f" bought back at ${fill_price:.2f} vs ${entry_prem:.2f} entry"
+                        )
+                    scanner._send_slack(
+                        f"{SLACK_MENTION} ✅ *BUY_TO_CLOSE FILLED — {entry.get('trade_id','')}*\n"
+                        f"*{entry['symbol']} ${entry['strike']}* closed @ ${fill_price:.2f}\n"
+                        f"*P&L:* +${buyback_pnl:,.2f}"
+                    )
+                    print(f"\n  [Semi-auto] ✅ BUY_TO_CLOSE filled: {entry['symbol']} ${entry['strike']}"
+                          f" @ ${fill_price:.2f}  P&L +${buyback_pnl:.2f}")
+                else:
+                    print(f"  [Semi-auto] ⚠ BUY_TO_CLOSE fill detected but no matching APPROVED row "
+                          f"found for ref={opening_ref}")
+                self._post_trade_reconcile(client, account_hash, entry["occ_sym"],
+                                           entry.get("signal_data", {}))
+                continue
+
             sig_data   = entry.get("signal_data", {})
             sig_data.update({
                 "symbol":      entry["symbol"],
@@ -955,6 +997,136 @@ class AutoOverseer:
             print(f"  [Semi-auto] {len(live)} pending order(s) awaiting fill: "
                   + ", ".join(f"{e['symbol']} {e['signal']} ${e['strike']}"
                                for e in live))
+
+        # Check open ledger positions for profit targets and auto-close via Schwab
+        try:
+            self._check_and_close_positions(client, account_hash, _load_pending())
+        except Exception as exc:
+            print(f"  [Semi-auto] ⚠ auto-close check failed: {exc}")
+
+    def _check_and_close_positions(self, client, account_hash: str,
+                                    pending: list[dict]) -> None:
+        """
+        For each open ledger position, fetch real Schwab option price.
+        If profit target hit and not already a BUY_TO_CLOSE pending, place
+        a BUY_TO_CLOSE order automatically.
+        """
+        import live_scanner as scanner
+        import options_ledger as ol
+        from datetime import date, timedelta
+
+        rows  = ol.read_rows(scanner.OPTION_LEDGER_PATH)
+        opens = list(ol.open_options(rows))
+        if not opens:
+            return
+
+        # Skip symbols already pending a BUY_TO_CLOSE
+        close_pending = {
+            f"{e['symbol']}_{e.get('strike')}_{e.get('expiry')}"
+            for e in pending
+            if e.get("signal") == "BUY_TO_CLOSE"
+        }
+
+        today = datetime.utcnow().date()
+
+        for opening in opens:
+            sym    = opening["symbol"]
+            strike = float(opening["strike"])
+            signal = opening["signal"]
+            dte    = int(float(opening["dte"]))
+            expiry = date.fromisoformat(opening["date"][:10]) + timedelta(days=dte)
+            key    = f"{sym}_{strike}_{expiry}"
+            if key in close_pending:
+                continue
+
+            occ_sym  = build_occ_symbol(sym, expiry, signal, strike)
+            put_call = "C" if signal == "SELL_CALL" else "P"
+
+            # Fetch live option quote from Schwab
+            try:
+                resp = client.get_quotes([occ_sym])
+                resp.raise_for_status()
+                q    = resp.json().get(occ_sym, {}).get("quote", {})
+                mark = float(q.get("mark") or q.get("markPrice") or 0)
+                bid  = float(q.get("bidPrice") or q.get("bid") or 0)
+            except Exception as exc:
+                print(f"  [Semi-auto] ⚠ quote fetch failed for {occ_sym}: {exc}")
+                continue
+
+            if mark <= 0:
+                continue
+
+            entry_prem = float(opening["premium_sh"])
+            try:
+                entry_iv = float(opening.get("hv", 30)) / 100
+            except (ValueError, TypeError):
+                entry_iv = 0.30
+
+            from options_pricer import adaptive_profit_target
+            target_pct = adaptive_profit_target(entry_iv, dte)
+            if mark > entry_prem * target_pct:
+                continue  # not at target yet
+
+            days_left = max((expiry - today).days, 0)
+            pnl_est   = round((entry_prem - mark) * 100, 2)
+            limit     = round(mark + 0.01, 2)
+
+            print(f"\n  [Semi-auto] 🎯 Profit target hit: {sym} ${strike} "
+                  f"mark=${mark:.2f} vs entry ${entry_prem:.2f} "
+                  f"({(1-mark/entry_prem)*100:.0f}% profit, target {target_pct*100:.0f}%)"
+                  f" — placing BUY_TO_CLOSE limit ${limit:.2f}")
+
+            try:
+                from schwab.orders.options import option_buy_to_close_limit
+                from schwab.orders.common import Duration, Session
+                order = (
+                    option_buy_to_close_limit(occ_sym, 1, f"{limit:.2f}")
+                    .set_duration(Duration.DAY)
+                    .set_session(Session.NORMAL)
+                    .build()
+                )
+                resp = client.place_order(account_hash, order)
+                resp.raise_for_status()
+            except Exception as exc:
+                print(f"  [Semi-auto] ❌ BUY_TO_CLOSE failed: {exc}")
+                scanner._send_slack(
+                    f"{SLACK_MENTION} ❌ *BUY_TO_CLOSE failed* — {sym} ${strike}\n{exc}"
+                )
+                continue
+
+            trade_id = _next_trade_id()
+            new_entry = {
+                "trade_id":    trade_id,
+                "symbol":      sym,
+                "signal":      "BUY_TO_CLOSE",
+                "strike":      strike,
+                "expiry":      expiry.isoformat(),
+                "dte":         days_left,
+                "premium":     entry_prem,
+                "bid":         bid,
+                "ask":         None,
+                "limit":       limit,
+                "occ_sym":     occ_sym,
+                "confidence":  None,
+                "notified_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "opening_ref": ol.row_key(opening),
+                "signal_data": {k: v for k, v in opening.items()
+                                if isinstance(v, (str, int, float, bool, type(None)))},
+            }
+            all_pending = _load_pending()
+            all_pending.append(new_entry)
+            _save_pending(all_pending)
+
+            scanner._send_slack(
+                f"{SLACK_MENTION} 🎯 *BUY_TO_CLOSE placed — {trade_id}*\n"
+                f"*{sym} ${strike} ({signal})* — profit target reached\n"
+                f"*Mark:* ${mark:.2f} vs entry ${entry_prem:.2f} "
+                f"({(1-mark/entry_prem)*100:.0f}% profit)\n"
+                f"*Close limit:* ${limit:.2f}  |  DTE remaining: {days_left}\n"
+                f"*Est. P&L:* +${pnl_est:,.2f}"
+            )
+            print(f"  [Semi-auto] ✅ BUY_TO_CLOSE placed: {trade_id}  {sym} ${strike}"
+                  f"  limit ${limit:.2f}  est P&L +${pnl_est:.2f}")
 
 
 # ---------------------------------------------------------------------------

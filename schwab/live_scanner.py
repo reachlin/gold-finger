@@ -607,37 +607,31 @@ def _make_quote_fetcher(client):
 
 def _process_option_ledger(client, paper: bool = True) -> list[dict]:
     """
-    Settle whatever is due in the options ledger.
-
-    paper=True  → actually close positions in the ledger (simulate fills).
-    paper=False → notify via Slack only; don't touch the ledger. The user
-                  closes the real position manually; the scan hook detects
-                  the Schwab fill and marks it closed then.
+    Paper mode: settle expiries/assignments/early-exits in the simulated ledger.
+    Semi-auto/live (paper=False): skip — AutoOverseer.check_pending_orders handles
+    profit-target detection and auto-places BUY_TO_CLOSE orders via Schwab API.
     """
+    if not paper:
+        return []
+
     rows   = ol.read_rows(OPTION_LEDGER_PATH)
     opens  = {ol.row_key(r): r for r in ol.open_options(rows)}
     events = ol.process_expirations(
         OPTION_LEDGER_PATH, WHEEL_HOLDINGS_PATH,
         _make_quote_fetcher(client),
-        dry_run=not paper,   # semi/live: detect events but don't write ledger
     )
     if not events:
         return []
 
-    if paper:
-        print(f"\n  [WHEEL] {len(events)} option settlement(s):")
-        slack_lines = ["*VAULT 76 — Wheel settlements*"]
-    else:
-        print(f"\n  [WHEEL] {len(events)} close alert(s) — place manually:")
-        slack_lines = [f"{_slack_prefix}*VAULT 76 — Close alerts* (semi-auto: place manually)"]
-
+    print(f"\n  [WHEEL] {len(events)} option settlement(s):")
+    slack_lines = ["*VAULT 76 — Wheel settlements*"]
     for ev in events:
-        icon  = "+" if ev["pnl"] >= 0 else "-"
-        label = ev["action"] if paper else f"⚠ {ev['action']} — CLOSE MANUALLY"
-        line  = f"{ev['symbol']:<6} {label:<25} {icon}${abs(ev['pnl']):.2f}  {ev['detail']}"
+        icon = "+" if ev["pnl"] >= 0 else "-"
+        line = (f"{ev['symbol']:<6} {ev['action']:<13} "
+                f"{icon}${abs(ev['pnl']):.2f}  {ev['detail']}")
         print(f"    {line}")
         slack_lines.append(f"  • {line}")
-        if paper and _cash_ledger:
+        if _cash_ledger:
             opening = opens.get(ev.get("symbol", ""))
             cl.from_options_event(_cash_ledger, ev, opening)
     _send_slack("\n".join(slack_lines))
