@@ -1066,10 +1066,15 @@ def _print_startup(client, paper: bool, portfolio=None, price_fetcher=None):
               f"  (total ${opt_bal:,.2f})")
         print(f"  Account total:   ${total:,.2f}")
     elif _cash_ledger:
-        opt_bal  = _cash_ledger.balance()
-        opt_pnl  = opt_bal - _cash_ledger.starting_capital
+        opt_bal   = _cash_ledger.balance()
+        opt_pnl   = opt_bal - _cash_ledger.starting_capital
+        committed = _committed_collateral()
+        pending   = _pending_collateral()
+        free      = _cash_ledger.starting_capital - committed - pending
         print(f"  Starting capital:${_cash_ledger.starting_capital:,.2f}")
         print(f"  Options P&L:     ${opt_pnl:+,.2f}  (total ${opt_bal:,.2f})")
+        print(f"  Committed:       ${committed:,.0f}  |  Free cash: ${free:,.0f}"
+              + (f"  (−${pending:,.0f} pending)" if pending else ""))
     for line in pos_term:
         print(line)
     for line in opts_term:
@@ -1100,12 +1105,19 @@ def _print_startup(client, paper: bool, portfolio=None, price_fetcher=None):
             f"*Total:* ${total:,.2f}"
         )
     elif _cash_ledger:
-        opt_bal = _cash_ledger.balance()
-        opt_pnl = opt_bal - _cash_ledger.starting_capital
+        opt_bal   = _cash_ledger.balance()
+        opt_pnl   = opt_bal - _cash_ledger.starting_capital
+        committed = _committed_collateral()
+        pending   = _pending_collateral()
+        free      = _cash_ledger.starting_capital - committed - pending
         slack_lines.append(
             f"*Starting capital:* ${_cash_ledger.starting_capital:,.2f} | "
             f"*Options P&L:* ${opt_pnl:+,.2f} | "
             f"*Total:* ${opt_bal:,.2f}"
+        )
+        slack_lines.append(
+            f"*Committed:* ${committed:,.0f} | *Free cash:* ${free:,.0f}"
+            + (f" (−${pending:,.0f} pending)" if pending else "")
         )
     slack_lines += pos_slack
     slack_lines += opts_slack
@@ -1143,10 +1155,15 @@ def _print_eod(portfolio, price_fetcher, scan_count: int):
             print(f"  Options P&L:  ${opt_pnl:+,.2f}  (total ${opt_bal:,.2f})")
             print(f"  Account total:${total:,.2f}")
     elif _cash_ledger:
-        opt_bal = _cash_ledger.balance()
-        opt_pnl = opt_bal - _cash_ledger.starting_capital
+        opt_bal   = _cash_ledger.balance()
+        opt_pnl   = opt_bal - _cash_ledger.starting_capital
+        committed = _committed_collateral()
+        pending   = _pending_collateral()
+        free      = _cash_ledger.starting_capital - committed - pending
         print(f"  Starting capital:${_cash_ledger.starting_capital:,.2f}")
         print(f"  Options P&L:     ${opt_pnl:+,.2f}  (total ${opt_bal:,.2f})")
+        print(f"  Committed:       ${committed:,.0f}  |  Free cash: ${free:,.0f}"
+              + (f"  (−${pending:,.0f} pending)" if pending else ""))
 
     pos_term,  pos_slack  = _position_lines(portfolio, price_fetcher)
     opts_term, opts_slack = _open_options_lines()
@@ -1155,11 +1172,10 @@ def _print_eod(portfolio, price_fetcher, scan_count: int):
         print(line)
     committed = _committed_collateral()
     if portfolio:
-        free = portfolio.cash - committed
-        print(f"  Committed collateral: ${committed:,.0f}  |  Free cash: ${free:,.0f}")
-    elif _cash_ledger:
-        free = _cash_ledger.starting_capital - committed
-        print(f"  Committed collateral: ${committed:,.0f}  |  Free cash: ${free:,.0f}")
+        pending = _pending_collateral()
+        free    = portfolio.cash - committed - pending
+        print(f"  Committed collateral: ${committed:,.0f}  |  Free cash: ${free:,.0f}"
+              + (f"  (−${pending:,.0f} pending)" if pending else ""))
 
     if portfolio:
         s = portfolio.summary(cur_prices)
@@ -1180,13 +1196,16 @@ def _print_eod(portfolio, price_fetcher, scan_count: int):
     elif _cash_ledger:
         opt_bal  = _cash_ledger.balance()
         opt_pnl  = opt_bal - _cash_ledger.starting_capital
+        pending  = _pending_collateral()
+        free_eod = _cash_ledger.starting_capital - committed - pending
         slack_lines = [
             f"*VAULT 76 — End of Day* {now_str}",
             f"*Scans today:* {scan_count}",
             f"*Starting capital:* ${_cash_ledger.starting_capital:,.2f}  |  "
             f"*Options P&L:* ${opt_pnl:+,.2f}  |  "
             f"*Total:* ${opt_bal:,.2f}",
-            f"*Committed:* ${committed:,.0f}  |  *Free cash:* ${_cash_ledger.starting_capital - committed:,.0f}",
+            f"*Committed:* ${committed:,.0f}  |  *Free cash:* ${free_eod:,.0f}"
+            + (f"  (−${pending:,.0f} pending)" if pending else ""),
         ] + opts_slack
     else:
         slack_lines = [
