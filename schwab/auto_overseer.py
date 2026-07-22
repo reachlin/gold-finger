@@ -791,11 +791,11 @@ class AutoOverseer:
         if not account_hash:
             return
 
-        # Reconcile local ledger against real Schwab positions (source of truth)
+        # Sync with Schwab: positions, open orders, and real cash balance
         try:
             self._reconcile_schwab_positions(client, account_hash)
         except Exception as exc:
-            print(f"  [Semi-auto] ⚠ Schwab reconciliation failed: {exc}")
+            print(f"  [Semi-auto] ⚠ Schwab sync failed: {exc}")
 
         # Check profit targets and auto-place BUY_TO_CLOSE when within range
         try:
@@ -1049,26 +1049,65 @@ class AutoOverseer:
 
     def _reconcile_schwab_positions(self, client, account_hash: str) -> None:
         """
-        Source-of-truth reconciliation every scan cycle:
-        1. Fetch real Schwab option positions.
-        2. For each locally APPROVED position that's no longer on Schwab,
-           find the close price from recent order history and write a CLOSED row.
-        3. Alert if Schwab has an option position not in our ledger (manual trade).
+        Source-of-truth sync every scan cycle:
+        1. Fetch real Schwab account (positions + balances + open orders).
+        2. Update live_scanner._schwab_cash with actual available cash.
+        3. For each locally APPROVED position gone from Schwab: write CLOSED row.
+        4. Alert on Schwab positions not in local ledger (manual trades).
+        5. Sync open orders so pending_orders.json stays current.
         """
         import live_scanner as scanner
         import options_ledger as ol
         from datetime import date, timedelta
         from options_ledger import _close_row
 
-        # --- Fetch real Schwab positions ---
+        # --- 1. Fetch Schwab account (positions + balances) ---
         try:
             resp = client.get_account(account_hash,
                                       fields=client.Account.Fields.POSITIONS)
             resp.raise_for_status()
-            schwab_positions = resp.json().get("securitiesAccount", {}).get("positions", [])
+            acct_data        = resp.json().get("securitiesAccount", {})
+            schwab_positions = acct_data.get("positions", [])
+            balances         = acct_data.get("currentBalances", {})
+            # Real available cash (reflects deposits, withdrawals, and collateral)
+            schwab_cash = float(
+                balances.get("cashBalance") or
+                balances.get("availableFundsNonMarginableTrade") or
+                balances.get("availableFunds") or 0
+            )
+            scanner._schwab_cash = schwab_cash
         except Exception as exc:
-            print(f"  [Reconcile] ⚠ Could not fetch Schwab positions: {exc}")
+            print(f"  [Reconcile] ⚠ Could not fetch Schwab account: {exc}")
             return
+
+        # --- 2. Fetch open orders from Schwab ---
+        try:
+            now = datetime.now()
+            o_resp = client.get_orders_for_account(
+                account_hash,
+                from_entered_datetime=now - timedelta(days=1),
+                to_entered_datetime=now + timedelta(minutes=5),
+            )
+            o_resp.raise_for_status()
+            schwab_orders = o_resp.json()
+        except Exception as exc:
+            print(f"  [Reconcile] ⚠ Could not fetch Schwab orders: {exc}")
+            schwab_orders = []
+
+        # Summarise working orders for the log
+        working = [o for o in schwab_orders
+                   if o.get("status") in ("WORKING", "QUEUED", "ACCEPTED", "PENDING_ACTIVATION")]
+        if working:
+            w_descs = []
+            for o in working:
+                legs = o.get("orderLegCollection", [])
+                sym  = legs[0].get("instrument", {}).get("symbol", "?") if legs else "?"
+                inst = legs[0].get("instruction", "?") if legs else "?"
+                w_descs.append(f"{inst} {sym.strip()} @${o.get('price','?')}")
+            print(f"  [Reconcile] Schwab cash=${schwab_cash:,.0f}  "
+                  f"open orders: {', '.join(w_descs)}")
+        else:
+            print(f"  [Reconcile] Schwab cash=${schwab_cash:,.0f}  no open orders")
 
         # Build set of Schwab option symbols currently open (normalised, no spaces)
         schwab_option_syms = set()
