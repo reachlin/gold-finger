@@ -365,7 +365,8 @@ _current_portfolio = None   # populated in main() after PaperPortfolio init
 _current_kronos_cache: dict = {}  # populated in main() after _load_kronos_cache()
 _current_client    = None   # populated in main() after Schwab auth
 _slack_prefix      = ""     # e.g. "(deepseek) " — set by auto_overseer
-_schwab_cash       = None   # real Schwab cash balance, updated every scan by reconcile
+_schwab_cash       = None   # Schwab cashBalance (total, incl. locked collateral)
+_schwab_available  = None   # Schwab availableFunds (free cash after collateral deduction)
 
 
 def set_decision_fn(fn):
@@ -1092,15 +1093,15 @@ def _print_startup(client, paper: bool, portfolio=None, price_fetcher=None):
         pending   = _pending_collateral()
         # Use real Schwab cash when available; fall back to ledger estimate
         if _schwab_cash is not None:
-            free = _schwab_cash - pending
-            cash_src = f"Schwab: ${_schwab_cash:,.0f}"
+            free     = _schwab_available if _schwab_available is not None else _schwab_cash - pending
+            cash_src = f"Schwab total=${_schwab_cash:,.0f} / avail=${free:,.0f}"
         else:
             free = _cash_ledger.starting_capital - committed - pending
             cash_src = f"ledger est."
         print(f"  Starting capital:${_cash_ledger.starting_capital:,.2f}")
         print(f"  Options P&L:     ${opt_pnl:+,.2f}  (total ${opt_bal:,.2f})")
-        print(f"  Cash ({cash_src}): ${_schwab_cash if _schwab_cash is not None else _cash_ledger.starting_capital - committed:,.0f}"
-              f"  |  Committed: ${committed:,.0f}  |  Free: ${free:,.0f}"
+        print(f"  Cash ({cash_src}): Free: ${free:,.0f}"
+              f"  |  Committed: ${committed:,.0f}"
               + (f"  (−${pending:,.0f} pending)" if pending else ""))
     for line in pos_term:
         print(line)
@@ -1137,8 +1138,8 @@ def _print_startup(client, paper: bool, portfolio=None, price_fetcher=None):
         committed = _committed_collateral()
         pending   = _pending_collateral()
         if _schwab_cash is not None:
-            free     = _schwab_cash - pending
-            cash_lbl = f"*Schwab cash:* ${_schwab_cash:,.0f}"
+            free     = _schwab_available if _schwab_available is not None else _schwab_cash - pending
+            cash_lbl = f"*Schwab total:* ${_schwab_cash:,.0f} | *Available:* ${free:,.0f}"
         else:
             free     = _cash_ledger.starting_capital - committed - pending
             cash_lbl = f"*Est. cash:* ${_cash_ledger.starting_capital - committed:,.0f}"
@@ -1192,15 +1193,15 @@ def _print_eod(client, portfolio, price_fetcher, scan_count: int):
         committed = _committed_collateral()
         pending   = _pending_collateral()
         if _schwab_cash is not None:
-            free     = _schwab_cash - pending
-            cash_src = f"Schwab: ${_schwab_cash:,.0f}"
+            free     = _schwab_available if _schwab_available is not None else _schwab_cash - pending
+            cash_src = f"Schwab total=${_schwab_cash:,.0f} / avail=${free:,.0f}"
         else:
             free     = _cash_ledger.starting_capital - committed - pending
             cash_src = "ledger est."
         print(f"  Starting capital:${_cash_ledger.starting_capital:,.2f}")
         print(f"  Options P&L:     ${opt_pnl:+,.2f}  (total ${opt_bal:,.2f})")
-        print(f"  Cash ({cash_src}): ${_schwab_cash if _schwab_cash is not None else _cash_ledger.starting_capital - committed:,.0f}"
-              f"  |  Committed: ${committed:,.0f}  |  Free: ${free:,.0f}"
+        print(f"  Cash ({cash_src}): Free: ${free:,.0f}"
+              f"  |  Committed: ${committed:,.0f}"
               + (f"  (−${pending:,.0f} pending)" if pending else ""))
 
     pos_term,  pos_slack  = _position_lines(portfolio, price_fetcher)
@@ -1236,8 +1237,8 @@ def _print_eod(client, portfolio, price_fetcher, scan_count: int):
         opt_pnl  = opt_bal - _cash_ledger.starting_capital
         pending  = _pending_collateral()
         if _schwab_cash is not None:
-            free_eod = _schwab_cash - pending
-            cash_lbl = f"*Schwab cash:* ${_schwab_cash:,.0f}"
+            free_eod = _schwab_available if _schwab_available is not None else _schwab_cash - pending
+            cash_lbl = f"*Schwab total:* ${_schwab_cash:,.0f} | *Available:* ${free_eod:,.0f}"
         else:
             free_eod = _cash_ledger.starting_capital - committed - pending
             cash_lbl = f"*Est. cash:* ${_cash_ledger.starting_capital - committed:,.0f}"

@@ -1069,13 +1069,16 @@ class AutoOverseer:
             acct_data        = resp.json().get("securitiesAccount", {})
             schwab_positions = acct_data.get("positions", [])
             balances         = acct_data.get("currentBalances", {})
-            # Real available cash (reflects deposits, withdrawals, and collateral)
-            schwab_cash = float(
-                balances.get("cashBalance") or
+            # availableFunds = cash already net of option collateral requirements
+            # cashBalance    = total cash including locked collateral
+            schwab_available = float(
                 balances.get("availableFundsNonMarginableTrade") or
                 balances.get("availableFunds") or 0
             )
-            scanner._schwab_cash = schwab_cash
+            schwab_total_cash = float(balances.get("cashBalance") or 0)
+            # Expose both; briefing uses available for free-cash display
+            scanner._schwab_cash          = schwab_total_cash
+            scanner._schwab_available     = schwab_available
         except Exception as exc:
             print(f"  [Reconcile] ⚠ Could not fetch Schwab account: {exc}")
             return
@@ -1104,10 +1107,11 @@ class AutoOverseer:
                 sym  = legs[0].get("instrument", {}).get("symbol", "?") if legs else "?"
                 inst = legs[0].get("instruction", "?") if legs else "?"
                 w_descs.append(f"{inst} {sym.strip()} @${o.get('price','?')}")
-            print(f"  [Reconcile] Schwab cash=${schwab_cash:,.0f}  "
+            print(f"  [Reconcile] Schwab total=${schwab_total_cash:,.0f}  "
+                  f"available=${schwab_available:,.0f}  "
                   f"open orders: {', '.join(w_descs)}")
         else:
-            print(f"  [Reconcile] Schwab cash=${schwab_cash:,.0f}  no open orders")
+            print(f"  [Reconcile] Schwab total=${schwab_total_cash:,.0f}  available=${schwab_available:,.0f}  no open orders")
 
         # Build set of Schwab option symbols currently open (normalised, no spaces)
         schwab_option_syms = set()
