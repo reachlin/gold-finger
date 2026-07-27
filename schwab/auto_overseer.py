@@ -530,8 +530,16 @@ class AutoOverseer:
 
         if filled:
             print(f"  [Reconcile] ✅ Fill confirmed: {occ_sym}  fill ${fill_price}")
+            scanner._send_slack(
+                f"*✅ ORDER FILLED*\n"
+                f"  {occ_sym}  fill ${fill_price}"
+            )
         else:
             print(f"  [Reconcile] ⚠ Fill not confirmed within 60s — verify on Schwab")
+            scanner._send_slack(
+                f"*⚠️ Fill not confirmed within 60s* — verify on Schwab\n"
+                f"  {occ_sym}"
+            )
 
         # Compare Schwab positions vs local ledger
         try:
@@ -644,6 +652,14 @@ class AutoOverseer:
                 .set_session(Session.NORMAL)
                 .build()
             )
+
+            collat = int(float(s.get("strike", 0)) * 100)
+            pre_msg = (
+                f"*🤖 AUTO ORDER SUBMITTING*\n"
+                f"  {occ_sym}  limit {price_src}  collat ~${collat:,}\n"
+                f"  conf={s.get('confidence','?')}  reason: {s.get('reason', '—')}"
+            )
+            scanner._send_slack(pre_msg)
 
             resp = client.place_order(account_hash, order)
             resp.raise_for_status()
@@ -1517,6 +1533,53 @@ def _load_vault8_range(symbol: str) -> dict | None:
     return None
 
 
+def _refresh_bluechip_history_if_stale(send_slack) -> None:
+    """
+    Refresh data/*_history.csv (the price history the Vault8 Responder
+    scans) if they're missing recent trading sessions. The Responder
+    otherwise silently reuses week-old CSVs and produces identical
+    signals week over week (observed 2026-07-27: W30 and W31 signals
+    were byte-for-byte identical because the CSVs hadn't been refreshed
+    since 2026-07-21).
+    """
+    from datetime import date as _date, timedelta as _timedelta
+    import pandas as pd
+
+    ref_path = os.path.join(_DATA_DIR, "spy_history.csv")
+    last_date = None
+    try:
+        last_date = pd.read_csv(
+            ref_path, usecols=["datetime"], parse_dates=["datetime"]
+        )["datetime"].max().date()
+    except Exception:
+        pass
+
+    today    = _date.today()
+    expected = today - _timedelta(days=1)
+    try:
+        import pandas_market_calendars as mcal
+        nyse  = mcal.get_calendar("NYSE")
+        sched = nyse.schedule(start_date=today - _timedelta(days=10), end_date=today)
+        prior_days = [d.date() for d in sched.index if d.date() < today]
+        if prior_days:
+            expected = prior_days[-1]
+    except Exception:
+        pass
+
+    if last_date is not None and last_date >= expected:
+        return  # fresh enough — last row covers the most recent completed session
+
+    print(f"  [Vault8] Blue-chip history stale (last={last_date}, expected>={expected})"
+          f" — refreshing via download_bluechips.py...")
+    try:
+        from vault8.download_bluechips import main as _download_bluechips_main
+        _download_bluechips_main()
+        print("  [Vault8] Blue-chip history refreshed.")
+    except Exception as e:
+        print(f"  [Vault8] History refresh failed ({e}) — proceeding with existing CSVs.")
+        send_slack(f"*Vault 8 Weekly Scan* — history refresh failed ({e}); using stale CSVs.")
+
+
 def _maybe_run_vault8_weekly(send_slack) -> None:
     """
     If vault8 weekly signals don't exist for the current ISO week,
@@ -1543,6 +1606,7 @@ def _maybe_run_vault8_weekly(send_slack) -> None:
         existing = {}
 
     print(f"\n  [Vault8] No prediction for {week_key} — running weekly range scan ({today.strftime('%A')})...")
+    _refresh_bluechip_history_if_stale(send_slack)
 
     # Determine regime from VIX
     regime = "RECLAMATION"
