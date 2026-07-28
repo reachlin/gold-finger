@@ -17,7 +17,7 @@ semi-auto live since 2026-07-20.
 | **The Hunter** | `vault76/armory/hunter.py` | VCP momentum breakout — BUY_CALL when price breaks out of a tight base |
 | **Relative Strength Screener** | `schwab/relative_strength_screener.py` | Ranks a universe by 1/3/6-month returns; feeds The Maggie's leader screen |
 | **Live Scanner** | `schwab/live_scanner.py` | Real-time scan loop with Vault 76 Daily Briefing to Slack |
-| **Auto Overseer** | `schwab/auto_overseer.py` | LLM-driven decision engine (DeepSeek/Claude/GPT-4o); approves/rejects signals using Kronos prediction + Vault 8 weekly range + open positions |
+| **Real Overseer** | `schwab/real_overseer.py` | Fully-automated LLM-driven decision engine (DeepSeek/Claude/GPT-4o); approves/rejects signals, places real Schwab orders, books fills to the ledgers, and auto-closes at profit targets |
 | **Vault 20** | `vault20/vault20.py` | Manual position tracker for any broker without API |
 | **Option Finder** | `vault20/option_finder.py` | Schwab option chain screener with real Greeks + IV rank |
 | **Backtest** | `schwab/backtest_scavenger.py` | Walk-forward wheel strategy backtest with early-exit |
@@ -51,20 +51,24 @@ Oracle results (buy every weekly low, sell every weekly high):
 BiLSTM model capture rates (% of oracle range captured on validation set):
 - SPY 36.8%, KO 34.9%, GLD 34.4%, JNJ 34.3%, PG 34.1%
 
-### Semi-Auto Trading Flow
+### Fully-Automated Trading Flow
 
 ```
-Overseer scans → LLM approves → Slack mention with Trade ID (T000X)
-  → user places manually via "place order T000X"
-  → overseer watches Schwab for fill
-  → auto-logs to paper_options_ledger.csv
+Overseer scans → LLM approves → real Schwab order placed (limit at bid)
+  → fill confirmed (immediately or on a later scan cycle)
+  → booked to paper_options_ledger.csv + cash_ledger.csv
+  → every scan: Schwab positions reconciled (close / expiry / assignment)
+  → profit target hit → BUY_TO_CLOSE placed automatically
 ```
 
 **Guard rails:**
-- Amateur hour (9:30–10:30 ET): signals suppressed, order placement blocked
-- Collateral guard: pending unplaced orders count against budget (no double-booking)
-- Auto-expire: pending orders older than 1 trading day are cancelled via Slack mention
-- Budget limit: `$600/trade` configurable; pending + committed collateral both deducted
+- `REALLY_REAL=true` env gate — the overseer refuses to start without it
+- Pre-trade check against Schwab **availableFunds** (net of locked collateral)
+  plus duplicate-short detection
+- Collateral guard: pending unfilled orders count against budget (no double-booking)
+- Auto-expire: pending orders older than 1 trading day are dropped via Slack mention
+- Positions vanishing from Schwab mid-life with no closing order are flagged
+  for manual review, never guessed into the ledger
 
 ### Trade Management
 
@@ -87,22 +91,19 @@ python schwab/manage_pending.py cancel 0
 python schwab/manage_pending.py cancel all
 ```
 
-### Auto Overseer usage
+### Real Overseer usage
 
 ```bash
-# Semi-auto: LLM decides, human places, overseer watches fills
-python schwab/auto_overseer.py --semi
-
-# Paper mode (safe default — no real orders)
-python schwab/auto_overseer.py --paper
+# Fully automated (requires REALLY_REAL=true in .env)
+python schwab/real_overseer.py
 
 # Use a different LLM provider
-python schwab/auto_overseer.py --semi --provider deepseek
-python schwab/auto_overseer.py --semi --provider anthropic --model claude-opus-4-8
+python schwab/real_overseer.py --provider deepseek
+python schwab/real_overseer.py --provider anthropic --model claude-opus-4-8
 
 # Run in tmux with caffeinate (recommended — prevents macOS sleep)
 tmux new-session -d -s overseer -x 220 -y 50 \
-  "caffeinate -is env PYTHONUNBUFFERED=1 python schwab/auto_overseer.py --semi 2>&1 | tee data/overseer.log"
+  "caffeinate -is env PYTHONUNBUFFERED=1 python schwab/real_overseer.py 2>&1 | tee data/overseer.log"
 ```
 
 ### Option Finder usage

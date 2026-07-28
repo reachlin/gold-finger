@@ -2,4 +2,4 @@ timestamp,event_type,symbol,amount,running_balance,description
 2026-07-22 21:41:34 ET,STARTING_CAPITAL,,30000.0,30000.0,"starting capital $30,000.00 (semi-auto live, 2026-07-20)"
 2026-07-22 21:41:34 ET,OPTION_SELL,NVDA,525.0,30525.0,SELL_PUT NVDA strike=$195.0 exp=32d premium=$525.00 (semi-auto fill 2026-07-20)
 2026-07-22 21:41:34 ET,OPTION_SELL,KO,65.0,30590.0,SELL_PUT KO strike=$78.0 exp=25d premium=$65.00 (semi-auto fill 2026-07-20)
-2026-07-28 09:31:41 ET,OPTION_BUYBACK,KO,40.0,30630.0,SELL_PUT $78.0 closed_on_schwab at $0.25
+2026-07-28 09:31:41 ET,OPTION_BUYBACK,KO,-25.0,30565.0,BUY_TO_CLOSE SELL_PUT $78.0 bought back at $0.25 (cost) vs $0.65 entry

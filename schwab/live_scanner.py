@@ -21,7 +21,7 @@ import time
 import argparse
 from datetime import datetime, timedelta, timezone
 
-# LightGBM + torch OpenMP deadlock guard — see auto_overseer.py header.
+# LightGBM + torch OpenMP deadlock guard — see real_overseer.py header.
 # Also needed here for direct `python live_scanner.py` runs.
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
@@ -354,7 +354,7 @@ def _save_global_scan(n: int) -> None:
         pass
 
 # ---------------------------------------------------------------------------
-# AutoOverseer hook — set by auto_overseer.py to replace interactive input
+# AutoOverseer hook — set by real_overseer.py to replace interactive input
 # ---------------------------------------------------------------------------
 
 _decision_fn       = None   # callable(signal: dict) -> "y" | "n" | "q"
@@ -364,7 +364,7 @@ _current_scan_signals: list = []  # this scan's signals — AutoOverseer reads
 _current_portfolio = None   # populated in main() after PaperPortfolio init
 _current_kronos_cache: dict = {}  # populated in main() after _load_kronos_cache()
 _current_client    = None   # populated in main() after Schwab auth
-_slack_prefix      = ""     # e.g. "(deepseek) " — set by auto_overseer
+_slack_prefix      = ""     # e.g. "(deepseek) " — set by real_overseer
 _schwab_cash       = None   # Schwab cashBalance (total, incl. locked collateral)
 _schwab_available  = None   # Schwab availableFunds (free cash after collateral deduction)
 
@@ -1504,8 +1504,13 @@ def main():
                     print(f"\n  ⚠  {k_msg}")
                     print(f"  ⚠  Strike above Kronos support floor — assignment risk elevated.")
 
-                # Budget check — auto-skip if collateral exceeds available cash
-                cash = portfolio.cash if portfolio else 30_000.0
+                # Budget check — auto-skip if collateral exceeds available cash.
+                # Real mode: use the Schwab cash synced by the overseer's scan
+                # hook, not a constant — the account balance drifts from
+                # $30,000 with every close (observed 2026-07-28).
+                cash = (portfolio.cash if portfolio
+                        else _schwab_cash if _schwab_cash is not None
+                        else 30_000.0)
                 budget_ok, budget_msg = _budget_check(s, cash)
                 if not budget_ok:
                     print(f"\n  ⛔ {budget_msg}")

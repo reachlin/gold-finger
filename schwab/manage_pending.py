@@ -7,7 +7,7 @@ Usage:
   python schwab/manage_pending.py cancel all
 
 Pending orders are stored in data/pending_orders.json and watched by the
-check_pending_orders scan hook in auto_overseer.py.  Use this tool when:
+scan hook in real_overseer.py.  Use this tool when:
   - An order timed out / price moved and you won't be placing it
   - You went out and couldn't place the trade in time
   - You want to clear stale entries before market open
