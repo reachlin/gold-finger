@@ -1741,7 +1741,12 @@ def main():
 
     import live_scanner as scanner
     scanner.set_decision_fn(overseer.decide)
-    if semi:
+    if semi or args.real:
+        # check_pending_orders() also drives _check_and_close_positions(),
+        # which auto-places BUY_TO_CLOSE when a position hits its profit
+        # target. Without this, --real mode opens positions but never
+        # closes them (observed 2026-07-28: KO put sat at 63% profit,
+        # past target, with no close order ever placed).
         scanner.set_scan_hook_fn(overseer.check_pending_orders)
     provider_tag = overseer.llm.provider
     scanner._slack_prefix = f"`({provider_tag})`\n"

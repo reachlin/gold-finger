@@ -1,5 +1,6 @@
 """Tests for auto_overseer — run before implementation (TDD)."""
 import json
+import sys
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -146,6 +147,40 @@ def test_real_order_skipped_for_router_signals(monkeypatch, capsys):
     for sig in ("HOLD_SHARES", "RESUME_WHEEL"):
         ao._place_real_order({"signal": sig, "symbol": "NVDA"})
         assert "no automated real order" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("argv,expect_hook", [
+    (["auto_overseer.py", "--real"], True),
+    (["auto_overseer.py", "--semi"], True),
+    (["auto_overseer.py"], False),   # default/--paper: no live positions to watch
+])
+def test_scan_hook_wired_for_real_and_semi_not_paper(monkeypatch, argv, expect_hook):
+    """Regression test for 2026-07-28: --real mode opened positions via
+    _place_real_order but never watched them for profit-target closes,
+    because the scan hook (which drives _check_and_close_positions) was
+    only registered `if semi`. A profitable KO put sat past its target
+    all day with no BUY_TO_CLOSE ever placed. The hook must fire for both
+    --real and --semi (both place/track live positions); --paper manages
+    its own simulated positions elsewhere and doesn't need it."""
+    import schwab.auto_overseer as ao
+    import live_scanner as scanner
+
+    monkeypatch.setattr(sys, "argv", argv)
+    fake_overseer = MagicMock()
+    fake_overseer.llm.provider = "test"
+    monkeypatch.setattr(ao, "AutoOverseer", lambda **kw: fake_overseer)
+    monkeypatch.setattr(ao, "_check_market_open", lambda *a, **k: False)
+
+    hook_calls = []
+    monkeypatch.setattr(scanner, "set_decision_fn", lambda fn: None)
+    monkeypatch.setattr(scanner, "set_scan_hook_fn", lambda fn: hook_calls.append(fn))
+    monkeypatch.setattr(scanner, "_send_slack", lambda *a, **k: None)
+
+    ao.main()
+
+    assert (len(hook_calls) == 1) == expect_hook
+    if expect_hook:
+        assert hook_calls[0] is fake_overseer.check_pending_orders
 
 
 # ---------------------------------------------------------------------------
