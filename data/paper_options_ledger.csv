@@ -8,3 +8,4 @@ date,symbol,signal,close,strike,premium_sh,premium_ct,premium_pct,dte,hv,adx,con
 2026-07-22 12:10:36,GOOGL,SELL_PUT,347.78,330.0,7.725,772.5,2.22,30,32.4,11.0,82,,BUDGET_BLOCK,sideways stock — sell 5% OTM put for income (The Scavenger),,
 2026-07-22 12:10:36,KO,SELL_PUT,82.5,78.0,0.58,58.0,0.7,30,27.6,14.2,75,,BUDGET_BLOCK,sideways stock — sell 5% OTM put for income (The Scavenger),,
 2026-07-22 12:10:36,PG,SELL_PUT,150.25,143.0,2.055,205.5,1.37,30,24.7,10.9,70,,BUDGET_BLOCK,sideways stock — sell 5% OTM put for income (The Scavenger),,
+2026-07-28 09:31:41,KO,SELL_PUT,,78.0,,,,25,,,,,CLOSED,closed_on_schwab at $0.25 (reconciled from Schwab),40.0,KO_2026-07-20 22:38:25
