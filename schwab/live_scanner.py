@@ -983,6 +983,58 @@ def _send_slack(message: str):
         print(f"  [Slack] failed to send: {exc}")
 
 
+def _scan_summary_message(scan_count: int, global_scan: int, n_scanned: int,
+                          n_signals: int, events: list[str], free: float,
+                          committed: float, open_positions: list[str]) -> str:
+    """Build the compact per-scan Slack summary (pure — no I/O)."""
+    try:
+        now = _now_et().strftime("%H:%M ET")
+    except Exception:
+        now = ""
+    lines = [
+        f"📡 *Scan #{scan_count}* (G{global_scan}) · {now}",
+        f"{n_scanned} scanned · {n_signals} signal(s) · "
+        f"free ${free:,.0f} / committed ${committed:,.0f}",
+    ]
+    lines.append("\n".join(f"  {e}" for e in events) if events
+                 else "  no actionable signals")
+    lines.append(f"open: {', '.join(open_positions) if open_positions else 'none'}")
+    return "\n".join(lines)
+
+
+def _send_scan_summary(scan_count: int, global_scan: int, n_scanned: int,
+                       signals, events: list[str], client, portfolio):
+    """Gather the cash/positions picture and send the per-scan summary to
+    Slack. Sent every scan (begin/end-of-day messages are separate) so the
+    book can be followed from a phone."""
+    try:
+        committed = _committed_collateral()
+        if portfolio is not None:
+            free = portfolio.cash - committed
+        elif _schwab_available is not None:
+            free = _schwab_available
+        elif _schwab_cash is not None:
+            free = _schwab_cash - committed
+        else:
+            free = 30_000.0 - committed
+        try:
+            opens = list(ol.open_options(ol.read_rows(OPTION_LEDGER_PATH)))
+            open_positions = [
+                f"{o['symbol']} ${o['strike']}"
+                f"{'P' if o.get('signal') == 'SELL_PUT' else 'C'}"
+                for o in opens
+            ]
+        except Exception:
+            open_positions = []
+        msg = _scan_summary_message(
+            scan_count, global_scan, n_scanned,
+            len(signals) if signals else 0, events, free, committed,
+            open_positions)
+        _send_slack(msg)
+    except Exception as exc:
+        print(f"  [Slack] scan summary failed: {exc}")
+
+
 def _check_token_age() -> tuple[str, str]:
     """
     Return (terminal_line, slack_line) warning if the Schwab token is
@@ -1480,6 +1532,8 @@ def main():
                 signals_found=len(signals),
             )
 
+        scan_events: list[str] = []   # per-signal dispositions for Slack
+
         if not signals:
             print(f"  No signals.")
         else:
@@ -1496,6 +1550,7 @@ def main():
                     print(f"\n{VERDICT_SKIP}")
                     print(f"SKIPPED: {s['symbol']} {s['signal']} — fast risk-off")
                     print(VERDICT_SKIP)
+                    scan_events.append(f"⚡ {s['symbol']} {s['signal']} risk-off skip")
                     continue
 
                 # Kronos advisory — warn if put strike is above predicted 30d support
@@ -1519,6 +1574,8 @@ def main():
                     print(f"\n{VERDICT_SKIP}")
                     print(f"SKIPPED: {s['symbol']} {s['signal']} — budget block")
                     print(VERDICT_SKIP)
+                    scan_events.append(
+                        f"⛔ {s['symbol']} {s['signal']} ${s.get('strike')} budget block")
                     continue
 
                 if budget_msg:
@@ -1656,6 +1713,11 @@ def main():
                         _log_option_trade(s, verdict="SKIPPED")
                     print(VERDICT_SKIP)
 
+                # Record this signal's disposition for the per-scan Slack summary
+                _strike = f" ${s.get('strike')}" if s.get("strike") else ""
+                scan_events.append(f"✅ {s['symbol']} {sig}{_strike}" if verdict == "y"
+                                   else f"➖ {s['symbol']} {sig}{_strike} skipped")
+
         # Show portfolio status at end of each scan
         if portfolio:
             cur_prices = _get_current_prices(portfolio, price_fetcher)
@@ -1675,6 +1737,11 @@ def main():
         print(f"{'─'*70}")
         print(f"  ■ END SCAN #{scan_count} [G:{global_scan}]  —  next in {SCAN_INTERVAL_MIN} min.")
         print(f"{'─'*70}")
+
+        # Send this scan's summary to Slack (every scan, per user request)
+        _send_scan_summary(scan_count, global_scan, len(WATCHLIST),
+                           signals, scan_events, client, portfolio)
+
         time.sleep(SCAN_INTERVAL_MIN * 60)
 
 
