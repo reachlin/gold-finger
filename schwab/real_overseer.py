@@ -857,6 +857,115 @@ class RealOverseer:
             f"*Collateral committed:* ${entry['strike'] * 100:,.0f}"
         )
 
+        # Rest a GTC buy-to-close at the profit target immediately, so decay is
+        # captured with no monitoring gap and no daily DAY-order churn. The
+        # profit-target sweep is now just a fallback for positions without one.
+        if entry["signal"] in ("SELL_PUT", "SELL_CALL"):
+            try:
+                from options_pricer import adaptive_profit_target
+                sd = entry.get("signal_data", {}) or {}
+                try:
+                    entry_iv = float(sd.get("hv", 30)) / 100
+                except (ValueError, TypeError):
+                    entry_iv = 0.30
+                dte          = int(float(entry.get("dte", 30)))
+                target_price = round(fill * adaptive_profit_target(entry_iv, dte), 2)
+                try:
+                    days_left = max(
+                        (date.fromisoformat(entry["expiry"]) - _now_et().date()).days, 0)
+                except Exception:
+                    days_left = dte
+                self._submit_close_order(
+                    scanner, client, account_hash,
+                    symbol=entry["symbol"], strike=float(entry["strike"]),
+                    expiry=entry["expiry"], days_left=days_left,
+                    occ_sym=entry["occ_sym"], entry_prem=fill,
+                    target_price=target_price, opening_signal=entry["signal"],
+                    opening_ref=entry.get("trade_id"), trigger="open",
+                )
+            except Exception as exc:
+                print(f"  [Overseer] ⚠ could not rest GTC close for "
+                      f"{entry['symbol']}: {exc}")
+
+    def _submit_close_order(self, scanner, client, account_hash: str, *,
+                            symbol: str, strike: float, expiry, days_left: int,
+                            occ_sym: str, entry_prem: float, target_price: float,
+                            mark: float | None = None,
+                            opening_signal: str = "SELL_PUT",
+                            opening_ref=None, trigger: str = "target"):
+        """
+        Place a GOOD_TILL_CANCEL BUY_TO_CLOSE limit at ``target_price`` and
+        track it in the pending list.
+
+        GTC (not DAY) means the take-profit order rests at Schwab across
+        sessions until it fills — no nightly cancel/re-place churn. Callers:
+          • _confirm_open_fill  (trigger="open") — rest it the moment the
+            short option fills, so decay is captured with no monitoring gap.
+          • _check_profit_targets (trigger="target") — fallback for any open
+            position that has no resting close yet (e.g. positions opened
+            before this feature, or a prior placement that failed).
+
+        Idempotent: if a BUY_TO_CLOSE for this contract is already pending it
+        does nothing and returns None. Returns the trade_id on success.
+        """
+        occ_norm = occ_sym.replace(" ", "")
+        for e in _load_pending():
+            if (e.get("signal") == "BUY_TO_CLOSE"
+                    and e.get("occ_sym", "").replace(" ", "") == occ_norm):
+                return None    # already have a resting close for this contract
+
+        try:
+            from schwab.orders.options import option_buy_to_close_limit
+            from schwab.orders.common import Duration, Session
+            order = (
+                option_buy_to_close_limit(occ_sym, 1, f"{target_price:.2f}")
+                .set_duration(Duration.GOOD_TILL_CANCEL)
+                .set_session(Session.NORMAL)
+                .build()
+            )
+            resp = client.place_order(account_hash, order)
+            resp.raise_for_status()
+            location = resp.headers.get("Location", "")
+            schwab_order_id = location.rstrip("/").split("/")[-1] if location else None
+        except Exception as exc:
+            print(f"  [AutoClose] ❌ BUY_TO_CLOSE failed: {exc}")
+            scanner._send_slack(f"{SLACK_MENTION} ❌ *BUY_TO_CLOSE failed* — "
+                                f"{symbol} ${strike}\n{exc}")
+            return None
+
+        trade_id = _next_trade_id()
+        pending  = _load_pending()
+        pending.append({
+            "trade_id":        trade_id,
+            "symbol":          symbol,
+            "signal":          "BUY_TO_CLOSE",
+            "strike":          strike,
+            "expiry":          expiry if isinstance(expiry, str) else expiry.isoformat(),
+            "dte":             days_left,
+            "limit":           target_price,
+            "occ_sym":         occ_sym,
+            "schwab_order_id": schwab_order_id,
+            "notified_at":     _now_et().strftime("%Y-%m-%d %H:%M:%S"),
+            "duration":        "GTC",     # rests across sessions — do not day-expire
+            "opening_ref":     opening_ref,
+        })
+        _save_pending(pending)
+
+        est_pnl  = round((entry_prem - target_price) * 100, 2)
+        where    = "resting on open" if trigger == "open" else "target near"
+        markline = f"*Mark:* ${mark:.2f}  " if mark else ""
+        scanner._send_slack(
+            f"{SLACK_MENTION} 🎯 *BUY_TO_CLOSE placed (GTC) — {trade_id}*\n"
+            f"*{symbol} ${strike} ({opening_signal})* — {where}\n"
+            f"{markline}*Target:* ${target_price:.2f}  *Entry:* ${entry_prem:.2f}\n"
+            f"*Limit:* ${target_price:.2f} (GTC)  |  DTE: {days_left}\n"
+            f"*Est. P&L at fill:* +${est_pnl:,.2f}"
+        )
+        print(f"  [AutoClose] ✅ BUY_TO_CLOSE placed (GTC): {trade_id}  "
+              f"{symbol} ${strike}  limit ${target_price:.2f}  "
+              f"est P&L +${est_pnl:.2f}")
+        return trade_id
+
     # ------------------------------------------------------------------ #
     # Scan hook — runs at the start of every scan cycle                  #
     # ------------------------------------------------------------------ #
@@ -1069,6 +1178,11 @@ class RealOverseer:
         cutoff = _now_et().replace(hour=4, minute=0, second=0, microsecond=0)
         live, expired = [], []
         for entry in keep:
+            # GTC orders (e.g. resting buy-to-close targets) do not die at the
+            # close — keep tracking them until Schwab reports fill/cancel.
+            if entry.get("duration") == "GTC":
+                live.append(entry)
+                continue
             try:
                 notified = datetime.strptime(
                     entry["notified_at"], "%Y-%m-%d %H:%M:%S"
@@ -1149,55 +1263,14 @@ class RealOverseer:
                   f"entry=${entry_prem:.2f} "
                   f"({(1 - mark / entry_prem) * 100:.0f}% profit so far)")
 
-            try:
-                from schwab.orders.options import option_buy_to_close_limit
-                from schwab.orders.common import Duration, Session
-                order = (
-                    option_buy_to_close_limit(occ_spaced, 1, f"{target_price:.2f}")
-                    .set_duration(Duration.DAY)
-                    .set_session(Session.NORMAL)
-                    .build()
-                )
-                resp = client.place_order(account_hash, order)
-                resp.raise_for_status()
-                location = resp.headers.get("Location", "")
-                schwab_order_id = location.rstrip("/").split("/")[-1] if location else None
-            except Exception as exc:
-                print(f"  [AutoClose] ❌ BUY_TO_CLOSE failed: {exc}")
-                scanner._send_slack(f"{SLACK_MENTION} ❌ *BUY_TO_CLOSE failed* — "
-                                    f"{opening['symbol']} ${strike}\n{exc}")
-                continue
-
-            trade_id = _next_trade_id()
-            pending  = _load_pending()
-            pending.append({
-                "trade_id":        trade_id,
-                "symbol":          opening["symbol"],
-                "signal":          "BUY_TO_CLOSE",
-                "strike":          strike,
-                "expiry":          expiry.isoformat(),
-                "dte":             days_left,
-                "limit":           target_price,
-                "occ_sym":         occ_spaced,
-                "schwab_order_id": schwab_order_id,
-                "notified_at":     _now_et().strftime("%Y-%m-%d %H:%M:%S"),
-                "opening_ref":     key,
-            })
-            _save_pending(pending)
-
-            est_pnl = round((entry_prem - target_price) * 100, 2)
-            scanner._send_slack(
-                f"{SLACK_MENTION} 🎯 *BUY_TO_CLOSE placed — {trade_id}*\n"
-                f"*{opening['symbol']} ${strike} ({opening['signal']})* — "
-                f"target {status}\n"
-                f"*Mark:* ${mark:.2f}  *Target:* ${target_price:.2f}  "
-                f"*Entry:* ${entry_prem:.2f}\n"
-                f"*Limit:* ${target_price:.2f} (DAY)  |  DTE: {days_left}\n"
-                f"*Est. P&L at fill:* +${est_pnl:,.2f}"
+            self._submit_close_order(
+                scanner, client, account_hash,
+                symbol=opening["symbol"], strike=strike, expiry=expiry,
+                days_left=days_left, occ_sym=occ_spaced, entry_prem=entry_prem,
+                target_price=target_price, mark=mark,
+                opening_signal=opening["signal"], opening_ref=key,
+                trigger="target",
             )
-            print(f"  [AutoClose] ✅ BUY_TO_CLOSE placed: {trade_id}  "
-                  f"{opening['symbol']} ${strike}  limit ${target_price:.2f}  "
-                  f"est P&L +${est_pnl:.2f}")
 
 
 # ---------------------------------------------------------------------------
