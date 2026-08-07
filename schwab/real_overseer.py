@@ -427,6 +427,38 @@ def fetch_orders(client, account_hash: str, days_back: int = 7) -> list:
         return []
 
 
+def place_order_with_retry(client, account_hash: str, order,
+                           attempts: int = 4, base_delay: float = 1.5):
+    """
+    Place an order, retrying on HTTP 429 (rate limit) with exponential backoff.
+
+    Opening + immediately resting a GTC close fires several order/quote calls
+    within a couple of seconds, which trips Schwab's rate limiter (observed:
+    the close order after an XOM open failed with 429). A 429 means the request
+    was rejected, not accepted, so retrying is safe — it cannot double-place.
+
+    Returns the successful response. Re-raises the last error on other failures
+    or once attempts are exhausted.
+    """
+    last_exc = None
+    for i in range(attempts):
+        try:
+            resp = client.place_order(account_hash, order)
+            resp.raise_for_status()
+            return resp
+        except Exception as exc:
+            last_exc = exc
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if status == 429 and i < attempts - 1:
+                delay = base_delay * (2 ** i)
+                print(f"  [Overseer] ⏳ 429 rate-limited placing order — "
+                      f"retry {i + 1}/{attempts - 1} in {delay:.1f}s")
+                time.sleep(delay)
+                continue
+            raise
+    raise last_exc     # pragma: no cover — loop always returns or raises
+
+
 def parse_entered_time(order: dict) -> datetime | None:
     """
     Schwab returns enteredTime as an ISO8601 string like
@@ -785,8 +817,7 @@ class RealOverseer:
                 f"  conf={s.get('confidence', '?')}  reason: {s.get('reason', '—')}"
             )
 
-            resp = client.place_order(account_hash, order)
-            resp.raise_for_status()
+            resp = place_order_with_retry(client, account_hash, order)
             location        = resp.headers.get("Location", "")
             schwab_order_id = location.rstrip("/").split("/")[-1] if location else None
             print(f"  [Overseer] ✅ REAL ORDER PLACED: {occ_sym}  "
@@ -923,8 +954,7 @@ class RealOverseer:
                 .set_session(Session.NORMAL)
                 .build()
             )
-            resp = client.place_order(account_hash, order)
-            resp.raise_for_status()
+            resp = place_order_with_retry(client, account_hash, order)
             location = resp.headers.get("Location", "")
             schwab_order_id = location.rstrip("/").split("/")[-1] if location else None
         except Exception as exc:

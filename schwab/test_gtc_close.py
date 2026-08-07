@@ -154,8 +154,85 @@ def test_gtc_not_day_expired():
     print("ok  test_gtc_not_day_expired")
 
 
+class _HttpErr(Exception):
+    """Mimics httpx.HTTPStatusError — carries .response.status_code."""
+    def __init__(self, status):
+        self.response = type("R", (), {"status_code": status})()
+        super().__init__(f"HTTP {status}")
+
+
+class FakeResp429:
+    def raise_for_status(self):
+        raise _HttpErr(429)
+
+
+class FlakyClient:
+    """Returns 429 for the first `fail_times` placements, then succeeds."""
+    def __init__(self, fail_times):
+        self.fail_times = fail_times
+        self.calls = 0
+
+    def place_order(self, account_hash, order):
+        self.calls += 1
+        if self.calls <= self.fail_times:
+            return FakeResp429()
+        return FakeResp(str(9000 + self.calls))
+
+
+def test_retry_succeeds_after_429(monkeypatch_sleep=None):
+    """Two 429s then success → order lands, backoff was used."""
+    slept = []
+    orig_sleep = ro.time.sleep
+    ro.time.sleep = lambda s: slept.append(s)
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            _fresh_state(tmp)
+            ov, scanner = _bare_overseer(), FakeScanner()
+            client = FlakyClient(fail_times=2)
+            tid = ov._submit_close_order(
+                scanner, client, "acct",
+                symbol="XOM", strike=144.0, expiry="2026-09-04", days_left=28,
+                occ_sym="XOM  260904P00144000", entry_prem=2.03,
+                target_price=1.02, trigger="open",
+            )
+            assert tid == "T0001", tid
+            assert client.calls == 3, f"1 fail+1 fail+1 ok = 3 calls, got {client.calls}"
+            assert len(slept) == 2, f"backoff slept twice, got {slept}"
+            assert slept == [1.5, 3.0], slept        # exponential
+            assert len(ro._load_pending()) == 1, "order tracked after retry"
+    finally:
+        ro.time.sleep = orig_sleep
+    print("ok  test_retry_succeeds_after_429")
+
+
+def test_retry_gives_up():
+    """Persistent 429 → helper exhausts attempts, close is a clean no-op."""
+    orig_sleep = ro.time.sleep
+    ro.time.sleep = lambda s: None
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            _fresh_state(tmp)
+            ov, scanner = _bare_overseer(), FakeScanner()
+            client = FlakyClient(fail_times=99)
+            tid = ov._submit_close_order(
+                scanner, client, "acct",
+                symbol="XOM", strike=144.0, expiry="2026-09-04", days_left=28,
+                occ_sym="XOM  260904P00144000", entry_prem=2.03,
+                target_price=1.02, trigger="open",
+            )
+            assert tid is None, "no trade_id when all attempts 429"
+            assert client.calls == 4, f"default 4 attempts, got {client.calls}"
+            assert ro._load_pending() == [], "nothing tracked on failure"
+            assert any("failed" in m.lower() for m in scanner.slack), scanner.slack
+    finally:
+        ro.time.sleep = orig_sleep
+    print("ok  test_retry_gives_up")
+
+
 if __name__ == "__main__":
     test_places_gtc_close()
     test_idempotent()
     test_gtc_not_day_expired()
+    test_retry_succeeds_after_429()
+    test_retry_gives_up()
     print("\nALL PASS")
