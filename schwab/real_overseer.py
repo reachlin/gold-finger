@@ -1263,35 +1263,44 @@ class RealOverseer:
             if occ_norm in pending_close or occ_norm in working_close:
                 continue
 
-            try:
-                resp = client.get_quotes([occ_spaced])
-                resp.raise_for_status()
-                q    = resp.json().get(occ_spaced, {}).get("quote", {})
-                mark = float(q.get("mark") or q.get("markPrice") or 0)
-            except Exception as exc:
-                print(f"  [AutoClose] ⚠ quote fetch failed for {occ_spaced}: {exc}")
-                continue
-            if mark <= 0:
-                continue
-
+            # Every open short should always carry a resting GTC buy-to-close
+            # at its profit target. It can only ever fill in our favor (we buy
+            # back cheaper than we sold), and it stays live at Schwab even if
+            # this process is down or the OAuth token has expired — so a
+            # weekend price spike gets captured with no human in the loop.
+            # Therefore place one for ANY uncovered position, regardless of how
+            # far the mark is from target (no "near target" gate). The
+            # pending_close/working_close checks above already prevent dupes.
             entry_prem = float(opening["premium_sh"])
             try:
                 entry_iv = float(opening.get("hv", 30)) / 100
             except (ValueError, TypeError):
                 entry_iv = 0.30
             dte          = int(float(opening["dte"]))
-            target_pct   = adaptive_profit_target(entry_iv, dte)
-            target_price = round(entry_prem * target_pct, 2)
-            if mark > target_price * 1.5:   # not close enough yet
-                continue
+            target_price = round(entry_prem * adaptive_profit_target(entry_iv, dte), 2)
+
+            # Live mark is best-effort — for the log line only. A quote failure
+            # must NOT stop us from placing the protective cover.
+            mark = None
+            try:
+                resp = client.get_quotes([occ_spaced])
+                resp.raise_for_status()
+                q    = resp.json().get(occ_spaced, {}).get("quote", {})
+                mark = float(q.get("mark") or q.get("markPrice") or 0) or None
+            except Exception as exc:
+                print(f"  [AutoClose] ⚠ quote fetch failed for {occ_spaced}: {exc}")
 
             _, expiry, _, strike = parse_occ_symbol(occ_norm)
             days_left = max((expiry - today_et).days, 0)
-            status = "hit" if mark <= target_price else "near"
-            print(f"\n  [AutoClose] 🎯 Target {status}: {opening['symbol']} "
-                  f"${strike} mark=${mark:.2f} target=${target_price:.2f} "
-                  f"entry=${entry_prem:.2f} "
-                  f"({(1 - mark / entry_prem) * 100:.0f}% profit so far)")
+            if mark is not None:
+                where = "target hit" if mark <= target_price else "resting cover"
+                progress = (f"mark=${mark:.2f} "
+                            f"({(1 - mark / entry_prem) * 100:.0f}% profit so far)")
+            else:
+                where, progress = "resting cover", "mark=n/a"
+            print(f"\n  [AutoClose] 🎯 {where}: {opening['symbol']} "
+                  f"${strike} target=${target_price:.2f} entry=${entry_prem:.2f} "
+                  f"{progress}")
 
             self._submit_close_order(
                 scanner, client, account_hash,

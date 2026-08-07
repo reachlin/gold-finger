@@ -229,10 +229,99 @@ def test_retry_gives_up():
     print("ok  test_retry_gives_up")
 
 
+class _QResp:
+    def __init__(self, data=None, headers=None):
+        self._d = data or {}
+        self.headers = headers or {}
+    def raise_for_status(self):
+        pass
+    def json(self):
+        return self._d
+
+
+class QuotingClient:
+    """Quotes a fixed mark and records placed orders."""
+    def __init__(self, mark):
+        self.mark = mark
+        self.placed = []
+    def get_quotes(self, syms):
+        return _QResp(data={syms[0]: {"quote": {"mark": self.mark}}})
+    def place_order(self, account_hash, order):
+        self.placed.append(order)
+        return _QResp(headers={"Location": f"/orders/{7000 + len(self.placed)}"})
+
+
+def _write_open_xom_ledger(path):
+    import csv, options_ledger as ol
+    with open(path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=ol.FIELDNAMES)
+        w.writeheader()
+        w.writerow({"date": "2026-08-07 09:44:38", "symbol": "XOM",
+                    "signal": "SELL_PUT", "strike": "144.0",
+                    "premium_sh": "2.03", "premium_ct": "203.0", "dte": "28",
+                    "hv": "24.9", "verdict": "APPROVED", "reason": "test"})
+    return "XOM_2026-08-07 09:44:38", "XOM   260904P00144000"
+
+
+class _LedgerScanner:
+    def __init__(self, ledger_path):
+        self.OPTION_LEDGER_PATH = ledger_path
+        self.slack = []
+    def _send_slack(self, m):
+        self.slack.append(m)
+
+
+def test_cover_placed_far_from_target():
+    """An open short with no resting close gets a GTC cover even when the mark
+    is nowhere near target (this is the weekend-spike safety net)."""
+    from options_pricer import adaptive_profit_target
+    with tempfile.TemporaryDirectory() as tmp:
+        _fresh_state(tmp)
+        ledger = os.path.join(tmp, "opt_ledger.csv")
+        key, occ = _write_open_xom_ledger(ledger)
+        scanner = _LedgerScanner(ledger)
+        client  = QuotingClient(mark=2.03)      # == entry, ~0% profit, far from target
+        ov = _bare_overseer()
+
+        ov._check_profit_targets(scanner, client, "acct", orders=[],
+                                 occ_map={key: occ})
+
+        assert len(client.placed) == 1, "cover placed despite being far from target"
+        assert client.placed[0]["duration"] == "GOOD_TILL_CANCEL"
+        pend = ro._load_pending()
+        assert len(pend) == 1 and pend[0]["signal"] == "BUY_TO_CLOSE", pend
+        assert pend[0]["duration"] == "GTC"
+        expected = round(2.03 * adaptive_profit_target(0.249, 28), 2)
+        assert pend[0]["limit"] == expected, (pend[0]["limit"], expected)
+    print("ok  test_cover_placed_far_from_target")
+
+
+def test_cover_skipped_when_already_covered():
+    """No duplicate cover when a resting BUY_TO_CLOSE is already pending."""
+    with tempfile.TemporaryDirectory() as tmp:
+        _fresh_state(tmp)
+        ledger = os.path.join(tmp, "opt_ledger.csv")
+        key, occ = _write_open_xom_ledger(ledger)
+        ro._save_pending([{"symbol": "XOM", "signal": "BUY_TO_CLOSE",
+                           "occ_sym": occ, "strike": 144.0, "duration": "GTC"}])
+        scanner = _LedgerScanner(ledger)
+        client  = QuotingClient(mark=2.03)
+        ov = _bare_overseer()
+
+        ov._check_profit_targets(scanner, client, "acct", orders=[],
+                                 occ_map={key: occ})
+
+        assert client.placed == [], "must not place a second cover"
+        assert len(ro._load_pending()) == 1, "pending unchanged"
+    print("ok  test_cover_skipped_when_already_covered")
+
+
 if __name__ == "__main__":
     test_places_gtc_close()
     test_idempotent()
     test_gtc_not_day_expired()
     test_retry_succeeds_after_429()
     test_retry_gives_up()
+    test_cover_placed_far_from_target()
+    test_cover_skipped_when_already_covered()
     print("\nALL PASS")
