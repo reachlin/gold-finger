@@ -9,3 +9,15 @@ date,symbol,signal,close,strike,premium_sh,premium_ct,premium_pct,dte,hv,adx,con
 2026-07-22 12:10:36,KO,SELL_PUT,82.5,78.0,0.58,58.0,0.7,30,27.6,14.2,75,,BUDGET_BLOCK,sideways stock — sell 5% OTM put for income (The Scavenger),,
 2026-07-22 12:10:36,PG,SELL_PUT,150.25,143.0,2.055,205.5,1.37,30,24.7,10.9,70,,BUDGET_BLOCK,sideways stock — sell 5% OTM put for income (The Scavenger),,
 2026-07-28 09:31:41,KO,SELL_PUT,,78.0,,,,25,,,,,CLOSED,closed_on_schwab at $0.25 (reconciled from Schwab),40.0,KO_2026-07-20 22:38:25
+2026-07-30 09:49:20,KO,SELL_PUT,87.57,83.0,0.44,44.0,0.55,29,32.6,18.5,56,,APPROVED,real fill confirmed @ $0.44,,
+2026-08-04 09:32:46,NVDA,SELL_PUT,,195.0,,,,32,,,,,CLOSED,early_exit bought back at $1.70 vs $5.25 entry,355.0,NVDA_2026-07-20 22:37:05
+2026-08-04 09:33:26,NVDA,SELL_PUT,211.13,200.0,6.07,607.0,2.83,31,44.0,14.2,66,,APPROVED,real fill confirmed @ $6.07,,
+2026-08-07 09:36:31,NVDA,SELL_PUT,,200.0,,,,31,,,,,CLOSED,early_exit bought back at $2.65 vs $6.07 entry,342.0,NVDA_2026-08-04 09:33:26
+2026-08-07 09:44:38,XOM,SELL_PUT,151.65,144.0,2.03,203.0,1.24,28,24.9,19.9,67,,APPROVED,real fill confirmed @ $2.03,,
+2026-08-07 10:40:21,KO,SELL_PUT,,83.0,,,,29,,,,,CLOSED,early_exit bought back at $0.39 vs $0.44 entry,5.0,KO_2026-07-30 09:49:20
+2026-08-07 10:55:05,XOM,SELL_PUT,152.67,145.0,2.04,204.0,1.33,28,24.1,19.9,64,,APPROVED,real fill confirmed @ $2.04,,
+2026-08-10 11:24:38,XOM,SELL_PUT,,144.0,,,,28,,,,,CLOSED,early_exit bought back at $0.79 vs $2.03 entry,124.0,XOM_2026-08-07 09:44:38
+2026-08-10 13:36:34,XOM,SELL_PUT,,145.0,,,,28,,,,,CLOSED,early_exit bought back at $0.79 vs $2.04 entry,125.0,XOM_2026-08-07 10:55:05
+2026-08-10 13:37:33,NVDA,SELL_PUT,218.2,205.0,4.91,491.0,2.2,32,41.4,18.0,56,,APPROVED,real fill confirmed @ $4.91,,
+2026-08-17 10:39:25,NVDA,SELL_PUT,,205.0,,,,32,,,,,CLOSED,early_exit bought back at $2.12 vs $4.91 entry,279.0,NVDA_2026-08-10 13:37:33
+2026-08-17 10:40:16,IBM,SELL_PUT,230.89,220.0,4.37,437.0,1.89,32,31.4,16.0,63,,APPROVED,real fill confirmed @ $4.37,,
