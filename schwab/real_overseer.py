@@ -408,7 +408,13 @@ def available_funds(balances: dict) -> float | None:
               if balances.get(k) is not None]
     if not values:
         return None
-    return next((v for v in values if v > 0), values[0])
+    avail = next((v for v in values if v > 0), values[0])
+    # Trade SETTLED cash only. Schwab grants provisional buying power the instant
+    # an ACH deposit is initiated, so availableFunds includes still-in-flight
+    # money (pendingDeposits). Subtract it; when the transfer lands pendingDeposits
+    # drops to 0 and the funds become usable automatically — no restart needed.
+    pending = float(balances.get("pendingDeposits", 0) or 0)
+    return avail - pending
 
 
 def fetch_orders(client, account_hash: str, days_back: int = 7) -> list:
