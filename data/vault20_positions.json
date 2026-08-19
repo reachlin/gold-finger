@@ -1,43 +1,133 @@
 {
   "open": [
     {
-      "symbol": "BFLY",
-      "shares": 1000.0,
-      "entry": 8.78,
-      "entry_date": "2026-06-30",
+      "symbol": "SPCX",
+      "shares": 200.0,
+      "entry": 148.0949,
+      "entry_date": "2026-08-17",
       "target": null,
       "stop": null,
-      "note": "long stock"
+      "note": "long stock — 100 @ $149.00 + 100 @ $147.19 on 2026-08-17, avg $148.0949 ($29,618.98). Covered by the SPCX 150C short below."
     },
+    {
+      "symbol": "INTC_CALL_185_20281215",
+      "shares": 30.0,
+      "entry": 25.00,
+      "entry_date": "2026-08-19",
+      "target": null,
+      "stop": null,
+      "note": "long LEAP call INTC 185C 12/15/28 — bought 30 @ $25.00 ($75,000) on 2026-08-19, funded by selling the 1,000 INTC shares. Deep-OTM ~2.3yr bet (INTC ~$94.6 at entry); breakeven $210 (+122%)."
+    },
+    {
+      "symbol": "SPCX_CALL_150_20260918",
+      "shares": -2.0,
+      "entry": 7.05,
+      "entry_date": "2026-08-19",
+      "target": null,
+      "stop": null,
+      "note": "short call SPCX 150C 09/18 (covered by 200 sh) — sold 2 @ $7.05 ($1,410) on 2026-08-19. Covered call vs SPCX ~$141 spot; strike $150."
+    }
+  ],
+  "closed": [
     {
       "symbol": "INTC",
       "shares": 1000.0,
       "entry": 20.08,
       "entry_date": "2026-06-28",
-      "target": null,
-      "stop": null,
-      "note": "long stock"
+      "exit": 94.5801,
+      "exit_date": "2026-08-19",
+      "pnl_dollar": 74500.10,
+      "pnl_pct": 371.02,
+      "note": "long stock — bought 1,000 @ $20.08 ($20,080), sold 1,000 @ $94.5801 ($94,580.10) on 2026-08-19. Booked +$74,500 (+371%); the monster winner, exited to fund the INTC 185C LEAP."
+    },
+    {
+      "symbol": "INTC_CALL_110_20260918",
+      "shares": -5.0,
+      "entry": 5.14968,
+      "entry_date": "2026-08-10",
+      "exit": 2.40,
+      "exit_date": "2026-08-19",
+      "pnl_dollar": 1374.84,
+      "pnl_pct": 53.40,
+      "note": "short call INTC 110C 09/18 (covered) — sold 5 @ $5.14968 ($2,574.84), bought to close 5 @ $2.40 ($1,200) on 2026-08-19. Kept $1,374.84 (53.4%); freed the shares to sell."
+    },
+    {
+      "symbol": "BFLY",
+      "shares": 1000.0,
+      "entry": 8.78,
+      "entry_date": "2026-06-30",
+      "exit": 9.00,
+      "exit_date": "2026-08-17",
+      "pnl_dollar": 220.00,
+      "pnl_pct": 2.51,
+      "note": "long stock — bought 1,000 @ $8.78 ($8,780), sold 1,000 @ $9.00 ($9,000) on 2026-08-17. +$220 (+2.5%)."
+    },
+    {
+      "symbol": "SPCX_CALL_50_20281215",
+      "shares": 2.0,
+      "entry": 73.00,
+      "entry_date": "2026-08-04",
+      "exit": 105.35,
+      "exit_date": "2026-08-17",
+      "pnl_dollar": 6470.00,
+      "pnl_pct": 44.32,
+      "note": "long LEAP call SPCX 50C 12/15/28 — bought 2 @ $73.00 ($14,600), sold 2 @ $105.35 ($21,070) on 2026-08-17. Booked +$6,470 (+44%)."
+    },
+    {
+      "symbol": "INTC_PUT_90_20260918",
+      "shares": -2.0,
+      "entry": 5.65,
+      "entry_date": "2026-08-07",
+      "exit": 2.50,
+      "exit_date": "2026-08-17",
+      "pnl_dollar": 630.00,
+      "pnl_pct": 55.75,
+      "note": "short put INTC 90P 09/18 — sold 2 @ $5.65 ($1,130), bought to close 2 @ $2.50 ($500) on 2026-08-17. Kept $630 (55.7%)."
+    },
+    {
+      "symbol": "INTC_PUT_100_20260918",
+      "shares": -1.0,
+      "entry": 6.00,
+      "entry_date": "2026-08-17",
+      "exit": 5.78,
+      "exit_date": "2026-08-17",
+      "pnl_dollar": 22.00,
+      "pnl_pct": 3.67,
+      "note": "short put INTC 100P 09/18 — sold 1 @ $6.00 ($600), bought back 1 @ $5.78 ($578) same day 2026-08-17. +$22 scratch."
+    },
+    {
+      "symbol": "INTC_CALL_130_20260918",
+      "shares": -5.0,
+      "entry": 4.1497,
+      "entry_date": "unknown",
+      "exit": 1.80,
+      "exit_date": "2026-08-10",
+      "pnl_dollar": 1174.85,
+      "pnl_pct": 56.62,
+      "note": "short call INTC 130C 09/18 (covered by 1,000 sh) — opened 5 @ $4.1497 ($2,074.85), bought to close 5 @ $1.80 ($900.00) on 2026-08-10 10:19 ET. Kept $1,174.85 (56.6%). Open date not recorded."
     },
     {
       "symbol": "INTC_PUT_100_20260814",
       "shares": -1.0,
       "entry": 8.80,
       "entry_date": "2026-07-08",
-      "target": null,
-      "stop": null,
-      "note": "short put INTC 100P 08/14; premium $879.96"
+      "exit": null,
+      "exit_date": "2026-08-07",
+      "pnl_dollar": null,
+      "pnl_pct": null,
+      "note": "short put INTC 100P 08/14 (premium $879.96). No longer on the book as of 2026-08-07 Schwab sync — closed or rolled (possibly into 90P 09/18); exit price / P&L not recorded — TODO confirm."
     },
     {
       "symbol": "IONQ_PUT_40_20260821",
       "shares": -2.0,
       "entry": 3.80,
       "entry_date": "2026-07-08",
-      "target": null,
-      "stop": null,
-      "note": "short put IONQ 40P 08/21; 2 contracts, premium $759.94"
-    }
-  ],
-  "closed": [
+      "exit": 3.78,
+      "exit_date": "2026-08-04",
+      "pnl_dollar": 3.94,
+      "pnl_pct": 0.52,
+      "note": "short put IONQ 40P 08/21 — opened 2 @ $3.80 ($759.94), bought back 2 @ $3.78 ($756.00). Essentially scratch (+$3.94)."
+    },
     {
       "symbol": "INTC_PUT_38_20260109",
       "shares": -5.0,
