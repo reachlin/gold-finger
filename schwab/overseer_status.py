@@ -66,6 +66,12 @@ def committed_from_positions(positions: list[dict], covered_calls: bool = True) 
     return total
 
 
+def settled_free(cash: float, committed: float, pending: float) -> float:
+    """Deployable cash the overseer will actually use: settled cash minus locked
+    collateral. Unsettled ACH deposits (pending) are excluded until they land."""
+    return cash - committed - pending
+
+
 def recent_events(lines: list[str], limit: int = 12) -> list[str]:
     """State-change events from the WHOLE log (not a tail), newest last."""
     hits = [ln.strip() for ln in lines
@@ -123,9 +129,18 @@ def main():
                           marketValue=p.get("marketValue"))
                      for p in sa.get("positions", [])]
         cash = bal.get("cashBalance") or 0
+        pending = float(bal.get("pendingDeposits", 0) or 0)
         committed = committed_from_positions(positions)
+        # Settled free = what the overseer will actually deploy. It gates on
+        # settled cash, so unsettled ACH deposits (pendingDeposits) don't count
+        # until they land — mirror that here or the tool over-reports free cash.
+        free = settled_free(cash, committed, pending)
         print(f"\n  LIVE ACCOUNT {sa.get('accountNumber')}:")
-        print(f"    Cash ${cash:,.2f}   committed ${committed:,.0f}   free ${cash-committed:,.0f}")
+        print(f"    Cash ${cash:,.2f}   committed ${committed:,.0f}   "
+              f"free ${free:,.0f} (settled)")
+        if pending:
+            print(f"    ⏳ pendingDeposits ${pending:,.0f} in-flight — "
+                  f"not usable until it settles (then free → ${cash-committed:,.0f})")
         shorts = short_options(positions)
         print(f"    Open option positions: {len(shorts)}")
         for p in shorts:

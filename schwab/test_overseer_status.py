@@ -11,8 +11,16 @@ import os, sys
 sys.path.insert(0, os.path.dirname(__file__))
 from overseer_status import (
     parse_occ, committed_from_positions, short_options, recent_events,
-    last_scan,
+    last_scan, settled_free,
 )
+
+
+def test_settled_free_excludes_pending():
+    # 2026-08-18: cash $51,697, IBM put committed $22,000, $20K ACH pending.
+    # Overseer deploys settled only → 51697.44 - 22000 - 20000 = 9697.44
+    assert abs(settled_free(51697.44, 22000, 20000) - 9697.44) < 0.01
+    # After the ACH lands (pending 0) → 29697.44
+    assert abs(settled_free(51697.44, 22000, 0) - 29697.44) < 0.01
 
 
 def test_parse_occ():
