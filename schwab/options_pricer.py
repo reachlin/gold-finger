@@ -153,6 +153,38 @@ def adaptive_profit_target(entry_iv: float, entry_dte: int,
     return target_min + (target_max - target_min) * score
 
 
+def should_take_early_profit(entry_prem: float, mark: float | None,
+                             days_held: int,
+                             min_profit: float | None = None,
+                             max_days: int | None = None) -> bool:
+    """
+    v1 dynamic early take-profit for a short option: bank a FAST winner instead
+    of waiting out the last of the decay.
+
+    Rationale: a quick mark-to-market gain on a short premium position is mostly
+    IV crush — once the volatility edge is realized, the remaining theta is slow
+    and low-yield while the same tail/assignment risk and collateral lock-up
+    persist. So harvest and redeploy. "Reached profit fast" is a robust proxy
+    for "IV dropped" and needs no extra data, which is why v1 keys off it.
+
+    Trigger: profit captured so far >= min_profit AND days_held <= max_days.
+
+    Thresholds are fixed constants for now (from strategy_params). The next
+    iteration makes them market-aware (VIX regime) and stock-aware (per-name IV
+    rank) — that logic belongs HERE so every caller upgrades at once. This never
+    lowers the exit bar below the resting GTC floor; callers use it only to
+    TIGHTEN (close sooner), never to hold longer.
+    """
+    if min_profit is None or max_days is None:
+        from strategy_params import EARLY_TP_MIN_PROFIT, EARLY_TP_MAX_DAYS
+        min_profit = EARLY_TP_MIN_PROFIT if min_profit is None else min_profit
+        max_days   = EARLY_TP_MAX_DAYS if max_days is None else max_days
+    if not entry_prem or entry_prem <= 0 or mark is None or mark < 0:
+        return False
+    profit = (entry_prem - mark) / entry_prem
+    return profit >= min_profit and days_held <= max_days
+
+
 def simulate_put_trade(future_df: pd.DataFrame, entry_S: float, K: float,
                        sigma: float, r: float = RISK_FREE_RATE,
                        dte: int = PUT_DTE, max_hold: int = PUT_MAX_HOLD,

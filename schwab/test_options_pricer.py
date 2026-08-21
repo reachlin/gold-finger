@@ -242,3 +242,44 @@ class TestImpliedVol:
         price = black_scholes_put(100.0, 100.0, 30/365, 0.05, 0.25)
         iv    = implied_vol(price, 100.0, 100.0, 30/365, 0.05, option_type="put")
         assert isinstance(iv, float)
+
+
+class TestEarlyTakeProfit:
+    """v1 dynamic early take-profit: bank a fast winner, don't grind the tail."""
+
+    def test_fast_thirty_pct_triggers(self):
+        from options_pricer import should_take_early_profit
+        # entry $4.37, mark $3.00 -> 31% captured, only 4 days held -> take it
+        assert should_take_early_profit(4.37, 3.00, days_held=4) is True
+
+    def test_thirty_pct_but_slow_does_not_trigger(self):
+        from options_pricer import should_take_early_profit
+        # same 31% profit but it took 20 days -> normal grind, leave the GTC
+        assert should_take_early_profit(4.37, 3.00, days_held=20) is False
+
+    def test_fast_but_under_threshold_does_not_trigger(self):
+        from options_pricer import should_take_early_profit
+        # $4.37 -> $3.60 is only 18% captured -> not enough yet
+        assert should_take_early_profit(4.37, 3.60, days_held=2) is False
+
+    def test_missing_mark_is_safe(self):
+        from options_pricer import should_take_early_profit
+        assert should_take_early_profit(4.37, None, days_held=1) is False
+
+    def test_bad_entry_is_safe(self):
+        from options_pricer import should_take_early_profit
+        assert should_take_early_profit(0.0, 1.0, days_held=1) is False
+
+    def test_boundaries_inclusive(self):
+        from options_pricer import should_take_early_profit
+        # exactly 30% captured on exactly day 10 -> triggers (>=, <=)
+        assert should_take_early_profit(10.0, 7.0, days_held=10) is True
+        # one day too slow -> no
+        assert should_take_early_profit(10.0, 7.0, days_held=11) is False
+
+    def test_custom_thresholds_override(self):
+        from options_pricer import should_take_early_profit
+        assert should_take_early_profit(10.0, 5.0, days_held=3,
+                                        min_profit=0.60, max_days=5) is False
+        assert should_take_early_profit(10.0, 3.0, days_held=3,
+                                        min_profit=0.60, max_days=5) is True

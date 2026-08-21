@@ -139,3 +139,13 @@ RESID_MOM_MIN_PCT = 0.0     # minimum residual return to allow a put entry (0 = 
 # and the live ledger processor in options_ledger.py).
 SCAV_PROFIT_TARGET_MIN = 0.35   # exit at 35% of premium captured (thin/short trades)
 SCAV_PROFIT_TARGET_MAX = 0.65   # exit at 65% of premium captured (fat/long trades)
+
+# ---- Dynamic early take-profit (v1: simple fixed thresholds) --------------
+# Bank a fast winner instead of grinding out the last of the decay. A quick
+# mark-to-market gain on a short premium position is mostly IV crush — once the
+# vol edge is realized, the remaining theta isn't worth the tail/assignment risk
+# or the tied-up collateral, so harvest and redeploy. These are CONSTANTS for
+# now; the plan is to make them market-aware (VIX regime) and stock-aware
+# (per-name IV rank) later — all behind options_pricer.should_take_early_profit.
+EARLY_TP_MIN_PROFIT = 0.30      # trigger once >= 30% of premium is captured
+EARLY_TP_MAX_DAYS   = 10        # ...and it got there fast (<= N calendar days held)
