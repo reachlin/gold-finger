@@ -905,6 +905,10 @@ class RealOverseer:
                     entry_iv = float(sd.get("hv", 30)) / 100
                 except (ValueError, TypeError):
                     entry_iv = 0.30
+                try:                       # true entry IV (%) for v2 IV-crush TP
+                    entry_iv_pct = float(sd.get("iv")) if sd.get("iv") else None
+                except (ValueError, TypeError):
+                    entry_iv_pct = None
                 dte          = int(float(entry.get("dte", 30)))
                 target_price = round(fill * adaptive_profit_target(entry_iv, dte), 2)
                 try:
@@ -919,6 +923,7 @@ class RealOverseer:
                     occ_sym=entry["occ_sym"], entry_prem=fill,
                     target_price=target_price, opening_signal=entry["signal"],
                     opening_ref=entry.get("trade_id"), trigger="open",
+                    entry_iv=entry_iv_pct,
                 )
             except Exception as exc:
                 print(f"  [Overseer] ⚠ could not rest GTC close for "
@@ -929,7 +934,8 @@ class RealOverseer:
                             occ_sym: str, entry_prem: float, target_price: float,
                             mark: float | None = None,
                             opening_signal: str = "SELL_PUT",
-                            opening_ref=None, trigger: str = "target"):
+                            opening_ref=None, trigger: str = "target",
+                            entry_iv: float | None = None):
         """
         Place a GOOD_TILL_CANCEL BUY_TO_CLOSE limit at ``target_price`` and
         track it in the pending list.
@@ -984,6 +990,7 @@ class RealOverseer:
             "notified_at":     _now_et().strftime("%Y-%m-%d %H:%M:%S"),
             "duration":        "GTC",     # rests across sessions — do not day-expire
             "opening_ref":     opening_ref,
+            "entry_iv":        entry_iv,  # % at open; used by v2 IV-crush early-TP
         })
         _save_pending(pending)
 
@@ -1355,15 +1362,18 @@ class RealOverseer:
         except Exception:
             return                          # unknown open date → don't risk it
 
-        mark = None
+        mark = cur_iv = None
         try:
             resp = client.get_quotes([occ_spaced])
             resp.raise_for_status()
             q    = resp.json().get(occ_spaced, {}).get("quote", {})
-            mark = float(q.get("mark") or q.get("markPrice") or 0) or None
+            mark   = float(q.get("mark") or q.get("markPrice") or 0) or None
+            cur_iv = float(q.get("volatility") or 0) or None   # current IV (%)
         except Exception:
             return                          # no quote → leave the cover as-is
-        if not should_take_early_profit(entry_prem, mark, days_held):
+        entry_iv = entry.get("entry_iv")    # % stored at open (None for old covers)
+        if not should_take_early_profit(entry_prem, mark, days_held,
+                                        entry_iv=entry_iv, current_iv=cur_iv):
             return
 
         new_target = round(mark, 2)

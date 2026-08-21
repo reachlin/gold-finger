@@ -164,34 +164,55 @@ def adaptive_profit_target(entry_iv: float, entry_dte: int,
 
 def should_take_early_profit(entry_prem: float, mark: float | None,
                              days_held: int,
+                             entry_iv: float | None = None,
+                             current_iv: float | None = None,
                              min_profit: float | None = None,
-                             max_days: int | None = None) -> bool:
+                             max_days: int | None = None,
+                             iv_crush_ratio: float | None = None,
+                             iv_min_profit: float | None = None) -> bool:
     """
-    v1 dynamic early take-profit for a short option: bank a FAST winner instead
-    of waiting out the last of the decay.
+    Dynamic early take-profit for a short option: bank a winner instead of
+    waiting out the last of the decay, once the volatility edge is realized.
 
-    Rationale: a quick mark-to-market gain on a short premium position is mostly
-    IV crush — once the volatility edge is realized, the remaining theta is slow
-    and low-yield while the same tail/assignment risk and collateral lock-up
-    persist. So harvest and redeploy. "Reached profit fast" is a robust proxy
-    for "IV dropped" and needs no extra data, which is why v1 keys off it.
+    Rationale: the profit on a short premium position is mostly IV crush — once
+    that's banked, the remaining theta is slow and low-yield while the same
+    tail/assignment risk and collateral lock-up persist. Harvest and redeploy.
 
-    Trigger: profit captured so far >= min_profit AND days_held <= max_days.
+    Fires if EITHER path triggers:
+      • v1 velocity  — profit >= min_profit AND days_held <= max_days.
+        (A fast gain is a data-free proxy for an IV drop.)
+      • v2 IV crush  — current_iv <= iv_crush_ratio * entry_iv AND
+        profit >= iv_min_profit. Detects the crush directly, with no day limit,
+        so a slower-but-real vol collapse still gets harvested. entry_iv and
+        current_iv must be the same units (both % or both fraction); the ratio
+        is unit-free. Skipped when either IV is missing/non-positive — then only
+        the velocity path applies.
 
-    Thresholds are fixed constants for now (from strategy_params). The next
-    iteration makes them market-aware (VIX regime) and stock-aware (per-name IV
-    rank) — that logic belongs HERE so every caller upgrades at once. This never
-    lowers the exit bar below the resting GTC floor; callers use it only to
-    TIGHTEN (close sooner), never to hold longer.
+    Thresholds are fixed constants for now (from strategy_params); making them
+    VIX-regime / per-name-IV-rank aware belongs HERE so every caller upgrades at
+    once. Callers use this only to TIGHTEN (close sooner), never to hold longer.
     """
-    if min_profit is None or max_days is None:
-        from strategy_params import EARLY_TP_MIN_PROFIT, EARLY_TP_MAX_DAYS
-        min_profit = EARLY_TP_MIN_PROFIT if min_profit is None else min_profit
-        max_days   = EARLY_TP_MAX_DAYS if max_days is None else max_days
+    if (min_profit is None or max_days is None
+            or iv_crush_ratio is None or iv_min_profit is None):
+        from strategy_params import (EARLY_TP_MIN_PROFIT, EARLY_TP_MAX_DAYS,
+                                      EARLY_TP_IV_CRUSH_RATIO, EARLY_TP_IV_MIN_PROFIT)
+        min_profit     = EARLY_TP_MIN_PROFIT if min_profit is None else min_profit
+        max_days       = EARLY_TP_MAX_DAYS if max_days is None else max_days
+        iv_crush_ratio = EARLY_TP_IV_CRUSH_RATIO if iv_crush_ratio is None else iv_crush_ratio
+        iv_min_profit  = EARLY_TP_IV_MIN_PROFIT if iv_min_profit is None else iv_min_profit
     if not entry_prem or entry_prem <= 0 or mark is None or mark < 0:
         return False
     profit = (entry_prem - mark) / entry_prem
-    return profit >= min_profit and days_held <= max_days
+
+    # v1 velocity path
+    if profit >= min_profit and days_held <= max_days:
+        return True
+    # v2 IV-crush path (only when both IVs are usable)
+    if (entry_iv and current_iv and entry_iv > 0 and current_iv > 0
+            and current_iv <= iv_crush_ratio * entry_iv
+            and profit >= iv_min_profit):
+        return True
+    return False
 
 
 def simulate_put_trade(future_df: pd.DataFrame, entry_S: float, K: float,

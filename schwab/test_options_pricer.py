@@ -283,3 +283,37 @@ class TestEarlyTakeProfit:
                                         min_profit=0.60, max_days=5) is False
         assert should_take_early_profit(10.0, 3.0, days_held=3,
                                         min_profit=0.60, max_days=5) is True
+
+
+class TestEarlyTakeProfitIVCrush:
+    """v2: fire on a direct IV crush (current vs entry IV), no day limit."""
+
+    def test_iv_crush_triggers_even_when_slow(self):
+        from options_pricer import should_take_early_profit
+        # 25% profit, day 25 (velocity would NOT fire), but IV 80%->50% (<=0.7*80)
+        assert should_take_early_profit(10.0, 7.5, days_held=25,
+                                        entry_iv=80, current_iv=50) is True
+
+    def test_iv_not_crushed_enough_no_trigger(self):
+        from options_pricer import should_take_early_profit
+        # IV 80%->60% is only a 25% drop (>0.7 ratio) -> no
+        assert should_take_early_profit(10.0, 7.5, days_held=25,
+                                        entry_iv=80, current_iv=60) is False
+
+    def test_iv_crush_but_profit_too_small(self):
+        from options_pricer import should_take_early_profit
+        # deep IV crush but only 10% captured -> below iv_min_profit
+        assert should_take_early_profit(10.0, 9.0, days_held=25,
+                                        entry_iv=80, current_iv=40) is False
+
+    def test_missing_entry_iv_falls_back_to_velocity(self):
+        from options_pricer import should_take_early_profit
+        # no entry IV -> IV path skipped; velocity fails (slow) -> False
+        assert should_take_early_profit(10.0, 7.5, days_held=25,
+                                        entry_iv=None, current_iv=50) is False
+
+    def test_velocity_still_fires_with_ivs_present(self):
+        from options_pricer import should_take_early_profit
+        # 30% fast, IV barely moved -> velocity path still wins
+        assert should_take_early_profit(10.0, 7.0, days_held=4,
+                                        entry_iv=80, current_iv=79) is True

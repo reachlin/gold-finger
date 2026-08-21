@@ -151,5 +151,11 @@ SCAV_PROFIT_TARGET_MAX = 0.65   # shallowest buy-back (fat/long trades → captu
 # or the tied-up collateral, so harvest and redeploy. These are CONSTANTS for
 # now; the plan is to make them market-aware (VIX regime) and stock-aware
 # (per-name IV rank) later — all behind options_pricer.should_take_early_profit.
-EARLY_TP_MIN_PROFIT = 0.30      # trigger once >= 30% of premium is captured
+EARLY_TP_MIN_PROFIT = 0.30      # velocity path: trigger once >= 30% captured
 EARLY_TP_MAX_DAYS   = 10        # ...and it got there fast (<= N calendar days held)
+# v2 IV-crush path (fires independently of the day limit): if IV has collapsed
+# to <= ratio of entry IV, the vol edge is realized — bank a smaller profit.
+# The 0.70 ratio is itself the dead-band: it needs a real ~30% IV drop, not a
+# jittery wiggle. Requires entry IV to have been stored at open.
+EARLY_TP_IV_CRUSH_RATIO = 0.70  # current IV <= 70% of entry IV = crushed
+EARLY_TP_IV_MIN_PROFIT  = 0.20  # ...and at least 20% already captured
