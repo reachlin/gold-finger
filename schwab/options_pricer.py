@@ -133,15 +133,24 @@ def adaptive_profit_target(entry_iv: float, entry_dte: int,
                            target_min: float | None = None,
                            target_max: float | None = None) -> float:
     """
-    Self-adjusting early-exit threshold for short options, in [35%, 65%]
-    of entry premium (bounds from strategy_params):
-    - Higher IV  → higher target (fat premium is worth waiting for more decay)
-    - Longer DTE → higher target (more time to collect full theta decay)
+    Buy-back price for a short option, expressed as a FRACTION of entry premium,
+    in [0.35, 0.65] (bounds from strategy_params). Every caller does
+    ``buy_back_when mark <= entry_premium * this`` — so a LOWER return means the
+    option must decay further before closing (you capture MORE), and a HIGHER
+    return closes sooner (you capture LESS). Profit captured ≈ 1 - return.
 
-    Calibration anchors:
-      iv=0.20, dte=15 → ~35%  (thin premium, exit fast)
-      iv=0.60, dte=45 → ~50%  (standard tastyworks rule)
-      iv=1.00, dte=75 → ~65%  (high-IV, long-dated — hold for bigger capture)
+    - Higher IV  → higher return → close SOONER (capture less)
+    - Longer DTE → higher return → close SOONER (capture less)
+
+    Calibration anchors (return → resulting profit capture):
+      iv=0.20, dte=15 → 0.35  → capture ~65%  (thin/short: wait for deep decay)
+      iv=0.60, dte=45 → 0.50  → capture ~50%  (standard tastyworks 50% rule)
+      iv=1.00, dte=75 → 0.65  → capture ~35%  (high-IV/long-dated: bank it early)
+
+    NOTE: the direction (higher IV → capture less) is the behavior all callers
+    and the validated Scavenger backtest share. It is a deliberate calibration,
+    not a bug — do NOT invert the multiply without re-running the backtest. (An
+    earlier docstring mislabeled the anchors as capture %; corrected here.)
     """
     if target_min is None or target_max is None:
         from strategy_params import SCAV_PROFIT_TARGET_MIN, SCAV_PROFIT_TARGET_MAX

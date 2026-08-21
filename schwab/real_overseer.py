@@ -1267,6 +1267,12 @@ class RealOverseer:
                 continue    # not confirmed open on Schwab this cycle
             occ_norm = occ_spaced.replace(" ", "")
             if occ_norm in pending_close or occ_norm in working_close:
+                # Already protected by a resting GTC. Most days: leave it alone
+                # (no churn). But if it's a FAST winner, tighten that GTC to a
+                # marketable price to bank the IV-crush gain early instead of
+                # grinding out the last of the decay. Atomic replace only.
+                self._maybe_early_take_profit(
+                    scanner, client, account_hash, opening, occ_spaced, occ_norm)
                 continue
 
             # Every open short should always carry a resting GTC buy-to-close
@@ -1316,6 +1322,89 @@ class RealOverseer:
                 opening_signal=opening["signal"], opening_ref=key,
                 trigger="target",
             )
+
+    def _maybe_early_take_profit(self, scanner, client, account_hash: str,
+                                 opening: dict, occ_spaced: str, occ_norm: str):
+        """Dynamic early take-profit for a position that already has a resting
+        GTC cover: if it's a FAST winner (>= EARLY_TP_MIN_PROFIT captured within
+        EARLY_TP_MAX_DAYS), tighten that GTC to a marketable price to bank the
+        IV-crush gain now instead of waiting out the full decay.
+
+        Safety: uses an ATOMIC replace_order (never a bare cancel), so the
+        protective cover is never absent — if the swap fails, the original
+        deep-target GTC stays live. One-shot per position (early_tp flag) and
+        only ever raises the buy-back price, so it never churns or loosens the
+        floor. See options_pricer.should_take_early_profit (v1 fixed thresholds,
+        made market/stock-aware later)."""
+        from options_pricer import should_take_early_profit
+
+        pending = _load_pending()
+        entry = next((e for e in pending
+                      if e.get("signal") == "BUY_TO_CLOSE"
+                      and e.get("occ_sym", "").replace(" ", "") == occ_norm), None)
+        if entry is None or entry.get("early_tp"):
+            return                          # nothing to tighten, or already done
+        old_order_id = entry.get("schwab_order_id")
+        if not old_order_id:
+            return                          # can't replace without an order id
+
+        entry_prem = float(opening["premium_sh"])
+        try:                                # ledger 'date' = open timestamp
+            open_dt   = datetime.strptime(opening["date"][:10], "%Y-%m-%d").date()
+            days_held = max((_now_et().date() - open_dt).days, 0)
+        except Exception:
+            return                          # unknown open date → don't risk it
+
+        mark = None
+        try:
+            resp = client.get_quotes([occ_spaced])
+            resp.raise_for_status()
+            q    = resp.json().get(occ_spaced, {}).get("quote", {})
+            mark = float(q.get("mark") or q.get("markPrice") or 0) or None
+        except Exception:
+            return                          # no quote → leave the cover as-is
+        if not should_take_early_profit(entry_prem, mark, days_held):
+            return
+
+        new_target = round(mark, 2)
+        old_limit  = float(entry.get("limit", 0) or 0)
+        if new_target <= old_limit + 0.05:  # only tighten UP; never churn/loosen
+            return
+
+        try:
+            from schwab.orders.options import option_buy_to_close_limit
+            from schwab.orders.common import Duration, Session
+            new_order = (
+                option_buy_to_close_limit(occ_spaced, 1, f"{new_target:.2f}")
+                .set_duration(Duration.GOOD_TILL_CANCEL)
+                .set_session(Session.NORMAL)
+                .build()
+            )
+            resp   = client.replace_order(account_hash, old_order_id, new_order)
+            loc    = resp.headers.get("Location", "")
+            new_id = loc.rstrip("/").split("/")[-1] if loc else old_order_id
+        except Exception as exc:
+            print(f"  [EarlyTP] ❌ replace failed for {opening['symbol']} "
+                  f"(original GTC intact): {exc}")
+            return
+
+        entry["limit"]           = new_target
+        entry["schwab_order_id"] = new_id
+        entry["early_tp"]        = True
+        _save_pending(pending)
+
+        profit_pct = (1 - mark / entry_prem) * 100
+        est_pnl    = round((entry_prem - new_target) * 100, 2)
+        print(f"  [EarlyTP] ⚡ fast winner: {opening['symbol']} "
+              f"{profit_pct:.0f}% in {days_held}d — tightened GTC "
+              f"${old_limit:.2f} → ${new_target:.2f} (bank +${est_pnl:.0f})")
+        scanner._send_slack(
+            f"{SLACK_MENTION} ⚡ *Early take-profit — {entry.get('trade_id','?')}*\n"
+            f"*{opening['symbol']} ${entry.get('strike','?')}* reached "
+            f"{profit_pct:.0f}% profit in {days_held}d (IV crush).\n"
+            f"Tightened GTC ${old_limit:.2f} → ${new_target:.2f} to bank it now "
+            f"(+${est_pnl:,.0f}) instead of waiting for full decay."
+        )
 
 
 # ---------------------------------------------------------------------------

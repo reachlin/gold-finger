@@ -137,8 +137,12 @@ RESID_MOM_MIN_PCT = 0.0     # minimum residual return to allow a put entry (0 = 
 # The exact threshold scales with entry IV and DTE — see
 # options_pricer.adaptive_profit_target() (used by both backtest_scavenger.py
 # and the live ledger processor in options_ledger.py).
-SCAV_PROFIT_TARGET_MIN = 0.35   # exit at 35% of premium captured (thin/short trades)
-SCAV_PROFIT_TARGET_MAX = 0.65   # exit at 65% of premium captured (fat/long trades)
+# These are BUY-BACK price fractions of entry premium, not capture %.
+# Callers close when mark <= entry_premium * target, so 0.35 = buy back at 35%
+# of entry = capture ~65%; 0.65 = buy back at 65% = capture ~35%. (Lower = hold
+# for deeper decay.) See options_pricer.adaptive_profit_target.
+SCAV_PROFIT_TARGET_MIN = 0.35   # deepest buy-back (thin/short trades → capture ~65%)
+SCAV_PROFIT_TARGET_MAX = 0.65   # shallowest buy-back (fat/long trades → capture ~35%)
 
 # ---- Dynamic early take-profit (v1: simple fixed thresholds) --------------
 # Bank a fast winner instead of grinding out the last of the decay. A quick
