@@ -1058,6 +1058,7 @@ class RealOverseer:
         total    = balances.get("cashBalance")
         scanner._schwab_cash      = float(total) if total is not None else None
         scanner._schwab_available = avail
+        scanner._schwab_pending_deposits = float(balances.get("pendingDeposits", 0) or 0)
 
         positions = sec.get("positions", [])
         option_positions = {}     # occ_norm -> original (spaced) Schwab symbol

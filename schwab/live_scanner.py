@@ -367,6 +367,8 @@ _current_client    = None   # populated in main() after Schwab auth
 _slack_prefix      = ""     # e.g. "(deepseek) " — set by real_overseer
 _schwab_cash       = None   # Schwab cashBalance (total, incl. locked collateral)
 _schwab_available  = None   # Schwab availableFunds (free cash after collateral deduction)
+_schwab_pending_deposits = None  # unsettled ACH deposits — tradeable per Schwab but
+                                 # fenced from the overseer until settled (set by reconcile)
 
 
 def set_decision_fn(fn):
@@ -898,18 +900,24 @@ def _budget_check(s: dict, portfolio_cash: float) -> tuple[bool, str]:
         return True, ""
     committed = _committed_collateral()
     pending   = _pending_collateral()
-    available = portfolio_cash - committed - pending
+    ach       = _schwab_pending_deposits or 0    # unsettled ACH — fenced from trading
+    available = portfolio_cash - committed - pending - ach
     if required > available:
-        pending_note = f" + ${pending:,.0f} pending" if pending > 0 else ""
+        extra = ""
+        if pending: extra += f" − ${pending:,.0f} order-pending"
+        if ach:     extra += f" − ${ach:,.0f} unsettled-ACH"
         msg = (f"BUDGET BLOCK: need ${required:,.0f} collateral "
                f"(strike ${s.get('strike')} × 100), "
                f"only ${available:,.0f} free "
                f"(${portfolio_cash:,.0f} cash − ${committed:,.0f} committed"
-               f"{pending_note}). "
+               f"{extra}). "
                f"No margin / no naked contracts.")
         return False, msg
-    pending_note = f" (incl ${pending:,.0f} pending)" if pending > 0 else ""
-    return True, f"Collateral OK: ${required:,.0f} of ${available:,.0f} available{pending_note}"
+    extra = ""
+    if pending: extra += f", ${pending:,.0f} order-pending"
+    if ach:     extra += f", ${ach:,.0f} unsettled-ACH"
+    return True, (f"Collateral OK: ${required:,.0f} of ${available:,.0f} available"
+                  + (f" (held back{extra})" if extra else ""))
 
 
 # ---------------------------------------------------------------------------
