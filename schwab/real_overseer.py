@@ -1174,7 +1174,82 @@ class RealOverseer:
 
     # -- 2. Pending orders: confirm fills, drop dead orders ------------ #
 
+    def _readopt_untracked_covers(self, scanner, orders: list) -> int:
+        """Rebuild pending_orders.json entries for live GTC BUY_TO_CLOSE covers
+        that exist at Schwab but aren't tracked locally — e.g. after a crash or
+        restart that interrupted _submit_close_order between placing the order
+        and persisting it. The position stays protected either way (reconcile
+        reads Schwab orders), but without the local entry it loses early-TP
+        eligibility and local visibility. This self-heals on the next reconcile.
+
+        entry_iv can't be recovered post-hoc, so re-adopted covers fall back to
+        the velocity early-TP path only."""
+        import options_ledger as ol
+        pending     = _load_pending()
+        tracked_occ = {e.get("occ_sym", "").replace(" ", "") for e in pending}
+        tracked_ids = {str(e.get("schwab_order_id", "")) for e in pending
+                       if e.get("schwab_order_id")}
+        try:
+            open_rows = list(ol.open_options(ol.read_rows(scanner.OPTION_LEDGER_PATH)))
+        except Exception:
+            open_rows = []
+
+        readopted = 0
+        for o in orders:
+            if o.get("status") not in WORKING_STATUSES:
+                continue
+            oid = str(o.get("orderId", ""))
+            for leg in o.get("orderLegCollection", []):
+                if leg.get("instruction") != "BUY_TO_CLOSE":
+                    continue
+                occ_spaced = leg.get("instrument", {}).get("symbol", "")
+                occ_norm   = occ_spaced.replace(" ", "")
+                if not occ_norm or occ_norm in tracked_occ or oid in tracked_ids:
+                    continue
+                try:
+                    sym, expiry, _, strike = parse_occ_symbol(occ_norm)
+                except Exception:
+                    continue
+                opening_ref = next(
+                    (ol.row_key(op) for op in open_rows
+                     if op.get("symbol") == sym
+                     and abs(float(op.get("strike", 0) or 0) - strike) < 1e-6),
+                    None)
+                limit = o.get("price")
+                pending.append({
+                    "trade_id":        _next_trade_id(),
+                    "symbol":          sym,
+                    "signal":          "BUY_TO_CLOSE",
+                    "strike":          strike,
+                    "expiry":          expiry.isoformat(),
+                    "dte":             max((expiry - _now_et().date()).days, 0),
+                    "limit":           float(limit) if limit is not None else None,
+                    "occ_sym":         occ_spaced,
+                    "schwab_order_id": oid,
+                    "notified_at":     _now_et().strftime("%Y-%m-%d %H:%M:%S"),
+                    "duration":        "GTC",
+                    "opening_ref":     opening_ref,
+                    "entry_iv":        None,   # unrecoverable → velocity path only
+                    "readopted":       True,
+                })
+                tracked_occ.add(occ_norm)
+                tracked_ids.add(oid)
+                readopted += 1
+                print(f"  [Reconcile] ♻ re-adopted untracked cover: {sym} "
+                      f"${strike:g} BUY_TO_CLOSE @ ${float(limit or 0):.2f} "
+                      f"(order {oid})")
+        if readopted:
+            _save_pending(pending)
+            scanner._send_slack(
+                f"{SLACK_MENTION} ♻ *Re-adopted {readopted} untracked cover(s)* "
+                f"into local tracking (restart/crash recovery).")
+        return readopted
+
     def _process_pending(self, scanner, client, account_hash: str, orders: list):
+        # Self-heal first: adopt any live cover at Schwab we lost track of (e.g.
+        # a crash/restart between placing the order and persisting it). Must run
+        # BEFORE the empty-pending early return below.
+        self._readopt_untracked_covers(scanner, orders)
         pending = _load_pending()
         if not pending:
             return
