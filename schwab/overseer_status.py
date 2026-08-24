@@ -92,14 +92,19 @@ def last_scan(lines: list[str]) -> dict:
 def _proc_health() -> dict:
     def run(cmd):
         return subprocess.run(cmd, shell=True, capture_output=True, text=True).stdout.strip()
-    alive = run("tmux has-session -t overseer 2>/dev/null && echo yes || echo no") == "yes"
+    # Alive = the real_overseer process exists, however it was launched (tmux OR
+    # the launchd LaunchAgent). tmux/launchd are just the manager, not the proof.
     pid = run("ps aux | grep real_overseer.py | grep -v grep | grep -v tmux "
               "| grep -v caffeinate | grep -v tee | awk '{print $2}' | head -1")
+    alive = bool(pid)
+    tmux  = run("tmux has-session -t overseer 2>/dev/null && echo yes || echo no") == "yes"
+    launchd = run("launchctl list 2>/dev/null | grep -c com.goldfinger.overseer") not in ("", "0")
+    mgr   = "launchd" if launchd else ("tmux" if tmux else "manual")
     caff = run("ps aux | grep 'caffeinate -is' | grep -v grep | awk '{print $2}' | head -1")
     mtime = ""
     if os.path.exists(LOG):
         mtime = datetime.fromtimestamp(os.path.getmtime(LOG)).strftime("%Y-%m-%d %H:%M:%S")
-    return {"alive": alive, "pid": pid, "caffeinate": caff, "log_mtime": mtime}
+    return {"alive": alive, "pid": pid, "caffeinate": caff, "log_mtime": mtime, "mgr": mgr}
 
 
 def main():
@@ -109,7 +114,8 @@ def main():
     print("  OVERSEER STATUS (reconciled: live account + log + pending)")
     print("=" * 60)
     status = "✅ ALIVE" if h["alive"] and h["pid"] else "⛔ DOWN"
-    print(f"  Process : {status}  pid={h['pid'] or '-'}  caffeinate={h['caffeinate'] or 'MISSING'}")
+    print(f"  Process : {status}  pid={h['pid'] or '-'}  via={h['mgr']}  "
+          f"caffeinate={h['caffeinate'] or 'MISSING'}")
     print(f"  Log     : last write {h['log_mtime']}")
 
     lines = open(LOG).read().splitlines() if os.path.exists(LOG) else []

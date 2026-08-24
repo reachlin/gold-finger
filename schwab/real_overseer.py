@@ -47,6 +47,8 @@ _ET = ZoneInfo("America/New_York")
 
 _DATA_DIR            = os.path.join(os.path.dirname(__file__), "..", "data")
 PENDING_ORDERS_PATH  = os.path.join(_DATA_DIR, "pending_orders.json")
+_SINGLETON_LOCK_PATH = os.path.join(_DATA_DIR, "overseer.lock")
+_LOCK_FH             = None   # held open for the process lifetime (see main)
 _TRADE_COUNTER_PATH  = os.path.join(_DATA_DIR, "trade_counter.json")
 _VAULT8_SIGNALS_PATH = os.path.join(_DATA_DIR, "vault8_weekly_signals.json")
 SLACK_MENTION        = "<@U02DQJ9KKFZ>"   # user's Slack ID for trade notifications
@@ -1767,6 +1769,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _acquire_singleton_lock():
+    """Refuse to start if another overseer already holds the lock. This is the
+    guard that makes launchd auto-start safe: if a manual (tmux) instance and
+    the LaunchAgent ever race, the second one exits instead of double-trading.
+    The flock is released automatically by the OS when the holder dies."""
+    import fcntl
+    global _LOCK_FH
+    os.makedirs(_DATA_DIR, exist_ok=True)
+    _LOCK_FH = open(_SINGLETON_LOCK_PATH, "w")
+    try:
+        fcntl.flock(_LOCK_FH, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (BlockingIOError, OSError):
+        print("⛔ Another overseer is already running (overseer.lock held) — "
+              "exiting to avoid double-trading.")
+        sys.exit(0)
+    _LOCK_FH.write(str(os.getpid()))
+    _LOCK_FH.flush()
+
+
 def main():
     args = build_arg_parser().parse_args()
 
@@ -1775,6 +1796,8 @@ def main():
               "and refuses to start without the safety gate. Set REALLY_REAL=true "
               "in .env to proceed.")
         sys.exit(1)
+
+    _acquire_singleton_lock()   # never let two overseers trade at once
 
     ov = RealOverseer(provider=args.provider, model=args.model,
                       base_url=args.base_url)

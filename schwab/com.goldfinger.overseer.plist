@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.goldfinger.overseer</string>
+
+  <!-- caffeinate -is keeps the machine awake while the overseer runs -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/caffeinate</string>
+    <string>-is</string>
+    <string>/Users/lincai/anaconda3/envs/gold-finger/bin/python</string>
+    <string>-u</string>
+    <string>schwab/real_overseer.py</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/lincai/dev/private/gold-finger</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+    <key>PATH</key>
+    <string>/Users/lincai/anaconda3/envs/gold-finger/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin</string>
+  </dict>
+
+  <!-- start on login/boot -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- restart only on abnormal exit (crash); a clean exit(0) e.g. the singleton
+       lock refusing a double-run must NOT be respawned -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <!-- append to the same log the status tool + skill already read -->
+  <key>StandardOutPath</key>
+  <string>/Users/lincai/dev/private/gold-finger/data/overseer.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/lincai/dev/private/gold-finger/data/overseer.log</string>
+
+  <!-- avoid App Nap / throttling for a 24x7 process -->
+  <key>ProcessType</key>
+  <string>Interactive</string>
+</dict>
+</plist>
