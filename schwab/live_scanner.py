@@ -69,7 +69,7 @@ VERDICT_SKIP = "===SKIPPED==="
 WATCHLIST = [
     "NVDA", "AMD", "AAPL", "AMZN",
     "META", "MSFT", "GOOGL",
-    "IBM", "INTC", "IONQ", "KO",
+    "IBM", "INTC", "KO",
     # Scavenger prime targets — high % time sideways
     "MMM", "PG", "XOM",
     # Top backtest candidates — wheel strategy
