@@ -50,12 +50,16 @@ def test_idempotent():
     assert len(json.load(open(tmp))) == 1
 
 
-def test_skips_already_tracked_occ():
+def test_dedup_by_order_id_not_contract():
+    # Dedup is by ORDER ID, not contract: the same order id is skipped, but a
+    # DIFFERENT order id for the same contract (a stacked 2nd cover) is adopted.
     tmp, ov = _setup()
     json.dump([{"occ_sym": "NVDA  260918P00205000", "signal": "BUY_TO_CLOSE",
-                "schwab_order_id": "999"}], open(tmp, "w"))
-    orders = [_order("WORKING", "BUY_TO_CLOSE", "NVDA  260918P00205000", "111", 2.02)]
-    assert ov._readopt_untracked_covers(StubScanner(), orders) == 0
+                "schwab_order_id": "111", "opening_ref": "NVDA_A"}], open(tmp, "w"))
+    same = [_order("WORKING", "BUY_TO_CLOSE", "NVDA  260918P00205000", "111", 2.02)]
+    assert ov._readopt_untracked_covers(StubScanner(), same) == 0   # already tracked
+    diff = [_order("WORKING", "BUY_TO_CLOSE", "NVDA  260918P00205000", "222", 2.02)]
+    assert ov._readopt_untracked_covers(StubScanner(), diff) == 1   # 2nd cover adopted
 
 
 def test_ignores_non_working_and_non_btc():

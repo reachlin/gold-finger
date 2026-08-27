@@ -533,11 +533,14 @@ def find_order(orders: list, occ_norm: str | None = None,
 # and cash-ledger entries. Amounts are cash movements, never P&L.
 # ---------------------------------------------------------------------------
 
-def book_open_fill(ledger_path: str, cash_ledger, s: dict, fill_price: float):
-    """Confirmed SELL_TO_OPEN fill: APPROVED ledger row + premium credited."""
+def book_open_fill(ledger_path: str, cash_ledger, s: dict, fill_price: float) -> str:
+    """Confirmed SELL_TO_OPEN fill: APPROVED ledger row + premium credited.
+    Returns the ledger row_key of the new opening row — the stable per-position
+    id used as the cover's opening_ref (so each open, even a stacked identical
+    contract, gets its own cover)."""
     import options_ledger as ol
     premium_ct = round(fill_price * 100, 2)
-    ol.append_row(ledger_path, {
+    row = {
         "date":        _now_et().strftime("%Y-%m-%d %H:%M:%S"),
         "symbol":      s["symbol"],
         "signal":      s["signal"],
@@ -553,13 +556,15 @@ def book_open_fill(ledger_path: str, cash_ledger, s: dict, fill_price: float):
         "regime":      s.get("regime", ""),
         "verdict":     "APPROVED",
         "reason":      f"real fill confirmed @ ${fill_price:.2f}",
-    })
+    }
+    ol.append_row(ledger_path, row)
     if cash_ledger is not None:
         cash_ledger.record(
             "OPTION_SELL", s["symbol"], premium_ct,
             f"{s['signal']} {s['symbol']} strike=${s.get('strike')} "
             f"exp={s.get('dte', '?')}d premium=${premium_ct:.2f} (real fill)"
         )
+    return ol.row_key(row)
 
 
 def book_buyback(ledger_path: str, cash_ledger, opening: dict, fill_price: float):
@@ -876,7 +881,8 @@ class RealOverseer:
         if entry is None:
             return
         fill = order_fill_price(order) or float(entry["limit"])
-        book_open_fill(scanner.OPTION_LEDGER_PATH,
+        opening_key = book_open_fill(
+                       scanner.OPTION_LEDGER_PATH,
                        getattr(scanner, "_cash_ledger", None),
                        entry["signal_data"] | {"symbol": entry["symbol"],
                                                "signal": entry["signal"],
@@ -924,7 +930,7 @@ class RealOverseer:
                     expiry=entry["expiry"], days_left=days_left,
                     occ_sym=entry["occ_sym"], entry_prem=fill,
                     target_price=target_price, opening_signal=entry["signal"],
-                    opening_ref=entry.get("trade_id"), trigger="open",
+                    opening_ref=opening_key, trigger="open",
                     entry_iv=entry_iv_pct,
                 )
             except Exception as exc:
@@ -955,9 +961,16 @@ class RealOverseer:
         """
         occ_norm = occ_sym.replace(" ", "")
         for e in _load_pending():
-            if (e.get("signal") == "BUY_TO_CLOSE"
-                    and e.get("occ_sym", "").replace(" ", "") == occ_norm):
-                return None    # already have a resting close for this contract
+            if e.get("signal") != "BUY_TO_CLOSE":
+                continue
+            # Idempotent PER OPENING POSITION (opening_ref) — so two stacked
+            # opens of the same contract each get their own cover. Fall back to
+            # the per-contract key only when no opening_ref is available.
+            if opening_ref is not None:
+                if e.get("opening_ref") == opening_ref:
+                    return None    # this specific open already has a cover
+            elif e.get("occ_sym", "").replace(" ", "") == occ_norm:
+                return None
 
         try:
             from schwab.orders.options import option_buy_to_close_limit
@@ -1188,9 +1201,12 @@ class RealOverseer:
         the velocity early-TP path only."""
         import options_ledger as ol
         pending     = _load_pending()
-        tracked_occ = {e.get("occ_sym", "").replace(" ", "") for e in pending}
+        # Dedup by ORDER ID (unique per Schwab order) — NOT by contract, so a 2nd
+        # untracked cover of an already-tracked contract still gets adopted.
         tracked_ids = {str(e.get("schwab_order_id", "")) for e in pending
                        if e.get("schwab_order_id")}
+        used_refs   = {e.get("opening_ref") for e in pending
+                       if e.get("signal") == "BUY_TO_CLOSE" and e.get("opening_ref")}
         try:
             open_rows = list(ol.open_options(ol.read_rows(scanner.OPTION_LEDGER_PATH)))
         except Exception:
@@ -1201,22 +1217,29 @@ class RealOverseer:
             if o.get("status") not in WORKING_STATUSES:
                 continue
             oid = str(o.get("orderId", ""))
+            if oid in tracked_ids:
+                continue
             for leg in o.get("orderLegCollection", []):
                 if leg.get("instruction") != "BUY_TO_CLOSE":
                     continue
                 occ_spaced = leg.get("instrument", {}).get("symbol", "")
                 occ_norm   = occ_spaced.replace(" ", "")
-                if not occ_norm or occ_norm in tracked_occ or oid in tracked_ids:
+                if not occ_norm:
                     continue
                 try:
                     sym, expiry, _, strike = parse_occ_symbol(occ_norm)
                 except Exception:
                     continue
+                # link to an UNCOVERED open of this contract, so two stacked
+                # opens don't both map to the same one
                 opening_ref = next(
                     (ol.row_key(op) for op in open_rows
                      if op.get("symbol") == sym
-                     and abs(float(op.get("strike", 0) or 0) - strike) < 1e-6),
+                     and abs(float(op.get("strike", 0) or 0) - strike) < 1e-6
+                     and ol.row_key(op) not in used_refs),
                     None)
+                if opening_ref:
+                    used_refs.add(opening_ref)
                 limit = o.get("price")
                 pending.append({
                     "trade_id":        _next_trade_id(),
@@ -1234,7 +1257,6 @@ class RealOverseer:
                     "entry_iv":        None,   # unrecoverable → velocity path only
                     "readopted":       True,
                 })
-                tracked_occ.add(occ_norm)
                 tracked_ids.add(oid)
                 readopted += 1
                 print(f"  [Reconcile] ♻ re-adopted untracked cover: {sym} "
@@ -1337,12 +1359,28 @@ class RealOverseer:
         if not opens:
             return
 
-        pending_close = {e["occ_sym"].replace(" ", "") for e in _load_pending()
-                         if e.get("signal") == "BUY_TO_CLOSE"}
-        working_close = {sym for o in orders
-                         if o.get("status") in WORKING_STATUSES
-                         for inst, sym in order_legs(o)
-                         if inst == "BUY_TO_CLOSE"}
+        # Covers are tracked PER OPENING POSITION (opening_ref), so two stacked
+        # opens of the same contract each get their own cover. covered_refs =
+        # opens that already have a local cover.
+        pending = _load_pending()
+        covered_refs = {e.get("opening_ref") for e in pending
+                        if e.get("signal") == "BUY_TO_CLOSE" and e.get("opening_ref")}
+        # Safety ceiling: number of short contracts vs resting BUY_TO_CLOSE qty
+        # at Schwab, per contract. Never place a cover that would push the broker
+        # cover qty past the short qty (guards against an untracked broker cover).
+        short_qty, schwab_cover_qty = {}, {}
+        for op in opens:
+            occ = occ_map.get(ol.row_key(op))
+            if occ:
+                n = occ.replace(" ", "")
+                short_qty[n] = short_qty.get(n, 0) + 1
+        for o in orders:
+            if o.get("status") not in WORKING_STATUSES:
+                continue
+            for leg in o.get("orderLegCollection", []):
+                if leg.get("instruction") == "BUY_TO_CLOSE":
+                    n = leg.get("instrument", {}).get("symbol", "").replace(" ", "")
+                    schwab_cover_qty[n] = schwab_cover_qty.get(n, 0) + int(leg.get("quantity", 1) or 1)
         today_et = _now_et().date()
 
         for opening in opens:
@@ -1351,14 +1389,14 @@ class RealOverseer:
             if occ_spaced is None:
                 continue    # not confirmed open on Schwab this cycle
             occ_norm = occ_spaced.replace(" ", "")
-            if occ_norm in pending_close or occ_norm in working_close:
-                # Already protected by a resting GTC. Most days: leave it alone
-                # (no churn). But if it's a FAST winner, tighten that GTC to a
-                # marketable price to bank the IV-crush gain early instead of
-                # grinding out the last of the decay. Atomic replace only.
+            if key in covered_refs:
+                # This specific open is covered. Leave the GTC alone unless it's
+                # a fast winner — then tighten it (early-TP), matched by opening_ref.
                 self._maybe_early_take_profit(
-                    scanner, client, account_hash, opening, occ_spaced, occ_norm)
+                    scanner, client, account_hash, opening, occ_spaced, key)
                 continue
+            if schwab_cover_qty.get(occ_norm, 0) >= short_qty.get(occ_norm, 0):
+                continue    # broker already shows enough covers for this contract
 
             # Every open short should always carry a resting GTC buy-to-close
             # at its profit target. It can only ever fill in our favor (we buy
@@ -1399,7 +1437,7 @@ class RealOverseer:
                   f"${strike} target=${target_price:.2f} entry=${entry_prem:.2f} "
                   f"{progress}")
 
-            self._submit_close_order(
+            placed = self._submit_close_order(
                 scanner, client, account_hash,
                 symbol=opening["symbol"], strike=strike, expiry=expiry,
                 days_left=days_left, occ_sym=occ_spaced, entry_prem=entry_prem,
@@ -1407,13 +1445,19 @@ class RealOverseer:
                 opening_signal=opening["signal"], opening_ref=key,
                 trigger="target",
             )
+            if placed:                       # keep the loop's view consistent
+                covered_refs.add(key)
+                schwab_cover_qty[occ_norm] = schwab_cover_qty.get(occ_norm, 0) + 1
 
     def _maybe_early_take_profit(self, scanner, client, account_hash: str,
-                                 opening: dict, occ_spaced: str, occ_norm: str):
+                                 opening: dict, occ_spaced: str, opening_ref: str):
         """Dynamic early take-profit for a position that already has a resting
         GTC cover: if it's a FAST winner (>= EARLY_TP_MIN_PROFIT captured within
         EARLY_TP_MAX_DAYS), tighten that GTC to a marketable price to bank the
         IV-crush gain now instead of waiting out the full decay.
+
+        The cover is matched by opening_ref (not the contract symbol) so a
+        stacked identical contract tightens the RIGHT open's cover.
 
         Safety: uses an ATOMIC replace_order (never a bare cancel), so the
         protective cover is never absent — if the swap fails, the original
@@ -1426,7 +1470,7 @@ class RealOverseer:
         pending = _load_pending()
         entry = next((e for e in pending
                       if e.get("signal") == "BUY_TO_CLOSE"
-                      and e.get("occ_sym", "").replace(" ", "") == occ_norm), None)
+                      and e.get("opening_ref") == opening_ref), None)
         if entry is None or entry.get("early_tp"):
             return                          # nothing to tighten, or already done
         old_order_id = entry.get("schwab_order_id")
