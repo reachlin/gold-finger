@@ -100,3 +100,29 @@ class TestOptionEvents:
         ledger.record("OPTION_CALLED_AWAY", "KO", 8_100.0, "called away @81")
         bal = ledger.balance()
         assert bal == 30_000 + 71 - 7_913 + 50 + 8_100
+
+
+class TestInvestedCapital:
+    def test_starts_at_starting_capital(self, ledger):
+        assert ledger.invested_capital() == 30_000.0
+
+    def test_deposit_raises_invested_and_balance(self, ledger):
+        ledger.record_deposit(20_000.0, "ACH")
+        assert ledger.invested_capital() == 50_000.0
+        assert ledger.balance() == 50_000.0          # cash also rises
+
+    def test_two_deposits(self, ledger):
+        ledger.record_deposit(20_000.0)
+        ledger.record_deposit(20_000.0)
+        assert ledger.invested_capital() == 70_000.0
+
+    def test_pnl_is_balance_minus_invested(self, ledger):
+        ledger.record_deposit(40_000.0)              # invested 70k
+        ledger.record("OPTION_SELL", "IBM", 300.0, "premium")
+        # trading P&L excludes the deposit
+        assert ledger.balance() - ledger.invested_capital() == 300.0
+
+    def test_withdrawal_lowers_invested(self, ledger):
+        ledger.record_deposit(20_000.0)
+        ledger.record_deposit(-5_000.0)              # withdrawal
+        assert ledger.invested_capital() == 45_000.0

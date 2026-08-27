@@ -7,6 +7,8 @@ Columns: timestamp, event_type, symbol, amount, running_balance, description
 Event types
 -----------
 STARTING_CAPITAL   initial balance (written once on first run)
+DEPOSIT            external cash added to the account (raises invested capital)
+WITHDRAWAL         external cash removed (negative; lowers invested capital)
 OPTION_SELL        premium received when SELL_PUT / SELL_CALL is approved
 OPTION_BUYBACK     cost to close a position early (negative)
 OPTION_EXPIRED     expired worthless — $0 delta (premium already credited)
@@ -64,6 +66,26 @@ class CashLedger:
     def record(self, event_type: str, symbol: str, amount: float, description: str):
         bal = self.balance() + amount
         self._append(event_type, symbol, amount, description, bal)
+
+    def record_deposit(self, amount: float, description: str = ""):
+        """External cash in (+) / out (-). Moves both the running balance AND
+        invested capital — it is contributed money, not trading P&L."""
+        etype = "DEPOSIT" if amount >= 0 else "WITHDRAWAL"
+        self.record(etype, "", amount,
+                    description or f"{etype.lower()} ${abs(amount):,.2f}")
+
+    def invested_capital(self) -> float:
+        """Net contributed capital = starting capital + deposits − withdrawals.
+        This is the basis to measure P&L against — unlike balance(), it does not
+        move with trades. P&L = balance() − invested_capital()."""
+        total = self.starting_capital
+        for r in self.rows():
+            if r.get("event_type") in ("DEPOSIT", "WITHDRAWAL"):
+                try:
+                    total += float(r.get("amount", 0) or 0)
+                except (ValueError, TypeError):
+                    pass
+        return round(total, 2)
 
     def rows(self) -> list[dict]:
         if not os.path.exists(self.path):

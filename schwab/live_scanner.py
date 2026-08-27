@@ -1148,7 +1148,8 @@ def _print_startup(client, paper: bool, portfolio=None, price_fetcher=None):
         print(f"  Account total:   ${total:,.2f}")
     elif _cash_ledger:
         opt_bal   = _cash_ledger.balance()
-        opt_pnl   = opt_bal - _cash_ledger.starting_capital
+        invested  = _cash_ledger.invested_capital()   # start + deposits
+        opt_pnl   = opt_bal - invested                # P&L vs money actually in
         committed = _committed_collateral()
         pending   = _pending_collateral()
         # Use real Schwab cash when available; fall back to ledger estimate
@@ -1156,9 +1157,9 @@ def _print_startup(client, paper: bool, portfolio=None, price_fetcher=None):
             free     = _schwab_available if _schwab_available is not None else _schwab_cash - pending
             cash_src = f"Schwab total=${_schwab_cash:,.0f} / avail=${free:,.0f}"
         else:
-            free = _cash_ledger.starting_capital - committed - pending
+            free = opt_bal - committed - pending
             cash_src = f"ledger est."
-        print(f"  Starting capital:${_cash_ledger.starting_capital:,.2f}")
+        print(f"  Invested capital:${invested:,.2f}")
         print(f"  Options P&L:     ${opt_pnl:+,.2f}  (total ${opt_bal:,.2f})")
         print(f"  Cash ({cash_src}): Free: ${free:,.0f}"
               f"  |  Committed: ${committed:,.0f}"
@@ -1194,17 +1195,18 @@ def _print_startup(client, paper: bool, portfolio=None, price_fetcher=None):
         )
     elif _cash_ledger:
         opt_bal   = _cash_ledger.balance()
-        opt_pnl   = opt_bal - _cash_ledger.starting_capital
+        invested  = _cash_ledger.invested_capital()
+        opt_pnl   = opt_bal - invested
         committed = _committed_collateral()
         pending   = _pending_collateral()
         if _schwab_cash is not None:
             free     = _schwab_available if _schwab_available is not None else _schwab_cash - pending
             cash_lbl = f"*Schwab total:* ${_schwab_cash:,.0f} | *Available:* ${free:,.0f}"
         else:
-            free     = _cash_ledger.starting_capital - committed - pending
-            cash_lbl = f"*Est. cash:* ${_cash_ledger.starting_capital - committed:,.0f}"
+            free     = opt_bal - committed - pending
+            cash_lbl = f"*Est. cash:* ${opt_bal - committed:,.0f}"
         slack_lines.append(
-            f"*Starting capital:* ${_cash_ledger.starting_capital:,.2f} | "
+            f"*Invested capital:* ${invested:,.2f} | "
             f"*Options P&L:* ${opt_pnl:+,.2f} | "
             f"*Total:* ${opt_bal:,.2f}"
         )
@@ -1249,16 +1251,17 @@ def _print_eod(client, portfolio, price_fetcher, scan_count: int):
             print(f"  Account total:${total:,.2f}")
     elif _cash_ledger:
         opt_bal   = _cash_ledger.balance()
-        opt_pnl   = opt_bal - _cash_ledger.starting_capital
+        invested  = _cash_ledger.invested_capital()
+        opt_pnl   = opt_bal - invested
         committed = _committed_collateral()
         pending   = _pending_collateral()
         if _schwab_cash is not None:
             free     = _schwab_available if _schwab_available is not None else _schwab_cash - pending
             cash_src = f"Schwab total=${_schwab_cash:,.0f} / avail=${free:,.0f}"
         else:
-            free     = _cash_ledger.starting_capital - committed - pending
+            free     = opt_bal - committed - pending
             cash_src = "ledger est."
-        print(f"  Starting capital:${_cash_ledger.starting_capital:,.2f}")
+        print(f"  Invested capital:${invested:,.2f}")
         print(f"  Options P&L:     ${opt_pnl:+,.2f}  (total ${opt_bal:,.2f})")
         print(f"  Cash ({cash_src}): Free: ${free:,.0f}"
               f"  |  Committed: ${committed:,.0f}"
@@ -1294,18 +1297,20 @@ def _print_eod(client, portfolio, price_fetcher, scan_count: int):
         ] + pos_slack + opts_slack
     elif _cash_ledger:
         opt_bal  = _cash_ledger.balance()
-        opt_pnl  = opt_bal - _cash_ledger.starting_capital
+        invested = _cash_ledger.invested_capital()
+        opt_pnl  = opt_bal - invested
+        committed = _committed_collateral()
         pending  = _pending_collateral()
         if _schwab_cash is not None:
             free_eod = _schwab_available if _schwab_available is not None else _schwab_cash - pending
             cash_lbl = f"*Schwab total:* ${_schwab_cash:,.0f} | *Available:* ${free_eod:,.0f}"
         else:
-            free_eod = _cash_ledger.starting_capital - committed - pending
-            cash_lbl = f"*Est. cash:* ${_cash_ledger.starting_capital - committed:,.0f}"
+            free_eod = opt_bal - committed - pending
+            cash_lbl = f"*Est. cash:* ${opt_bal - committed:,.0f}"
         slack_lines = [
             f"*VAULT 76 — End of Day* {now_str}",
             f"*Scans today:* {scan_count}",
-            f"*Starting capital:* ${_cash_ledger.starting_capital:,.2f}  |  "
+            f"*Invested capital:* ${invested:,.2f}  |  "
             f"*Options P&L:* ${opt_pnl:+,.2f}  |  "
             f"*Total:* ${opt_bal:,.2f}",
             f"{cash_lbl} | *Committed:* ${committed:,.0f} | *Free:* ${free_eod:,.0f}"
