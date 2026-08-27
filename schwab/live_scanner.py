@@ -1434,6 +1434,15 @@ def main():
     except Exception as exc:
         print(f"  [WHEEL] ledger processing failed: {exc}")
 
+    # Sync live Schwab balances BEFORE the briefing so it shows real cash, not
+    # the ledger's starting_capital fallback (which ignores deposits). The scan
+    # hook = the overseer's reconcile; it sets _schwab_cash/_available/_pending.
+    if _scan_hook_fn is not None:
+        try:
+            _scan_hook_fn()
+        except Exception as exc:
+            print(f"  [ScanHook] pre-briefing balance sync failed: {exc}")
+
     _print_startup(client, paper=args.paper, portfolio=portfolio,
                    price_fetcher=price_fetcher)
     scan_count = 0
