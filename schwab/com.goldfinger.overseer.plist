@@ -30,13 +30,12 @@
   <key>RunAtLoad</key>
   <true/>
 
-  <!-- restart only on abnormal exit (crash); a clean exit(0) e.g. the singleton
-       lock refusing a double-run must NOT be respawned -->
+  <!-- Always keep the overseer running: restart on ANY exit, clean or crash.
+       (SuccessfulExit=false left it DOWN when it exited 0 on the market-closed
+       startup path.) The singleton lock still prevents a double-run; a lock-
+       refused instance just exits and is retried after ThrottleInterval. -->
   <key>KeepAlive</key>
-  <dict>
-    <key>SuccessfulExit</key>
-    <false/>
-  </dict>
+  <true/>
   <key>ThrottleInterval</key>
   <integer>30</integer>
 
