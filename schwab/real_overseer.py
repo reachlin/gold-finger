@@ -508,12 +508,19 @@ def order_fill_price(order: dict) -> float | None:
 def find_order(orders: list, occ_norm: str | None = None,
                order_id: str | None = None,
                instruction: str | None = None,
-               since: datetime | None = None) -> dict | None:
-    """First order matching the given filters (order_id wins when set)."""
+               since: datetime | None = None,
+               status: str | None = None) -> dict | None:
+    """First order matching the given filters (order_id wins when set).
+    `status` restricts to one order status (e.g. "FILLED") — important when a
+    contract has several orders (working covers, rejects, AND a filled close):
+    without it, the first match may be a non-filled order and a real close is
+    missed."""
     for o in orders:
         if order_id is not None:
             if str(o.get("orderId", "")) == str(order_id):
                 return o
+            continue
+        if status is not None and o.get("status") != status:
             continue
         if since is not None:
             entered = parse_entered_time(o)
@@ -1147,8 +1154,8 @@ class RealOverseer:
             occ_guess = build_occ_symbol(sym, expiry, opening["signal"],
                                          strike).replace(" ", "")
             closing = find_order(orders, occ_norm=occ_guess,
-                                 instruction="BUY_TO_CLOSE")
-            if closing and closing.get("status") == "FILLED":
+                                 instruction="BUY_TO_CLOSE", status="FILLED")
+            if closing:
                 fill = order_fill_price(closing) or 0.0
                 pnl  = book_buyback(scanner.OPTION_LEDGER_PATH, cash_ledger,
                                     opening, fill)

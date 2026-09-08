@@ -79,3 +79,23 @@ class TestConsumePosition:
         assert consume_position(pos, "IBM", "P", 220.0) is None    # wrong strike
         assert consume_position(pos, "AAPL", "P", 225.0) is None   # wrong symbol
         assert consume_position(pos, "IBM", "C", 225.0) is None    # wrong type
+
+
+class TestFindOrderStatus:
+    def test_status_filter_finds_the_filled_close(self):
+        from real_overseer import find_order
+        occ = "IBM   260925P00225000"
+        orders = [
+            {"status": "WORKING", "orderId": "1",
+             "orderLegCollection": [{"instruction": "BUY_TO_CLOSE",
+                                     "instrument": {"symbol": occ}}]},
+            {"status": "FILLED", "orderId": "2", "price": 2.5,
+             "orderLegCollection": [{"instruction": "BUY_TO_CLOSE",
+                                     "instrument": {"symbol": occ}}]},
+        ]
+        n = occ.replace(" ", "")
+        # no status → grabs the first (WORKING) — the old bug that missed closes
+        assert find_order(orders, occ_norm=n, instruction="BUY_TO_CLOSE")["orderId"] == "1"
+        # status="FILLED" → finds the real close
+        assert find_order(orders, occ_norm=n, instruction="BUY_TO_CLOSE",
+                          status="FILLED")["orderId"] == "2"
