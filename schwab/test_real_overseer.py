@@ -54,3 +54,28 @@ if __name__ == "__main__":
             print(f"  ✗ {fn.__name__}"); traceback.print_exc()
     print(f"\n{passed}/{len(fns)} passed")
     sys.exit(0 if passed == len(fns) else 1)
+
+
+class TestConsumePosition:
+    """Quantity-aware matching so stacked identical contracts reconcile right."""
+
+    def test_stacked_partial_close(self):
+        from real_overseer import consume_position
+        # two ledger opens of IBM 225P, but Schwab shows qty 1
+        pos = {"IBM   260925P00225000".replace(" ", ""): ["IBM   260925P00225000", 1]}
+        assert consume_position(pos, "IBM", "P", 225.0) == "IBM   260925P00225000"
+        assert consume_position(pos, "IBM", "P", 225.0) is None   # 2nd → closed
+
+    def test_qty_two_both_match_then_exhaust(self):
+        from real_overseer import consume_position
+        pos = {"IBM260925P00225000": ["IBM   260925P00225000", 2]}
+        assert consume_position(pos, "IBM", "P", 225.0) is not None
+        assert consume_position(pos, "IBM", "P", 225.0) is not None
+        assert consume_position(pos, "IBM", "P", 225.0) is None   # exhausted
+
+    def test_no_cross_match(self):
+        from real_overseer import consume_position
+        pos = {"IBM260925P00225000": ["IBM   260925P00225000", 1]}
+        assert consume_position(pos, "IBM", "P", 220.0) is None    # wrong strike
+        assert consume_position(pos, "AAPL", "P", 225.0) is None   # wrong symbol
+        assert consume_position(pos, "IBM", "C", 225.0) is None    # wrong type

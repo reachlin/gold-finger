@@ -528,6 +528,30 @@ def find_order(orders: list, occ_norm: str | None = None,
     return None
 
 
+def consume_position(option_positions: dict, sym: str, put_call: str,
+                     strike: float) -> str | None:
+    """Match one ledger open to a live Schwab contract, CONSUMING one unit of
+    its quantity. Returns the spaced Schwab symbol, or None when no unit is left
+    — meaning this ledger open no longer has a live contract (it closed).
+
+    Quantity-aware so stacked identical contracts reconcile correctly: with two
+    ledger opens of one contract and Schwab qty 1, the first consumes the unit
+    and the second returns None (→ booked as closed). option_positions maps
+    occ_norm -> [spaced_symbol, remaining_qty] and is mutated in place."""
+    for occ_norm, entry in option_positions.items():
+        occ_raw, qty_left = entry[0], entry[1]
+        if qty_left <= 0:
+            continue
+        try:
+            root, _, pc, pos_strike = parse_occ_symbol(occ_norm)
+        except Exception:
+            continue
+        if root == sym and pc == put_call and abs(pos_strike - strike) < 0.01:
+            entry[1] -= 1
+            return occ_raw
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Bookkeeping — the ONLY functions that write CLOSED/ASSIGNED/APPROVED rows
 # and cash-ledger entries. Amounts are cash movements, never P&L.
@@ -1084,7 +1108,7 @@ class RealOverseer:
                 qty = float(pos.get("shortQuantity", 0)) + float(pos.get("longQuantity", 0))
                 if qty > 0:
                     raw = inst.get("symbol", "")
-                    option_positions[raw.replace(" ", "")] = raw
+                    option_positions[raw.replace(" ", "")] = [raw, int(qty)]
             elif inst.get("assetType") in ("EQUITY", "COLLECTIVE_INVESTMENT"):
                 equity_long[inst.get("symbol", "")] = float(pos.get("longQuantity", 0))
 
@@ -1109,14 +1133,10 @@ class RealOverseer:
             strike   = float(opening["strike"])
             put_call = "C" if opening["signal"] == "SELL_CALL" else "P"
 
-            # Match by root+type+strike against REAL Schwab symbols — the
-            # date+dte reconstruction drifts when a fill was logged late.
-            match = None
-            for occ_norm, occ_raw in option_positions.items():
-                root, _, pc, pos_strike = parse_occ_symbol(occ_norm)
-                if root == sym and pc == put_call and abs(pos_strike - strike) < 0.01:
-                    match = occ_raw
-                    break
+            # Match by root+type+strike against REAL Schwab symbols, CONSUMING
+            # quantity — so with two ledger opens of one contract and Schwab
+            # qty 1, only the first matches; the second falls through as closed.
+            match = consume_position(option_positions, sym, put_call, strike)
             if match:
                 occ_map[ol.row_key(opening)] = match
                 continue     # still open on Schwab — all good
