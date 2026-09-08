@@ -25,3 +25,6 @@ timestamp,event_type,symbol,amount,running_balance,description
 2026-08-27 10:27:04 ET,OPTION_SELL,IBM,365.0,32317.0,SELL_PUT IBM strike=$225.0 exp=29d premium=$365.00 (real fill)
 2026-08-27 10:32:17 ET,DEPOSIT,,20000.0,52317.0,ACH deposit into Vault76 (~2026-08-18)
 2026-08-27 10:32:17 ET,DEPOSIT,,20000.0,72317.0,ACH deposit into Vault76 (~2026-08-24)
+2026-08-27 10:37:58 ET,OPTION_SELL,IBM,345.0,72662.0,SELL_PUT IBM strike=$225.0 exp=29d premium=$345.00 (real fill)
+2026-08-28 09:33:53 ET,OPTION_SELL,IBM,279.0,72941.0,SELL_PUT IBM strike=$227.5 exp=21d premium=$279.00 (real fill)
+2026-09-08 08:21:49 ET,OPTION_BUYBACK,IBM,-250.0,72691.0,BUY_TO_CLOSE SELL_PUT $225.0 bought back at $2.50 vs $3.45 entry

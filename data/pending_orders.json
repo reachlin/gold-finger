@@ -1,1 +1,34 @@
-[]
+[
+  {
+    "trade_id": "T0038",
+    "symbol": "IBM",
+    "signal": "BUY_TO_CLOSE",
+    "strike": 225.0,
+    "expiry": "2026-09-25",
+    "dte": 29,
+    "limit": 2.35,
+    "occ_sym": "IBM   260925P00225000",
+    "schwab_order_id": "1007734149314",
+    "notified_at": "2026-08-27 10:43:18",
+    "duration": "GTC",
+    "opening_ref": "IBM_2026-08-27 10:37:58",
+    "entry_iv": null,
+    "early_tp": true
+  },
+  {
+    "trade_id": "T0041",
+    "symbol": "IBM",
+    "signal": "BUY_TO_CLOSE",
+    "strike": 227.5,
+    "expiry": "2026-09-18",
+    "dte": 21,
+    "limit": 1.06,
+    "occ_sym": "IBM   260918P00227500",
+    "schwab_order_id": "1007746379487",
+    "notified_at": "2026-08-28 09:39:12",
+    "duration": "GTC",
+    "opening_ref": "IBM_2026-08-28 09:33:53",
+    "entry_iv": null,
+    "readopted": true
+  }
+]
