@@ -699,8 +699,13 @@ class RealOverseer:
     def __init__(self, provider: str | None = None, model: str | None = None,
                  api_key: str | None = None, base_url: str | None = None):
         from llm_client import LLMClient
+        # 8192 headroom: deepseek-flash (V4.1) is a REASONING model — it spends
+        # tokens thinking before the answer, so a full decision prompt can burn
+        # a lot of budget; too small a cap yields empty content (→ spurious
+        # veto). 4096 was fine for the non-reasoning path; bump for flash.
         self.llm = LLMClient(provider=provider, model=model,
-                             api_key=api_key, base_url=base_url)
+                             api_key=api_key, base_url=base_url,
+                             max_tokens=8192)
         print(f"  [Overseer] LLM: {self.llm}  mode=real (fully automated)")
 
     # ------------------------------------------------------------------ #
