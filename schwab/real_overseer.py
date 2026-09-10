@@ -103,12 +103,15 @@ Approve or reject each SELL_PUT signal. Goal: capture steady premium income whil
 - Budget check already confirmed collateral is available — you do not need to recheck
 - Fast risk-off conditions are already filtered — trust the pre-screening
 
-## Duplicate positions
-Multiple open positions on the same symbol are ALLOWED — the budget check
-guarantees cash covers every contract. Do not reject a signal merely because
-a position on the symbol already exists. The prompt lists existing open
-positions on this symbol; use them only to judge concentration risk (e.g.
-several near-strike puts stacked before the same expiry on a volatile name).
+## Duplicate positions — space same-symbol entries out in time
+Multiple open positions on the same symbol are ALLOWED, but AT MOST ONE NEW
+ENTRY PER SYMBOL PER DAY. If any listed existing position on this symbol is
+marked "(opened TODAY)", SKIP this signal — do not stack a second entry on the
+same ticker the same day (e.g. two AMZN puts back-to-back). Adding to a name is
+fine once a prior day has passed; a position opened on an EARLIER date does not
+block today's entry. Aside from this same-day rule, do not reject merely because
+a position exists — use the listed positions to judge concentration risk (e.g.
+several near-strike puts before the same expiry on a volatile name).
 
 ## Soft rules (use your judgment)
 - SKIP if HV > 60% (too volatile for premium selling — gamma risk too high)
@@ -261,12 +264,16 @@ def build_prompt(signal: dict, portfolio_state: dict, kronos: dict,
 
     sym = signal.get("symbol", "?")
     if open_positions:
-        lines.append(f"\n## Existing open positions on {sym} ({len(open_positions)})")
+        today_str = _now_et().strftime("%Y-%m-%d")
+        lines.append(f"\n## Existing open positions on {sym} ({len(open_positions)})"
+                     f"  [today is {today_str}]")
         for p in open_positions:
+            opened = str(p.get('date', '?'))[:10]
+            today_flag = "  (opened TODAY)" if opened == today_str else ""
             lines.append(f"  {p.get('signal', '?')} strike ${p.get('strike', '?')}"
                          f"  premium ${p.get('premium_ct', '?')}/ct"
-                         f"  opened {str(p.get('date', '?'))[:10]}"
-                         f"  {p.get('dte', '?')} DTE at open")
+                         f"  opened {opened}"
+                         f"  {p.get('dte', '?')} DTE at open{today_flag}")
     else:
         lines.append(f"\n## Existing open positions on {sym}: none")
 
