@@ -253,16 +253,50 @@ def _market_closed_for_today() -> bool:
     return _et_hour() >= MARKET_CLOSE_ET
 
 
-def _sleep_until_market_open(now_et):
-    """Sleep until 09:00 ET the next trading day, then return."""
+# Long waits are served in chunks this size, re-derived from the wall clock on
+# every pass. A single multi-hour time.sleep() is not reliable: on 2026-09-14
+# one issued by the overseer never returned, leaving the process ALIVE but
+# frozen past its wake and about to miss the open. Mirrors
+# real_overseer._sleep_until_next_check — deliberately duplicated rather than
+# shared, to avoid a new import edge between these two modules on the live
+# money path.
+_SLEEP_CHUNK_S = 3600.0
+
+
+def next_market_open_at(now_et):
+    """Absolute datetime of the next 09:00 ET on a weekday."""
     next_open = now_et.replace(hour=MARKET_OPEN_ET, minute=0, second=0, microsecond=0)
     if next_open <= now_et:
         next_open += timedelta(days=1)
     while next_open.weekday() >= 5:
         next_open += timedelta(days=1)
-    secs = (next_open - now_et).total_seconds()
+    return next_open
+
+
+def _sleep_until_market_open(now_et, *, sleep=None, now=None):
+    """
+    Wait until 09:00 ET the next trading day, in <=1h chunks measured against
+    an ABSOLUTE target. A chunk that returns late self-corrects on the next
+    pass instead of overshooting the open, and a weekend spanning a DST
+    change still ends at 09:00 *wall clock*. The hourly heartbeat means a
+    silent log is a real fault rather than a normal long sleep.
+    """
+    sleep     = sleep or time.sleep
+    now       = now or _now_et
+    next_open = next_market_open_at(now_et)
+    secs      = (next_open - now_et).total_seconds()
     print(f"  Market closed. Sleeping {secs/3600:.1f}h until {next_open.strftime('%Y-%m-%d %H:%M ET')}.")
-    time.sleep(secs)
+
+    first = True
+    while True:
+        remaining = (next_open - now()).total_seconds()
+        if remaining <= 0:
+            break
+        if not first and remaining > _SLEEP_CHUNK_S:
+            print(f"  … {remaining/3600:.1f}h until open "
+                  f"({next_open.strftime('%a %H:%M ET')})")
+        first = False
+        sleep(min(_SLEEP_CHUNK_S, remaining))
 
 
 # ---------------------------------------------------------------------------

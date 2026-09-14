@@ -1600,6 +1600,24 @@ def market_open_on(day) -> "bool | None":
         return None
 
 
+# A long wait is served in chunks no bigger than this, with the remaining time
+# re-derived from the wall clock every pass. On 2026-09-14 a single
+# time.sleep(86397) issued on Sunday never returned: the overseer sat ALIVE but
+# frozen 15+ min past its Monday 09:00 ET wake and would have missed the open
+# (same pid, 0% CPU; system suspend ruled out — caffeinate held
+# PreventSystemSleep throughout and pmset logged no Sleep/Wake). Chunking does
+# not explain that overrun, it makes one survivable.
+_SLEEP_CHUNK_S = 3600.0
+
+
+def next_market_check_at(now_et) -> datetime:
+    """Absolute datetime of the next 09:00 ET calendar check."""
+    target = now_et.replace(hour=9, minute=0, second=0, microsecond=0)
+    if now_et >= target:
+        target += timedelta(days=1)
+    return target
+
+
 def seconds_until_market_check(now_et) -> float:
     """
     Seconds until the next 09:00 ET. On a closed day the overseer sleeps
@@ -1607,17 +1625,40 @@ def seconds_until_market_check(now_et) -> float:
     hot-loops the process every few seconds, re-sending the "market
     closed" Slack notification on every cycle (observed 2026-07-04).
     """
-    target = now_et.replace(hour=9, minute=0, second=0, microsecond=0)
-    if now_et >= target:
-        target += timedelta(days=1)
-    return (target - now_et).total_seconds()
+    return (next_market_check_at(now_et) - now_et).total_seconds()
 
 
-def _sleep_until_next_check(now_et) -> None:
-    sleep_s = seconds_until_market_check(now_et)
-    print(f"  [MarketCheck] sleeping {sleep_s / 3600:.1f}h until the next "
-          f"09:00 ET calendar check")
-    time.sleep(sleep_s)
+def _sleep_until_next_check(now_et, *, sleep=None, now=None) -> None:
+    """
+    Wait until the next 09:00 ET, in <=1h chunks measured against an ABSOLUTE
+    target rather than one duration frozen up front. Two consequences:
+
+    * a chunk that returns late self-corrects on the next pass, so an overrun
+      costs minutes instead of a whole session;
+    * a wait spanning a DST transition still ends at 09:00 *wall clock* — the
+      old fixed-duration sleep landed an hour off.
+
+    The hourly heartbeat is the other half of the fix: a stale log was the only
+    symptom of the 2026-09-14 hang, so a silent log now means something is
+    genuinely wrong rather than merely asleep.
+    """
+    sleep   = sleep or time.sleep
+    now     = now or _now_et
+    target  = next_market_check_at(now_et)
+    total_s = (target - now_et).total_seconds()
+    print(f"  [MarketCheck] sleeping {total_s / 3600:.1f}h until the next "
+          f"09:00 ET calendar check (wake {target:%Y-%m-%d %H:%M} ET)")
+
+    first = True
+    while True:
+        remaining = (target - now()).total_seconds()
+        if remaining <= 0:
+            break
+        if not first and remaining > _SLEEP_CHUNK_S:
+            print(f"  [MarketCheck] … {remaining / 3600:.1f}h remaining "
+                  f"(wake {target:%H:%M} ET)")
+        first = False
+        sleep(min(_SLEEP_CHUNK_S, remaining))
 
 
 MARKET_CHECK_SYSTEM = """You are a US stock market calendar expert.
