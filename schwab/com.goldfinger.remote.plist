@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.goldfinger.remote</string>
+
+  <!-- caffeinate -is is NOT redundant with the overseer's.
+       A remote `stop` unloads com.goldfinger.overseer, taking its caffeinate
+       with it. Without our own assertion the Mac could then sleep, this poller
+       would stop reading Drive, and the matching `start` would never arrive —
+       stranding the machine with no way back in. This job holds the display-idle
+       assertion independently so the control channel outlives the overseer. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/caffeinate</string>
+    <string>-is</string>
+    <string>/Users/lincai/anaconda3/envs/gold-finger/bin/python</string>
+    <string>-u</string>
+    <string>schwab/remote_control.py</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/lincai/dev/private/gold-finger</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+    <key>PATH</key>
+    <string>/Users/lincai/anaconda3/envs/gold-finger/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Keep the control channel up no matter what. If this dies while the
+       overseer is stopped there is no remote way back in. -->
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <key>StandardOutPath</key>
+  <string>/Users/lincai/dev/private/gold-finger/data/remote_control.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/lincai/dev/private/gold-finger/data/remote_control.log</string>
+
+  <key>ProcessType</key>
+  <string>Interactive</string>
+</dict>
+</plist>
