@@ -207,13 +207,16 @@ def test_parse_command_rejects_non_object_json():
 class FakeFS:
     """Size grows across reads until the file is fully materialised."""
 
-    def __init__(self, sizes, contents):
+    def __init__(self, sizes, contents, blocks=None):
         self.sizes, self.contents = list(sizes), list(contents)
+        self.blocks = list(blocks) if blocks else None
         self.reads = 0
 
     def stat_size(self, path):
         i = min(self.reads, len(self.sizes) - 1)
-        return self.sizes[i]
+        if self.blocks is None:
+            return self.sizes[i]
+        return self.sizes[i], self.blocks[min(i, len(self.blocks) - 1)]
 
     def read(self, path):
         i = min(self.reads, len(self.contents) - 1)
@@ -225,32 +228,104 @@ def test_read_stable_json_waits_until_size_settles():
     payload = json.dumps({"cmd": "restart", "nonce": "n1"})
     fs = FakeFS(sizes=[10, 25, 25, 25],
                 contents=['{"cmd":', payload, payload, payload])
-    got = read_stable_json("/fake", stat_fn=fs.stat_size, read_fn=fs.read,
-                           sleep_fn=lambda s: None)
-    assert got == {"cmd": "restart", "nonce": "n1"}
+    got, why = read_stable_json("/fake", stat_fn=fs.stat_size, read_fn=fs.read,
+                                sleep_fn=lambda s: None)
+    assert got == {"cmd": "restart", "nonce": "n1"}, why
+    assert why == "ok"
 
 
 def test_read_stable_json_gives_up_on_a_never_stable_file():
     fs = FakeFS(sizes=[1, 2, 3, 4, 5, 6], contents=["{"] * 6)
-    got = read_stable_json("/fake", stat_fn=fs.stat_size, read_fn=fs.read,
-                           sleep_fn=lambda s: None, attempts=3)
-    assert got is None
+    got, why = read_stable_json("/fake", stat_fn=fs.stat_size, read_fn=fs.read,
+                                sleep_fn=lambda s: None, attempts=3)
+    assert got is None and "never settled" in why
 
 
-def test_read_stable_json_returns_none_for_stable_but_invalid_json():
+def test_read_stable_json_reports_stable_but_invalid_json_distinctly():
     fs = FakeFS(sizes=[9, 9, 9], contents=["not json!"] * 3)
-    got = read_stable_json("/fake", stat_fn=fs.stat_size, read_fn=fs.read,
-                           sleep_fn=lambda s: None)
+    got, why = read_stable_json("/fake", stat_fn=fs.stat_size, read_fn=fs.read,
+                                sleep_fn=lambda s: None)
     assert got is None
+    assert "not a JSON object" in why, why
 
 
 def test_read_stable_json_handles_a_file_that_vanishes_mid_read():
     # Drive can remove a file underneath us while it reconciles a conflict.
     def boom(path):
         raise FileNotFoundError(path)
-    got = read_stable_json("/fake", stat_fn=boom, read_fn=boom,
-                           sleep_fn=lambda s: None)
+    got, why = read_stable_json("/fake", stat_fn=boom, read_fn=boom,
+                                sleep_fn=lambda s: None)
     assert got is None
+    assert "stat failed" in why and "FileNotFoundError" in why, why
+
+
+def test_edeadlk_is_surfaced_with_its_errno():
+    """The failure that broke the channel on 2026-09-21. A launchd daemon
+    opening a dataless FileProvider file gets EDEADLK, and no amount of
+    retrying fixes it — the Drive folder has to be pinned offline. The errno
+    must reach the log: the first version swallowed it as a bare 'OSError'
+    and four identical polls said nothing useful about the cause."""
+    import errno as errno_mod
+
+    sizes = [92, 92, 92]
+
+    def stat_fn(path):
+        return sizes[0], 0
+
+    def read_fn(path):
+        raise OSError(errno_mod.EDEADLK, "Resource deadlock avoided")
+
+    got, why = read_stable_json("/fake", stat_fn=stat_fn, read_fn=read_fn,
+                                sleep_fn=lambda s: None)
+    assert got is None
+    assert "unreadable" in why, why
+    assert f"errno={errno_mod.EDEADLK}" in why, why
+    assert "deadlock" in why.lower(), why
+
+
+# --- the bug that bit on 2026-09-21 --------------------------------- #
+
+def test_dataless_placeholder_is_not_mistaken_for_corruption():
+    """A file synced FROM another machine reports its full size while its
+    bytes are still downloading (st_blocks == 0). The size looks perfectly
+    stable and the read comes back empty. Classifying that as unparseable
+    made the daemon sit on a valid command for 6 minutes until it nearly
+    aged out — it must read as 'still arriving', not 'corrupt'."""
+    fs = FakeFS(sizes=[92, 92, 92], contents=["", "", ""], blocks=[0, 0, 0])
+    got, why = read_stable_json("/fake", stat_fn=fs.stat_size, read_fn=fs.read,
+                                sleep_fn=lambda s: None)
+    assert got is None
+    assert "not materialised" in why, why
+    assert "dataless placeholder" in why, why
+    assert "JSON" not in why, "must not be reported as a parse failure"
+
+
+def test_partial_materialisation_is_reported_with_byte_counts():
+    fs = FakeFS(sizes=[92, 92, 92], contents=['{"cmd": "sta'] * 3,
+                blocks=[8, 8, 8])
+    got, why = read_stable_json("/fake", stat_fn=fs.stat_size, read_fn=fs.read,
+                                sleep_fn=lambda s: None)
+    assert got is None
+    assert "read 12 of 92 bytes" in why, why
+
+
+def test_a_fully_materialised_remote_file_parses():
+    payload = json.dumps({"cmd": "status", "nonce": "n9"})
+    fs = FakeFS(sizes=[len(payload)] * 3, contents=[payload] * 3,
+                blocks=[8, 8, 8])
+    got, why = read_stable_json("/fake", stat_fn=fs.stat_size, read_fn=fs.read,
+                                sleep_fn=lambda s: None)
+    assert got == {"cmd": "status", "nonce": "n9"}, why
+
+
+def test_freshness_window_survives_a_slow_drive_download():
+    """The observed case took 6 minutes from write to materialisation; the
+    original 10-minute window left almost no margin."""
+    assert COMMAND_MAX_AGE_S >= 1800
+    now = datetime(2026, 9, 21, 13, 0, 0, tzinfo=UTC)
+    slow = now - timedelta(minutes=8)
+    ok, why = validate_command(cmd(issued_at=iso(slow)), now=now, seen=set())
+    assert ok, why
 
 
 # --------------------------------------------------------------------- #

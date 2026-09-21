@@ -73,14 +73,41 @@ so an old `command.json` can reappear with nobody touching it:
 
 1. **Consume-on-read** — the command file is read and deleted from Drive
    *before* it executes, invalid ones included, so nothing can loop.
-2. **Freshness** — `issued_at` older than 10 min is ignored (and more than
-   2 min in the future, for clock skew).
+2. **Freshness** — `issued_at` older than 30 min is ignored (and more than
+   2 min in the future, for clock skew). It was 10 min until 2026-09-21, when
+   a real command took 6 min to materialise and nearly aged out.
 3. **Nonce ledger** — `data/remote_control_seen.json` records processed nonces
    for 24h and skips repeats.
 
-**Materialization guard.** macOS Drive is a virtual filesystem; a file can appear
-before its bytes do. A file is acted on only once its size is stable across
-consecutive polls *and* it parses as JSON.
+**REQUIRED: the Drive folder must be pinned "Available offline."** This is not
+optional and not a tuning knob — without it the channel does not work at all.
+
+macOS serves a FileProvider-backed folder in *Stream* mode as dataless
+placeholders: `st_size` reports the real size, `st_blocks` is 0, and the bytes
+live only in the cloud. A launchd daemon that opens such a file gets
+`OSError errno=11 EDEADLK "Resource deadlock avoided"` — not a short read, not a
+parse error, a hard failure. **Retrying never fixes it.** An interactive shell
+can fault the content in; the daemon cannot. This is a documented macOS issue
+affecting Google Drive, iCloud, Dropbox and OneDrive alike, and it has bitten
+Duplicacy, rdiff-backup and Acronis the same way.
+
+Measured on 2026-09-21: a command written from another machine sat unreadable
+through six consecutive polls over 14 minutes. Pinning the folder
+(right-click → Offline access → Available offline) materialised it within ~2 min
+and the very next poll executed it. Two earlier "successes" that day were
+misleading — one file was created locally, the other only ran because a manual
+`cat` from an interactive shell had faulted it in.
+
+**Pin the folder on every machine that writes to it**, since the setting is
+per-machine. Verify with `stat -f "%z %b" <file>`: blocks > 0 means real local
+bytes.
+
+Two lesser materialisation cases are still handled in code, because a *locally*
+written file can legitimately be caught mid-write: the size must be stable
+across reads, and a short read against a non-zero `st_size` is reported as
+"not materialised yet" rather than as corruption. The log distinguishes all
+three — `EDEADLK`, short read, and genuine bad JSON — so a future failure says
+which one it is instead of one opaque message.
 
 **Separate launchd agent.** `com.goldfinger.remote` is its own job with its own
 `KeepAlive`, so `stop` on the overseer cannot kill the thing that would restart

@@ -61,7 +61,12 @@ DEFAULT_DRIVE_DIR = os.path.expanduser(
     "~/Library/CloudStorage/GoogleDrive-reachlin@gmail.com/My Drive/gold-finger")
 
 POLL_INTERVAL_S    = 90        # drop -> action is ~2 min with Drive sync on top
-COMMAND_MAX_AGE_S  = 600       # ignore anything older than 10 minutes
+# Freshness window. Raised 600 -> 1800 on 2026-09-21: a command synced from
+# another machine can sit as a dataless placeholder for minutes before its
+# bytes arrive (one took 6), and a 10-minute window left almost no margin
+# before a perfectly legitimate command aged out. 30 minutes still blocks the
+# threat this guards against — a file Drive resurrects hours or days later.
+COMMAND_MAX_AGE_S  = 1800
 COMMAND_MAX_SKEW_S = 120       # tolerate this much clock skew into the future
 NONCE_TTL_S        = 86400     # remember processed nonces for a day
 REFRESH_TOKEN_TTL_S = 7 * 86400
@@ -224,35 +229,66 @@ def prune_nonces(seen, *, now: float, ttl_s: int = NONCE_TTL_S) -> list:
 
 def read_stable_json(path, *, stat_fn=None, read_fn=None, sleep_fn=None,
                      attempts: int = 3, settle_s: float = 1.0):
-    """Read JSON only once the file has stopped growing.
+    """Read JSON only once the file has stopped growing.  -> (data, reason)
 
-    Drive lists a file before its bytes land, so an eager read returns a
-    truncated document. Returns None if it never settles, does not parse, or
-    disappears mid-read (Drive does that while resolving conflicts).
+    Two distinct things go wrong with a Drive folder, and conflating them cost
+    a real command 6 minutes on 2026-09-21:
+
+      1. A file written LOCALLY is listed before its bytes land, so an eager
+         read returns a truncated document. Waiting for the size to settle
+         fixes that.
+      2. A file synced FROM ANOTHER MACHINE arrives as a *dataless placeholder*
+         — st_size reports the full logical size while the content has not been
+         downloaded, and st_blocks is 0. The size looks perfectly stable and a
+         read yields nothing. Treating that as "corrupt" makes the daemon give
+         up on a file that is merely still arriving.
+
+    So a short read against a non-zero st_size is reported as NOT-YET-
+    MATERIALISED (keep waiting, and opening it nudges the download along)
+    rather than as a parse failure. `reason` is for the log — the caller can
+    say what it is actually waiting on instead of one opaque message.
     """
-    stat_fn  = stat_fn or (lambda p: os.stat(p).st_size)
+    stat_fn  = stat_fn or (lambda p: (os.stat(p).st_size, os.stat(p).st_blocks))
     read_fn  = read_fn or (lambda p: open(p).read())
     sleep_fn = sleep_fn or time.sleep
+
+    def _stat(p):
+        """Accept either a plain size (tests) or a (size, blocks) pair."""
+        got = stat_fn(p)
+        return got if isinstance(got, tuple) else (got, None)
 
     last_size = None
     for _ in range(attempts):
         try:
-            size = stat_fn(path)
-        except (OSError, FileNotFoundError):
-            return None
+            size, blocks = _stat(path)
+        except (OSError, FileNotFoundError) as e:
+            return None, f"stat failed: {type(e).__name__} {e}"
+
         if size == last_size:
             try:
-                return parse_command(read_fn(path))
-            except (OSError, FileNotFoundError):
-                return None
+                raw = read_fn(path)
+            except (OSError, FileNotFoundError) as e:
+                return None, f"unreadable: {type(e).__name__} errno={getattr(e, 'errno', None)} {e}"
+
+            if size > 0 and len(raw) < size:
+                return None, (f"not materialised yet — read {len(raw)} of "
+                              f"{size} bytes"
+                              + (" (dataless placeholder)"
+                                 if blocks == 0 else ""))
+            data = parse_command(raw)
+            if data is None:
+                snippet = raw[:60].replace("\n", " ")
+                return None, f"stable but not a JSON object: {snippet!r}"
+            return data, "ok"
+
         last_size = size
-        # Consume a read even when unsettled so callers can model progress.
         try:
-            read_fn(path)
-        except (OSError, FileNotFoundError):
-            return None
+            read_fn(path)      # opening nudges Drive into downloading it
+        except (OSError, FileNotFoundError) as e:
+            return None, f"unreadable: {type(e).__name__} errno={getattr(e, 'errno', None)} {e}"
         sleep_fn(settle_s)
-    return None
+
+    return None, f"size never settled after {attempts} attempts"
 
 
 # --------------------------------------------------------------------- #
@@ -377,9 +413,9 @@ def _write_result(nonce: str, name: str, ok: bool, output: str,
 
 def handle_command_file(path: str) -> bool:
     """Consume-on-read: archive + delete from Drive BEFORE executing."""
-    cmd = read_stable_json(path)
+    cmd, why = read_stable_json(path)
     if cmd is None:
-        log("  command file not stable/parseable yet — leaving for next pass")
+        log(f"  command not ready: {why} — retrying next pass")
         return False
 
     # Delete from Drive first so a bad file can never loop.
@@ -418,9 +454,9 @@ def handle_command_file(path: str) -> bool:
 
 
 def handle_token_file(path: str) -> bool:
-    data = read_stable_json(path)
+    data, why = read_stable_json(path)
     if data is None:
-        log("  token file not stable/parseable yet — leaving for next pass")
+        log(f"  token not ready: {why} — retrying next pass")
         return False
 
     ok, why = validate_token(data, now=time.time())
