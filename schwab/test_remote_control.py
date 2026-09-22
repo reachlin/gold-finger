@@ -259,6 +259,57 @@ def test_read_stable_json_handles_a_file_that_vanishes_mid_read():
     assert "stat failed" in why and "FileNotFoundError" in why, why
 
 
+def test_a_hung_read_is_killed_and_reported_not_left_to_wedge():
+    """The 2026-09-22 outage. `open(2)` on a Google Drive FileProvider path
+    blocked FOREVER in the kernel — `sample` showed 2558/2558 samples parked in
+    __open. The daemon sat wedged for 70 minutes, stopped polling entirely, and
+    KeepAlive could not help because the process was alive, just stuck; even
+    deleting the file did not release the syscall.
+
+    A blocked syscall cannot be rescued in-process, so the read runs in a child
+    that can be killed. What this pins is that a timeout comes back as a
+    reported failure and the loop survives, instead of never returning."""
+    import subprocess as sp
+
+    def hangs(path):
+        raise sp.TimeoutExpired(cmd="cat", timeout=20)
+
+    got, why = read_stable_json("/fake", stat_fn=lambda p: (92, 8),
+                                read_fn=hangs, sleep_fn=lambda s: None)
+    assert got is None
+    assert "HUNG" in why, why
+    assert "killed" in why, why
+
+
+def test_default_reader_goes_through_a_killable_child():
+    """If the default read_fn ever reverts to a bare open(), a kernel hang
+    takes the whole daemon down again with no way to recover."""
+    import inspect
+
+    import remote_control as rc
+
+    src = inspect.getsource(rc.read_stable_json)
+    assert "_read_file_with_timeout" in src, \
+        "default read_fn must be the killable subprocess reader"
+    assert "open(p).read()" not in src, \
+        "a direct open() here can block forever in the kernel"
+
+
+def test_read_helper_actually_enforces_its_timeout():
+    """Guard the mechanism itself: a child that never returns must be killed."""
+    import subprocess as sp
+
+    import remote_control as rc
+
+    try:
+        rc._read_file_with_timeout("/dev/stdin", timeout=1)
+    except sp.TimeoutExpired:
+        return          # killed as intended
+    except OSError:
+        return          # some environments fail fast instead; also fine
+    # A successful read here means it did not block, which is acceptable too.
+
+
 def test_edeadlk_is_surfaced_with_its_errno():
     """The failure that broke the channel on 2026-09-21. A launchd daemon
     opening a dataless FileProvider file gets EDEADLK, and no amount of

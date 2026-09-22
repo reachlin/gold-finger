@@ -227,6 +227,31 @@ def prune_nonces(seen, *, now: float, ttl_s: int = NONCE_TTL_S) -> list:
     return kept
 
 
+FILE_READ_TIMEOUT_S = 20
+
+
+def _read_file_with_timeout(path, timeout: int = None):
+    """Read a Drive file through a short-lived child process.
+
+    `open(2)` on a Google Drive FileProvider path can block FOREVER in the
+    kernel. Verified 2026-09-22 with `sample`: 2558 of 2558 samples sat in
+    `__open` in libsystem_kernel, reached from Python's `open()`. The daemon
+    was wedged for 70 minutes, stopped polling entirely, and `KeepAlive` could
+    not help because the process was alive — just stuck. Deleting the file did
+    not release it either; the syscall is uninterruptible.
+
+    A blocked syscall cannot be rescued in-process: signals do not reliably
+    break it and a thread cannot be killed. So the read happens in a child
+    that CAN be killed, which is the only way to keep this loop alive.
+    """
+    timeout = timeout or FILE_READ_TIMEOUT_S
+    p = subprocess.run(["/bin/cat", path], capture_output=True, text=True,
+                       timeout=timeout)
+    if p.returncode != 0:
+        raise OSError(p.returncode, (p.stderr or "").strip() or "read failed")
+    return p.stdout
+
+
 def read_stable_json(path, *, stat_fn=None, read_fn=None, sleep_fn=None,
                      attempts: int = 3, settle_s: float = 1.0):
     """Read JSON only once the file has stopped growing.  -> (data, reason)
@@ -249,7 +274,7 @@ def read_stable_json(path, *, stat_fn=None, read_fn=None, sleep_fn=None,
     say what it is actually waiting on instead of one opaque message.
     """
     stat_fn  = stat_fn or (lambda p: (os.stat(p).st_size, os.stat(p).st_blocks))
-    read_fn  = read_fn or (lambda p: open(p).read())
+    read_fn  = read_fn or _read_file_with_timeout
     sleep_fn = sleep_fn or time.sleep
 
     def _stat(p):
@@ -267,6 +292,9 @@ def read_stable_json(path, *, stat_fn=None, read_fn=None, sleep_fn=None,
         if size == last_size:
             try:
                 raw = read_fn(path)
+            except subprocess.TimeoutExpired:
+                return None, (f"read HUNG >{FILE_READ_TIMEOUT_S}s and was killed "
+                              f"— FileProvider blocked in open(2)")
             except (OSError, FileNotFoundError) as e:
                 return None, f"unreadable: {type(e).__name__} errno={getattr(e, 'errno', None)} {e}"
 
@@ -284,6 +312,9 @@ def read_stable_json(path, *, stat_fn=None, read_fn=None, sleep_fn=None,
         last_size = size
         try:
             read_fn(path)      # opening nudges Drive into downloading it
+        except subprocess.TimeoutExpired:
+            return None, (f"read HUNG >{FILE_READ_TIMEOUT_S}s and was killed "
+                          f"— FileProvider blocked in open(2)")
         except (OSError, FileNotFoundError) as e:
             return None, f"unreadable: {type(e).__name__} errno={getattr(e, 'errno', None)} {e}"
         sleep_fn(settle_s)
@@ -416,7 +447,9 @@ def handle_command_file(path: str) -> bool:
     cmd, why = read_stable_json(path)
     if cmd is None:
         log(f"  command not ready: {why} — retrying next pass")
+        _note_stuck(path, why)
         return False
+    _note_ok(path)
 
     # Delete from Drive first so a bad file can never loop.
     try:
@@ -457,7 +490,9 @@ def handle_token_file(path: str) -> bool:
     data, why = read_stable_json(path)
     if data is None:
         log(f"  token not ready: {why} — retrying next pass")
+        _note_stuck(path, why)
         return False
+    _note_ok(path)
 
     ok, why = validate_token(data, now=time.time())
     if not ok:
@@ -497,6 +532,29 @@ def handle_token_file(path: str) -> bool:
 # --------------------------------------------------------------------- #
 # Main loop                                                             #
 # --------------------------------------------------------------------- #
+
+_stuck = {}          # path -> consecutive failed polls
+STUCK_ALERT_AFTER = 4    # ~6 min at a 90s poll
+
+
+def _note_stuck(path: str, why: str):
+    """Alert once when a file has resisted several polls.
+
+    The 2026-09-22 failure was silent: the daemon wedged and simply stopped
+    logging, so nothing surfaced until the token was noticed missing hours
+    later. A file that cannot be read is now escalated to Slack/Bark.
+    """
+    n = _stuck.get(path, 0) + 1
+    _stuck[path] = n
+    if n == STUCK_ALERT_AFTER:
+        notify("Remote control: file stuck",
+               f"{os.path.basename(path)} unreadable after {n} polls\n{why}\n"
+               f"Check the Drive folder is pinned Available offline.")
+
+
+def _note_ok(path: str):
+    _stuck.pop(path, None)
+
 
 def run_once() -> bool:
     """One poll. Returns True if anything was handled."""
