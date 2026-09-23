@@ -9,3 +9,12 @@ schwab/__pycache__/
 data/router_cache/
 schwab/schwab_token.json.*
 schwab/.reauth_state
+
+# Machine-local runtime state from the overseer + remote-control daemon.
+# All of it regenerates itself; none of it belongs in git.
+.DS_Store
+data/overseer.lock
+data/remote_control.log
+data/remote_control_seen.json
+data/remote_commands/
+data/shutdown_snapshot_*.txt
