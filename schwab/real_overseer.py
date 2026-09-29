@@ -103,15 +103,15 @@ Approve or reject each SELL_PUT signal. Goal: capture steady premium income whil
 - Budget check already confirmed collateral is available — you do not need to recheck
 - Fast risk-off conditions are already filtered — trust the pre-screening
 
-## Duplicate positions — space same-symbol entries out in time
-Multiple open positions on the same symbol are ALLOWED, but AT MOST ONE NEW
-ENTRY PER SYMBOL PER DAY. If any listed existing position on this symbol is
-marked "(opened TODAY)", SKIP this signal — do not stack a second entry on the
-same ticker the same day (e.g. two AMZN puts back-to-back). Adding to a name is
-fine once a prior day has passed; a position opened on an EARLIER date does not
-block today's entry. Aside from this same-day rule, do not reject merely because
-a position exists — use the listed positions to judge concentration risk (e.g.
-several near-strike puts before the same expiry on a volatile name).
+## Duplicate positions — ONE OPEN POSITION PER SYMBOL, no exceptions
+If ANY open position is listed on this symbol, SKIP this signal. It does not
+matter that the strike differs, the expiry differs, or that the existing
+position was opened weeks ago — one open short per underlying is the rule.
+Never stack a second contract on a ticker you are already short.
+
+This is enforced in code as well, so approving such a signal only wastes a
+scan: the pre-trade check rejects it before any order reaches Schwab. Prefer a
+signal on a symbol you hold nothing in.
 
 ## Soft rules (use your judgment)
 - SKIP if HV > 60% (too volatile for premium selling — gamma risk too high)
@@ -788,21 +788,29 @@ class RealOverseer:
             return False, (f"Schwab available ${avail:,.0f} < "
                            f"collateral needed ${collateral_needed:,.0f} — abort")
 
-        # Duplicate short position check
-        signal   = s.get("signal", "SELL_PUT")
-        put_call = "PUT" if signal == "SELL_PUT" else "CALL"
-        strike   = float(s["strike"])
-        symbol   = s["symbol"].upper()
+        # ONE OPEN POSITION PER UNDERLYING (changed 2026-09-29).
+        #
+        # This used to block only an exact symbol+strike+type duplicate, so
+        # different strikes or expiries on the same ticker stacked freely. That
+        # is how the book reached 99% AMZN on 2026-09-18 with every individual
+        # entry perfectly legal. The prompt's "one new entry per symbol per day"
+        # was never going to prevent it — it only spaced the entries out.
+        #
+        # The gate lives here rather than in the prompt on purpose: the prompt
+        # is advice a model can talk itself out of, this is not reachable by it.
+        symbol = s["symbol"].upper()
         for pos in sec.get("positions", []):
             inst = pos.get("instrument", {})
             if inst.get("assetType") != "OPTION":
                 continue
-            if (inst.get("putCall", "").upper() == put_call
-                    and abs(float(inst.get("strikePrice", -1)) - strike) < 0.01
-                    and float(pos.get("shortQuantity", 0)) > 0
-                    and symbol in inst.get("symbol", "").upper()):
-                return False, (f"Duplicate: Schwab already has short "
-                               f"{inst.get('symbol')} — skipping")
+            if float(pos.get("shortQuantity", 0)) <= 0:
+                continue      # long options tie up no collateral
+            # Compare the OCC root (first 6 chars, space-padded), never a
+            # substring: "V" is inside "AVGO  261023P00200000", so a substring
+            # test blocked Visa whenever a Broadcom position was open.
+            if inst.get("symbol", "")[:6].strip().upper() == symbol:
+                return False, (f"Already short {inst.get('symbol')} — one open "
+                               f"position per underlying, skipping {symbol}")
 
         return True, (f"Pre-check OK — Schwab available ${avail:,.0f}, "
                       f"collateral needed ${collateral_needed:,.0f}")
