@@ -1,10 +1,71 @@
 """
 Black-Scholes option pricing, Greeks, and volatility utilities.
 """
+from statistics import NormalDist
+
 import numpy as np
 import pandas as pd
-from scipy.stats import norm
-from scipy.optimize import brentq
+
+# scipy was dropped here on 2026-10-02. It was used for exactly two things —
+# the standard normal CDF and a 1-D root find — and both are a few lines of
+# stdlib. In exchange it dragged in a Fortran extension module (_propack) that
+# the macOS 27 upgrade refused to load:
+#
+#   ImportError: dlopen(..._spropack.cpython-310-darwin.so):
+#     section '__DATA/__thread_bss' has a zero-fill section type,
+#     but offset field is not zero
+#
+# Because this module is imported at scanner startup, that took the whole
+# overseer down in a 30-second launchd crash loop. The PyPI wheel is malformed
+# for the new dyld and 1.15.3 is the last build for Python 3.10, so there was
+# nothing to upgrade to; conda-forge's build would have pulled its own numpy
+# alongside the pip one that torch is linked against. Removing the dependency
+# was cheaper and safer than repairing it, and nothing else in the project
+# imports scipy.
+
+_NORM = NormalDist()
+
+
+def _norm_cdf(x: float) -> float:
+    """Standard normal CDF — stdlib replacement for scipy.stats.norm.cdf.
+
+    Scalar only, which is all this module ever needs: every caller passes
+    floats and d1/d2 are scalars.
+    """
+    return _NORM.cdf(float(x))
+
+
+def _solve_monotonic(f, lo: float, hi: float,
+                     xtol: float = 1e-6, maxiter: int = 200) -> float:
+    """Bisection root find, replacing scipy.optimize.brentq.
+
+    Deliberately bisection rather than Brent: the only caller solves for
+    implied volatility, where price is strictly increasing in sigma, so
+    bisection cannot fail to converge and needs ~23 iterations to reach xtol
+    over [1e-4, 10]. Brent is faster on pathological functions; this one is not.
+
+    Raises ValueError when f does not change sign on [lo, hi], matching
+    brentq's contract — implied_vol relies on that to return None.
+    """
+    flo, fhi = f(lo), f(hi)
+    if flo == 0.0:
+        return lo
+    if fhi == 0.0:
+        return hi
+    if (flo > 0) == (fhi > 0):
+        raise ValueError("f(lo) and f(hi) must have different signs")
+    for _ in range(maxiter):
+        mid = 0.5 * (lo + hi)
+        if hi - lo < xtol:
+            return mid
+        fmid = f(mid)
+        if fmid == 0.0:
+            return mid
+        if (fmid > 0) == (flo > 0):
+            lo, flo = mid, fmid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
 
 RISK_FREE_RATE  = 0.05
 PUT_DTE         = 21          # days to expiry for paper puts
@@ -33,7 +94,7 @@ def black_scholes_put(S: float, K: float, T: float,
         return float(max(K - S, 0.0))
     d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
     d2 = d1 - sigma * np.sqrt(T)
-    price = K * np.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+    price = K * np.exp(-r * T) * _norm_cdf(-d2) - S * _norm_cdf(-d1)
     return float(max(price, 0.0))
 
 
@@ -49,7 +110,7 @@ def black_scholes_call(S: float, K: float, T: float,
         return float(max(S - K, 0.0))
     d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
     d2 = d1 - sigma * np.sqrt(T)
-    price = S * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
+    price = S * _norm_cdf(d1) - K * np.exp(-r * T) * _norm_cdf(d2)
     return float(max(price, 0.0))
 
 
@@ -118,8 +179,9 @@ def implied_vol(market_price: float, S: float, K: float, T: float, r: float,
         return pricer(S, K, T, r, sigma) - market_price
 
     try:
-        # Brentq guarantees convergence when the function changes sign on [lo, hi]
-        return float(brentq(objective, 1e-4, 10.0, xtol=1e-6, maxiter=200))
+        # Converges whenever the price brackets a sign change on [lo, hi];
+        # outside that range there is no real implied vol, hence None.
+        return float(_solve_monotonic(objective, 1e-4, 10.0, xtol=1e-6, maxiter=200))
     except ValueError:
         return None
 
