@@ -444,8 +444,26 @@ def available_funds(balances: dict) -> float | None:
     return avail - pending
 
 
-def fetch_orders(client, account_hash: str, days_back: int = 7) -> list:
-    """All orders entered in the last `days_back` days (one call per scan)."""
+def fetch_orders(client, account_hash: str, days_back: int = 90) -> list:
+    """All orders entered in the last `days_back` days (one call per scan).
+
+    The window is keyed on when an order was ENTERED, not when it filled, and
+    it must therefore outlive a resting GTC cover. Every buy-to-close cover is
+    placed the moment a position opens and then rests for the option's whole
+    life — that is the point of it being GTC. At ~30-day DTE a cover routinely
+    rests far longer than the old 7-day default.
+
+    That default lost a real close on 2026-10-02: T0089 was entered 09-08 and
+    filled 10-02, so the reconciler could not see it, reported "gone from
+    Schwab before expiry with no closing order — manual review", and never
+    wrote the ledger row. _committed_collateral() reads the ledger, so $24,500
+    of freed collateral kept being counted and the scanner blocked AAPL and
+    GOOGL against stale free cash. Nothing was wrong at the broker; the order
+    filled normally at $1.45 against its $1.69 limit.
+
+    90 days is deliberate headroom over the longest DTE traded (~35), and the
+    window costs nothing — it is one API call per scan either way.
+    """
     try:
         now  = datetime.now()
         resp = client.get_orders_for_account(
@@ -1109,7 +1127,11 @@ class RealOverseer:
         sec = fetch_account(client, account_hash)
         if sec is None:
             return
-        orders = fetch_orders(client, account_hash, days_back=7)
+        # Use the full default window, NOT a short one: this is the call whose
+        # result decides whether a vanished position had a closing order. A GTC
+        # cover entered weeks ago and filled today must still be visible here,
+        # or its close is never booked and its collateral never frees up.
+        orders = fetch_orders(client, account_hash)
 
         try:
             occ_map = self._reconcile(scanner, sec, orders)
