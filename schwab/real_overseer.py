@@ -422,6 +422,24 @@ def available_funds(balances: dict) -> float | None:
     # an ACH deposit is initiated, so availableFunds includes still-in-flight
     # money (pendingDeposits). Subtract it; when the transfer lands pendingDeposits
     # drops to 0 and the funds become usable automatically — no restart needed.
+    #
+    # ALLOW_UNSETTLED_CASH=true opts out, deliberately. Schwab itself will let
+    # the order through (it reports the provisional availableFunds), so the only
+    # thing standing between an unsettled deposit and a live short put is this
+    # subtraction. The exception exists because waiting is not free: the $20K
+    # ACH of 2026-09-24 sat pending for three-plus business days while free
+    # collateral stayed at $3,308 — 11,418 budget blocks and no closes for ten
+    # days. ACH returns almost always arrive within 2-5 business days, so the
+    # reversal risk decays as the deposit ages.
+    #
+    # The residual risk if it DOES reverse: a short put backed by money that
+    # vanished, which on a margin account becomes a margin loan rather than a
+    # rejected trade. Anything but an explicit true fails closed, and the flag
+    # becomes a no-op the moment pendingDeposits hits 0 — but turn it off again
+    # once the cash lands rather than leaving it armed.
+    if os.environ.get("ALLOW_UNSETTLED_CASH", "").strip().lower() in (
+            "true", "yes", "1"):
+        return avail
     pending = float(balances.get("pendingDeposits", 0) or 0)
     return avail - pending
 

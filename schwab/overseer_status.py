@@ -140,11 +140,22 @@ def main():
         # Settled free = what the overseer will actually deploy. It gates on
         # settled cash, so unsettled ACH deposits (pendingDeposits) don't count
         # until they land — mirror that here or the tool over-reports free cash.
-        free = settled_free(cash, committed, pending)
+        #
+        # ...unless ALLOW_UNSETTLED_CASH is set, in which case the overseer DOES
+        # spend provisional ACH and this tool must say so. Reporting $3,308 free
+        # while the overseer is deploying $23,308 is how a number stops being
+        # trustworthy.
+        counting_ach = os.environ.get("ALLOW_UNSETTLED_CASH", "").strip().lower() in (
+            "true", "yes", "1")
+        free = (cash - committed) if counting_ach else settled_free(cash, committed, pending)
+        label = "incl. unsettled ACH" if (counting_ach and pending) else "settled"
         print(f"\n  LIVE ACCOUNT {sa.get('accountNumber')}:")
         print(f"    Cash ${cash:,.2f}   committed ${committed:,.0f}   "
-              f"free ${free:,.0f} (settled)")
-        if pending:
+              f"free ${free:,.0f} ({label})")
+        if pending and counting_ach:
+            print(f"    ⚠ ${pending:,.0f} of that is UNSETTLED ACH, spendable only "
+                  f"because ALLOW_UNSETTLED_CASH=true — unset it once the cash lands")
+        elif pending:
             print(f"    ⏳ pendingDeposits ${pending:,.0f} in-flight — "
                   f"not usable until it settles (then free → ${cash-committed:,.0f})")
         shorts = short_options(positions)

@@ -10,6 +10,23 @@ import os, sys
 sys.path.insert(0, os.path.dirname(__file__))
 from real_overseer import available_funds
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_unsettled_flag(monkeypatch):
+    """Clear ALLOW_UNSETTLED_CASH before every test in this module.
+
+    The flag lives in .env, which real_overseer loads on import, so without
+    this the developer's own configuration decides what the tests assert —
+    turning it on silently broke five tests that verify the DEFAULT settled-cash
+    behaviour. A test must describe the code, not the machine it runs on.
+    Tests that want the flag set it themselves with monkeypatch.setenv.
+    """
+    monkeypatch.delenv("ALLOW_UNSETTLED_CASH", raising=False)
+
+
+
 
 def test_excludes_pending_deposit():
     # Real 2026-08-18 snapshot: availableFunds already includes the pending $20K.
@@ -99,3 +116,57 @@ class TestFindOrderStatus:
         # status="FILLED" → finds the real close
         assert find_order(orders, occ_norm=n, instruction="BUY_TO_CLOSE",
                           status="FILLED")["orderId"] == "2"
+
+
+# --- ALLOW_UNSETTLED_CASH override (added 2026-10-02) ----------------------
+#
+# The $20K ACH of 2026-09-24 sat pending for three-plus business days while the
+# book earned nothing (free collateral $3,308, 11,418 budget blocks, zero
+# closes in ten days). ACH returns almost always arrive inside 2-5 business
+# days, so by then the reversal risk was largely spent and the user chose to
+# deploy it. The guard stays in place and off by default; this flag makes the
+# exception explicit, visible in .env, and revertible without a code change.
+
+def _bal(pending=20000.0):
+    return {"availableFundsNonMarginableTrade": 0.0,
+            "availableFunds": 29697.44, "pendingDeposits": pending}
+
+
+def test_flag_absent_still_excludes_pending(monkeypatch):
+    """Default must not change: settled cash only."""
+    monkeypatch.delenv("ALLOW_UNSETTLED_CASH", raising=False)
+    assert abs(available_funds(_bal()) - 9697.44) < 0.01
+
+
+def test_flag_true_counts_the_pending_deposit(monkeypatch):
+    monkeypatch.setenv("ALLOW_UNSETTLED_CASH", "true")
+    assert abs(available_funds(_bal()) - 29697.44) < 0.01
+
+
+def test_flag_is_case_insensitive(monkeypatch):
+    for v in ("TRUE", "True", "yes", "1"):
+        monkeypatch.setenv("ALLOW_UNSETTLED_CASH", v)
+        assert abs(available_funds(_bal()) - 29697.44) < 0.01, v
+
+
+def test_anything_else_is_treated_as_off(monkeypatch):
+    """A typo must fail CLOSED, not silently unlock unsettled cash."""
+    for v in ("false", "no", "0", "", "maybe", "ture"):
+        monkeypatch.setenv("ALLOW_UNSETTLED_CASH", v)
+        assert abs(available_funds(_bal()) - 9697.44) < 0.01, v
+
+
+def test_flag_is_a_no_op_once_the_deposit_settles(monkeypatch):
+    """When the ACH lands pendingDeposits -> 0, so the flag stops mattering and
+    can be left on harmlessly — though it should still be turned off."""
+    monkeypatch.setenv("ALLOW_UNSETTLED_CASH", "true")
+    on = available_funds(_bal(pending=0.0))
+    monkeypatch.delenv("ALLOW_UNSETTLED_CASH", raising=False)
+    off = available_funds(_bal(pending=0.0))
+    assert on == off == 29697.44
+
+
+def test_flag_cannot_conjure_funds_that_are_not_there(monkeypatch):
+    """It only stops the subtraction; it never invents buying power."""
+    monkeypatch.setenv("ALLOW_UNSETTLED_CASH", "true")
+    assert available_funds({"pendingDeposits": 5000.0}) is None

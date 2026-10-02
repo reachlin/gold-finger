@@ -935,11 +935,20 @@ def _budget_check(s: dict, portfolio_cash: float) -> tuple[bool, str]:
     committed = _committed_collateral()
     pending   = _pending_collateral()
     ach       = _schwab_pending_deposits or 0    # unsettled ACH — fenced from trading
-    available = portfolio_cash - committed - pending - ach
+    # ALLOW_UNSETTLED_CASH=true counts provisional ACH as spendable. Must match
+    # real_overseer.available_funds(): this gate fires FIRST and short-circuits
+    # before _pre_trade_check, so honouring the flag in only one place would
+    # look like a working change and deploy nothing. Anything but an explicit
+    # true fails closed. The ACH fence is all that is released — collateral
+    # locked by open and in-flight orders is still subtracted.
+    counting_ach = os.environ.get("ALLOW_UNSETTLED_CASH", "").strip().lower() in (
+        "true", "yes", "1")
+    fenced_ach = 0 if counting_ach else ach
+    available = portfolio_cash - committed - pending - fenced_ach
     if required > available:
         extra = ""
         if pending: extra += f" − ${pending:,.0f} order-pending"
-        if ach:     extra += f" − ${ach:,.0f} unsettled-ACH"
+        if fenced_ach: extra += f" − ${fenced_ach:,.0f} unsettled-ACH"
         msg = (f"BUDGET BLOCK: need ${required:,.0f} collateral "
                f"(strike ${s.get('strike')} × 100), "
                f"only ${available:,.0f} free "
@@ -949,9 +958,14 @@ def _budget_check(s: dict, portfolio_cash: float) -> tuple[bool, str]:
         return False, msg
     extra = ""
     if pending: extra += f", ${pending:,.0f} order-pending"
-    if ach:     extra += f", ${ach:,.0f} unsettled-ACH"
+    if fenced_ach: extra += f", ${fenced_ach:,.0f} unsettled-ACH"
+    note = f" (held back{extra})" if extra else ""
+    if counting_ach and ach:
+        # Say it plainly in the log: this trade is leaning on money that has
+        # not settled yet.
+        note += f" — INCLUDING ${ach:,.0f} unsettled-ACH (ALLOW_UNSETTLED_CASH)"
     return True, (f"Collateral OK: ${required:,.0f} of ${available:,.0f} available"
-                  + (f" (held back{extra})" if extra else ""))
+                  + note)
 
 
 # ---------------------------------------------------------------------------
