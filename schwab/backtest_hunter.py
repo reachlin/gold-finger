@@ -14,8 +14,8 @@ Two result sets are reported:
   2. Signals that also pass the sector-strength filter (sector ETF above EMA50)
 
 Usage:
-  /Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/backtest_hunter.py
-  /Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/backtest_hunter.py --symbols NVDA AMD AAPL
+  /Users/lincai/anaconda3/envs/gold-finger-py312/bin/python schwab/backtest_hunter.py
+  /Users/lincai/anaconda3/envs/gold-finger-py312/bin/python schwab/backtest_hunter.py --symbols NVDA AMD AAPL
 """
 import os
 import sys

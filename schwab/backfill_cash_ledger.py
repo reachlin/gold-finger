@@ -6,7 +6,7 @@ Safe to re-run — it checks if cash_ledger.csv already has non-STARTING_CAPITAL
 rows and exits early.
 
 Usage:
-  /Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/backfill_cash_ledger.py
+  /Users/lincai/anaconda3/envs/gold-finger-py312/bin/python schwab/backfill_cash_ledger.py
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(__file__))

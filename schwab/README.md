@@ -59,7 +59,7 @@ The scanner exits automatically at 4pm ET (market close). No need to stop it man
 ```bash
 tmux new-session -d -s schwab-screen
 tmux send-keys -t schwab-screen \
-  '/Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/live_scanner.py' Enter
+  '/Users/lincai/anaconda3/envs/gold-finger-py312/bin/python schwab/live_scanner.py' Enter
 tmux attach -t schwab-screen
 ```
 
@@ -93,7 +93,7 @@ tmux attach -t schwab-screen
 ## One-Shot Daily Scan (no tmux needed)
 
 ```bash
-/Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/daily_signal.py
+/Users/lincai/anaconda3/envs/gold-finger-py312/bin/python schwab/daily_signal.py
 ```
 
 Scans watchlist, runs macro verification gate for each BUY signal, sends Slack notification.
@@ -104,10 +104,10 @@ Scans watchlist, runs macro verification gate for each BUY signal, sends Slack n
 
 ```bash
 # Uses saved data/nvda_history.csv
-/Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/backtest_strategy.py
+/Users/lincai/anaconda3/envs/gold-finger-py312/bin/python schwab/backtest_strategy.py
 
 # Re-fetch from Schwab first
-/Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/backtest_strategy.py --fetch
+/Users/lincai/anaconda3/envs/gold-finger-py312/bin/python schwab/backtest_strategy.py --fetch
 ```
 
 ---
@@ -117,7 +117,7 @@ Scans watchlist, runs macro verification gate for each BUY signal, sends Slack n
 Quick data check for any symbol:
 
 ```bash
-/Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/signal_verifier.py NVDA
+/Users/lincai/anaconda3/envs/gold-finger-py312/bin/python schwab/signal_verifier.py NVDA
 ```
 
 Shows: VIX level, earnings proximity, recent headlines, any auto-block conditions.
@@ -181,7 +181,7 @@ Stick with `270s` intervals. On a day with 0 signals the cost is minimal.
 ## Run Tests
 
 ```bash
-/Users/lincai/anaconda3/envs/gold-finger/bin/python -m pytest schwab/ -v
+/Users/lincai/anaconda3/envs/gold-finger-py312/bin/python -m pytest schwab/ -v
 ```
 
 ---

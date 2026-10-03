@@ -19,8 +19,8 @@ of scope — allocation contention is a collateral problem, and the wheel
 is what consumes collateral.
 
 Usage:
-  /Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/backtest_portfolio.py
-  /Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/backtest_portfolio.py --capitals 30000,100000
+  /Users/lincai/anaconda3/envs/gold-finger-py312/bin/python schwab/backtest_portfolio.py
+  /Users/lincai/anaconda3/envs/gold-finger-py312/bin/python schwab/backtest_portfolio.py --capitals 30000,100000
 """
 import os
 import sys

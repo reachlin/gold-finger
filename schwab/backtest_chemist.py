@@ -13,7 +13,7 @@ State machine per symbol:
                   (d) regime exit:   NUKED_ZONE ended, close at market
 
 Usage:
-  /Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/backtest_chemist.py
+  /Users/lincai/anaconda3/envs/gold-finger-py312/bin/python schwab/backtest_chemist.py
 """
 import os
 import sys

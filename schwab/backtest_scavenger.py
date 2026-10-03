@@ -14,7 +14,7 @@ adaptive profit target (35%–65% of premium). Target scales with entry IV and D
 — high-IV / long-dated options wait longer; thin-premium / short-dated exit fast.
 
 Usage:
-  /Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/backtest_scavenger.py
+  /Users/lincai/anaconda3/envs/gold-finger-py312/bin/python schwab/backtest_scavenger.py
 """
 import os
 import sys

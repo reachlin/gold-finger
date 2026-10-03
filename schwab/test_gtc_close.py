@@ -4,7 +4,7 @@ Tests for GTC buy-to-close behaviour in real_overseer.
 Run (production-style, from repo root so the schwab-py library resolves
 ahead of the local schwab/ package dir):
 
-    /Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/test_gtc_close.py
+    /Users/lincai/anaconda3/envs/gold-finger-py312/bin/python schwab/test_gtc_close.py
 
 Covers:
   1. _submit_close_order places a GOOD_TILL_CANCEL (not DAY) BUY_TO_CLOSE,

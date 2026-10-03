@@ -15,7 +15,7 @@
   <array>
     <string>/usr/bin/caffeinate</string>
     <string>-is</string>
-    <string>/Users/lincai/anaconda3/envs/gold-finger/bin/python</string>
+    <string>/Users/lincai/anaconda3/envs/gold-finger-py312/bin/python</string>
     <string>-u</string>
     <string>schwab/remote_control.py</string>
   </array>

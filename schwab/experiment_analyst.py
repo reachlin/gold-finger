@@ -8,7 +8,7 @@ pt_revisions_90d, pt_gap — from yfinance upgrades_downgrades, the free
 backtestable alternative to Seeking Alpha's unofficial scrapers.
 
 Usage:
-  /Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/experiment_analyst.py
+  /Users/lincai/anaconda3/envs/gold-finger-py312/bin/python schwab/experiment_analyst.py
 """
 import os
 import sys

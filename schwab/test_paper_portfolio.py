@@ -1,7 +1,7 @@
 """
 Tests for paper_portfolio.py — paper trading position tracker with balance + logs.
 
-Run: /Users/lincai/anaconda3/envs/gold-finger/bin/python -m pytest schwab/test_paper_portfolio.py -v
+Run: /Users/lincai/anaconda3/envs/gold-finger-py312/bin/python -m pytest schwab/test_paper_portfolio.py -v
 """
 import os
 import sys

@@ -18,3 +18,4 @@ data/remote_control.log
 data/remote_control_seen.json
 data/remote_commands/
 data/shutdown_snapshot_*.txt
+data/*.bak-*

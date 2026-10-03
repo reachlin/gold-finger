@@ -8,8 +8,8 @@ data/experiment_fundamentals_2026-07-05.txt). Earnings are quarterly, so
 re-run this every few weeks (or after earnings season) to stay current.
 
 Usage:
-  /Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/fetch_fundamentals.py
-  /Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/fetch_fundamentals.py NVDA KO
+  /Users/lincai/anaconda3/envs/gold-finger-py312/bin/python schwab/fetch_fundamentals.py
+  /Users/lincai/anaconda3/envs/gold-finger-py312/bin/python schwab/fetch_fundamentals.py NVDA KO
 """
 import os
 import sys

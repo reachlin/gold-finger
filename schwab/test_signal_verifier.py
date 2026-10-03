@@ -3,7 +3,7 @@ Tests for signal_verifier.py — data-fetch utilities.
 
 All external calls (yfinance, Schwab client, feedparser) are mocked.
 
-Run: /Users/lincai/anaconda3/envs/gold-finger/bin/python -m pytest schwab/test_signal_verifier.py -v
+Run: /Users/lincai/anaconda3/envs/gold-finger-py312/bin/python -m pytest schwab/test_signal_verifier.py -v
 """
 import os
 import sys

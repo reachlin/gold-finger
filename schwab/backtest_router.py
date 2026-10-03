@@ -18,9 +18,9 @@ Predictors:
             (forecast series cached in data/router_cache/, resumable)
 
 Usage:
-  /Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/backtest_router.py
-  /Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/backtest_router.py --predictor timesfm
-  /Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/backtest_router.py AMD GOOGL
+  /Users/lincai/anaconda3/envs/gold-finger-py312/bin/python schwab/backtest_router.py
+  /Users/lincai/anaconda3/envs/gold-finger-py312/bin/python schwab/backtest_router.py --predictor timesfm
+  /Users/lincai/anaconda3/envs/gold-finger-py312/bin/python schwab/backtest_router.py AMD GOOGL
 """
 import os
 import sys

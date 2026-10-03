@@ -11,7 +11,7 @@ Borrowed hypothesis (WorldQuant alpha playbook, measured pass rates):
 fundamental 40% > mixed 12.7% > pure technical 5.3%.
 
 Usage:
-  /Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/experiment_fundamentals.py
+  /Users/lincai/anaconda3/envs/gold-finger-py312/bin/python schwab/experiment_fundamentals.py
 """
 import os
 import sys

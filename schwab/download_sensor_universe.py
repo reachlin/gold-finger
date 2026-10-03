@@ -12,7 +12,7 @@ vault8/download_bluechips.py. Skips names already on disk (the blue chips
 were refreshed separately); pass --force to re-download everything.
 
 Run:
-    /Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/download_sensor_universe.py
+    /Users/lincai/anaconda3/envs/gold-finger-py312/bin/python schwab/download_sensor_universe.py
 """
 import os
 import sys

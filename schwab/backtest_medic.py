@@ -12,8 +12,8 @@ safety assets (TLT, GLD) are expected to FAIL this specific entry — they
 are expensive during panic — and are included to prove the point.
 
 Usage:
-  /Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/backtest_medic.py
-  /Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/backtest_medic.py SCHD GLD
+  /Users/lincai/anaconda3/envs/gold-finger-py312/bin/python schwab/backtest_medic.py
+  /Users/lincai/anaconda3/envs/gold-finger-py312/bin/python schwab/backtest_medic.py SCHD GLD
 """
 import os
 import sys

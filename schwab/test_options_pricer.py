@@ -1,7 +1,7 @@
 """
 Tests for options_pricer.py — Black-Scholes put pricing utilities.
 
-Run: /Users/lincai/anaconda3/envs/gold-finger/bin/python -m pytest schwab/test_options_pricer.py -v
+Run: /Users/lincai/anaconda3/envs/gold-finger-py312/bin/python -m pytest schwab/test_options_pricer.py -v
 """
 import sys, os
 import pytest

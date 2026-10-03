@@ -15,8 +15,8 @@ Reports per-side summaries, then day/symbol/action-matched decisions where
 the two scanners DISAGREED, and signals only one side saw.
 
 Usage:
-  /Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/compare_scanners.py
-  /Users/lincai/anaconda3/envs/gold-finger/bin/python schwab/compare_scanners.py <dirA> <dirB>
+  /Users/lincai/anaconda3/envs/gold-finger-py312/bin/python schwab/compare_scanners.py
+  /Users/lincai/anaconda3/envs/gold-finger-py312/bin/python schwab/compare_scanners.py <dirA> <dirB>
 """
 import os
 import re
