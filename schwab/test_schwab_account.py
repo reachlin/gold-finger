@@ -56,3 +56,60 @@ def test_print_account_summary(capsys):
     captured = capsys.readouterr()
     assert "12345678" in captured.out
     assert "10000.5" in captured.out
+
+
+# --- token file permissions (added 2026-10-04) ------------------------------
+#
+# schwab-py's manual flow writes schwab_token.json with the default umask, i.e.
+# mode 644 — a live brokerage refresh token readable by every local process.
+# Observed on the 2026-10-04 reauth: the file came out 644 and had to be
+# chmod'ed by hand. Every previous install was 600 only because a human
+# remembered. Now the script enforces it.
+
+import sys
+import stat as _stat
+
+sys.path.insert(0, os.path.dirname(__file__))
+
+
+def test_secure_token_file_tightens_permissions(tmp_path, monkeypatch):
+    import schwab_account as sa
+    p = tmp_path / "schwab_token.json"
+    p.write_text('{"token": {"refresh_token": "r"}}')
+    p.chmod(0o644)
+    monkeypatch.setattr(sa, "TOKEN_PATH", str(p))
+
+    sa._secure_token_file()
+
+    mode = _stat.S_IMODE(p.stat().st_mode)
+    assert mode == 0o600, f"expected 0600, got {oct(mode)}"
+
+
+def test_secure_token_file_is_idempotent(tmp_path, monkeypatch):
+    import schwab_account as sa
+    p = tmp_path / "schwab_token.json"
+    p.write_text("{}")
+    p.chmod(0o600)
+    monkeypatch.setattr(sa, "TOKEN_PATH", str(p))
+    sa._secure_token_file()
+    sa._secure_token_file()
+    assert _stat.S_IMODE(p.stat().st_mode) == 0o600
+
+
+def test_secure_token_file_tolerates_a_missing_file(tmp_path, monkeypatch):
+    """Called before the OAuth flow has written anything — must not raise and
+    kill the reauth."""
+    import schwab_account as sa
+    monkeypatch.setattr(sa, "TOKEN_PATH", str(tmp_path / "nope.json"))
+    sa._secure_token_file()      # must not raise
+
+
+def test_get_client_secures_the_token_on_both_paths():
+    """A refresh rewrites the file, so the existing-token path must tighten it
+    too — not just the fresh-OAuth path."""
+    import inspect
+    import schwab_account as sa
+    src = inspect.getsource(sa.get_client)
+    assert src.count("_secure_token_file()") >= 2, (
+        "both the existing-token and fresh-OAuth branches should secure the file"
+    )

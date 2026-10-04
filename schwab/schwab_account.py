@@ -12,6 +12,26 @@ REDIRECT_URI = "https://127.0.0.1"
 TOKEN_PATH = os.path.join(os.path.dirname(__file__), "schwab_token.json")
 
 
+def _secure_token_file():
+    """chmod 0600 the token file.
+
+    schwab-py's OAuth flow writes schwab_token.json with the default umask,
+    which on this machine means mode 644 — a live brokerage refresh token
+    readable by every local process. Seen on the 2026-10-04 reauth; every
+    earlier install was 600 only because a human remembered to chmod it.
+
+    Called on BOTH branches of get_client(), not just after a fresh OAuth: a
+    token refresh rewrites the file, and running the script is the natural
+    moment to let the permissions converge. Never raises — a failure here must
+    not abort a reauth.
+    """
+    try:
+        if os.path.exists(TOKEN_PATH):
+            os.chmod(TOKEN_PATH, 0o600)
+    except Exception as exc:
+        print(f"  [auth] could not chmod 600 the token file: {exc}")
+
+
 def _stamp_creation_timestamp():
     """Inject creation_timestamp into the token file if missing. Safe to call after any OAuth."""
     try:
@@ -27,11 +47,13 @@ def _stamp_creation_timestamp():
 
 def get_client():
     if os.path.exists(TOKEN_PATH):
+        _secure_token_file()
         return schwab.auth.client_from_token_file(TOKEN_PATH, CLIENT_ID, CLIENT_SECRET)
     client = schwab.auth.client_from_manual_flow(
         CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, TOKEN_PATH
     )
     _stamp_creation_timestamp()
+    _secure_token_file()
     return client
 
 
