@@ -43,6 +43,8 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from chain_quotes import round_up_to_tick
+
 _ET = ZoneInfo("America/New_York")
 
 _DATA_DIR            = os.path.join(os.path.dirname(__file__), "..", "data")
@@ -115,7 +117,8 @@ signal on a symbol you hold nothing in.
 
 ## Price and liquidity — is this quote real?
 `premium` is the MID and is only an ESTIMATE of the fill. `order_limit` is the
-price the order is actually placed at (0.95 x mid); judge the trade on THAT, not
+price the order is actually placed at (the mid, on a tradable tick); judge it
+on THAT, not
 on premium. An order that does not fill today is a perfectly good outcome — a
 fresh signal arrives tomorrow, and a missed entry is far cheaper than a
 badly-priced position. Never approve something marginal just because it is the
@@ -881,7 +884,7 @@ class RealOverseer:
         scan hook to confirm on a later cycle — never fire-and-forget.
 
         Limit price: live BID from the chain quote (guaranteed fill);
-        falls back to premium x 0.95 for model-priced signals.
+        falls back to the tick-rounded model premium when there is no chain quote.
         """
         if s.get("signal") not in ("SELL_PUT", "SELL_CALL"):
             print(f"  [Overseer] {s.get('signal')} — no automated real "
@@ -918,21 +921,27 @@ class RealOverseer:
                                        float(s["strike"]))
 
             premium = float(s.get("premium", 0))
-            # One rule for both quote sources: ask 0.95 * premium, where
-            # premium is the mid on a real chain and the Black-Scholes estimate
-            # on fallback. Deliberately NOT the bid — a sell limit fills at the
-            # limit or better, and 0.95*mid rests above the bid on any spread
-            # wider than 10% of mid, so those orders wait rather than cross.
+            # Ask for the mid, on a tradable tick. chain_quotes derives it from
+            # the live bid/ask; model-priced signals have no quote, so the
+            # Black-Scholes premium is rounded to a tick instead.
+            #
+            # There is deliberately NO haircut. A 0.95 multiplier was used until
+            # 2026-10-06 and was a defect: 0.95*mid only clears the bid when the
+            # spread exceeds 10.53% of mid, and our median spread is 5.6%, so on
+            # 240 of 309 live candidates (77.7%) the limit landed BELOW the bid.
+            # A sell limit under the bid crosses and fills AT the bid, so the
+            # patient pricing was inoperative on most trades and silently
+            # reverted to the bid-selling it was meant to replace -- worst
+            # measured case AMD $610, bid 31.35, limit 30.09.
             #
             # An unfilled order is an accepted outcome: the DAY order expires,
             # the collateral frees, and tomorrow brings a fresh signal. A missed
-            # entry is cheaper than a badly-priced position. (Before 2026-10-06
-            # chain signals were placed AT the bid, which filled faster but gave
-            # away the spread -- and on XOM, priced off a 250% stale quote, cost
-            # -$82.66.)
+            # entry is cheaper than a badly-priced position. (On XOM, priced off
+            # a 250% stale quote, that cost -$82.66.)
             limit = s.get("order_limit")
-            limit = round(float(limit), 2) if limit else round(premium * 0.95, 2)
-            price_src = f"0.95×premium ${limit:.2f}"
+            limit = (round(float(limit), 2) if limit
+                     else round_up_to_tick(premium))
+            price_src = f"mid-on-tick ${limit:.2f}"
 
             order = (
                 option_sell_to_open_limit(occ_sym, 1, limit)

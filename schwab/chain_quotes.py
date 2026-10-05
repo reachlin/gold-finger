@@ -17,6 +17,8 @@ from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+import math
+
 from strategy_params import SCAV_MIN_PREMIUM_PCT
 
 MIN_DTE       = 21     # earliest expiration considered
@@ -29,13 +31,59 @@ MIN_OPEN_INT  = 1      # skip strikes nobody holds — unquotable in practice
 # unquotable strikes without second-guessing which signals qualify, a change
 # that would deserve a backtest.
 MAX_SPREAD_PCT = 0.25
-# Order limit as a fraction of the mid. Deliberately patient: 0.95*mid sits
-# ABOVE the bid whenever the spread exceeds 10% of mid (0.95*mid > bid requires
-# ask/bid > 1.05/0.95 = 1.1053), so wider-spread orders rest rather
-# than cross. An unfilled order is fine — tomorrow brings a fresh signal, and
-# a missed entry beats a badly-priced position. Matches the haircut the
-# model-fallback path already used, so both paths now price identically.
-ORDER_LIMIT_PCT = 0.95
+# Order limit = the mid, rounded UP to the next tradable tick.
+#
+# This replaced limit = 0.95 * mid, which was a real defect: 0.95*mid sits above
+# the bid only when ask/bid > 1.05/0.95, i.e. a spread wider than 10.53% of mid.
+# Our median spread is 5.6%, so the limit landed BELOW the bid on 240 of 309
+# sellable candidates (77.7%) measured 2026-10-06 -- and a sell limit below the
+# bid crosses the book and fills at the bid. The patient pricing was therefore
+# inoperative on most trades, quietly reverting to the bid-selling it replaced.
+# Worst case that day: AMD $610, spread 2.1%, bid 31.35, limit 30.09.
+#
+# Rounding UP rather than down is load-bearing. On a one-tick market
+# (bid 3.55 / ask 3.60) the mid is 3.575; rounding down returns 3.55, the bid
+# again. Rounding up can never exceed the ask, because the ask is itself on a
+# valid tick and mid < ask. So bid < limit <= ask holds for every quote, which
+# is also the property that makes this safe in a disorderly market: an order
+# that cannot cross cannot be filled at a price we did not choose.
+#
+# Tick sizes verified against 3,837 live quotes on 2026-10-06: $0.01 below
+# $3.00, $0.05 at or above it (0 of 2,636 quotes at/above $3 were off-nickel).
+# An off-tick limit risks outright rejection by the exchange.
+TICK_BREAK_PRICE = 3.00
+TICK_BELOW_BREAK = 0.01
+TICK_AT_OR_ABOVE = 0.05
+
+
+def _tick(price: float) -> float:
+    """Minimum price increment for an option trading at `price`."""
+    return TICK_AT_OR_ABOVE if price >= TICK_BREAK_PRICE else TICK_BELOW_BREAK
+
+
+def round_up_to_tick(price: float) -> float:
+    """Round a price up to the next tradable tick.
+
+    For model-priced signals, where there is no chain quote to take a mid from.
+    Rounding up, not down, for the same reason as order_limit_for: we never ask
+    for less than our own estimate of fair value.
+    """
+    tick = _tick(price)
+    return round(math.ceil(round(price / tick, 6)) * tick, 2)
+
+
+def order_limit_for(bid: float, ask: float) -> float:
+    """The price we ask for, given a quote: the mid on the next tradable tick.
+
+    Guarantees bid < limit <= ask for any bid < ask, so the order always rests
+    instead of crossing. A locked market (bid == ask) returns that price.
+    """
+    mid = (bid + ask) / 2
+    tick = _tick(mid)
+    # Work in integer ticks to dodge binary-float surprises: 3.675/0.05 is
+    # 73.49999... in floating point, which would round down to 3.70 - tick.
+    steps = math.ceil(round(mid / tick, 6))
+    return round(min(steps * tick, ask), 2)
 # Minimum contracts resting on the bid. This, not open interest, is the real
 # liquidity gate: OI counts contracts somebody HOLDS, bidSize counts contracts
 # somebody will BUY today. Measured 2026-10-06, KO quoted bid 0.00 / bidSize 0
@@ -96,7 +144,8 @@ def fetch_chain_quote(client, symbol: str, option_type: str,
 
     `premium` is the MID — a fair estimate of the fill, since a sell limit
     fills at the limit or better. `order_limit` is where the order is actually
-    placed: ORDER_LIMIT_PCT * mid, which rests above the bid on any spread
+    placed: the mid rounded up to a tradable tick, which always rests
+    above the bid rather than crossing
     wider than 10% of mid. Both are shown to the LLM so it can judge the trade-off.
 
     Contracts wider than MAX_SPREAD_PCT are skipped entirely — that guard is
@@ -176,7 +225,7 @@ def fetch_chain_quote(client, symbol: str, option_type: str,
                     "premium":       round(mid, 4),
                     "mid":           round(mid, 4),
                     # Where the order actually goes in.
-                    "order_limit":   round(mid * ORDER_LIMIT_PCT, 2),
+                    "order_limit":   order_limit_for(bid, ask),
                     "bid":           bid,
                     # Liquidity context for the LLM. `last` is deliberately NOT
                     # a pricing input: lastSize is 1-4 contracts in practice and

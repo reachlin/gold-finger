@@ -78,7 +78,9 @@ class TestFetchChainQuote:
         q = cq.fetch_chain_quote(client, "KO", "PUT", target_strike=79.13,
                                  target_dte=30)
         assert q["premium"] == pytest.approx((1.10 + 1.30) / 2)
-        assert q["order_limit"] == pytest.approx(round(1.20 * cq.ORDER_LIMIT_PCT, 2))
+        # mid 1.20 is already on a penny tick, so the limit equals it
+        assert q["order_limit"] == pytest.approx(1.20)
+        assert q["order_limit"] > q["bid"]
 
     def test_carries_real_greeks(self):
         client = _mock_client(_chain_response())
@@ -282,29 +284,32 @@ def test_premium_is_the_mid():
     assert q["bid"] == pytest.approx(2.01) and q["ask"] == pytest.approx(2.40)
 
 
-def test_order_limit_is_premium_times_the_haircut():
+def test_order_limit_is_the_mid_on_the_next_tick():
     q = cq.fetch_chain_quote(_client(_one_strike_chain(2.01, 2.40)),
                              "XOM", "PUT", target_strike=152.5, target_dte=32)
-    assert q["order_limit"] == pytest.approx(round(2.205 * cq.ORDER_LIMIT_PCT, 2))
-    assert q["order_limit"] == pytest.approx(2.09)
+    # mid 2.205, penny ticks below $3 -> 2.21
+    assert q["order_limit"] == pytest.approx(2.21)
+    assert q["order_limit"] > q["bid"]
 
 
 def test_the_limit_is_passive_when_the_spread_is_wide():
-    """0.95*mid sits ABOVE the bid once the spread exceeds 10% of mid, so the
-    order rests instead of crossing. Verified live 2026-10-06: AAPL/IBM at 11%
-    and XOM at 16% rest; GOOGL 7%, AMZN 4%, NVDA 3% cross."""
+    """A wide market must leave the order resting, never crossing."""
     q = cq.fetch_chain_quote(_client(_one_strike_chain(9.60, 10.70)),  # 11%
                              "IBM", "PUT", target_strike=152.5, target_dte=32)
     assert q["order_limit"] > q["bid"], \
         f"limit {q['order_limit']} should rest above the bid {q['bid']}"
 
 
-def test_the_limit_crosses_when_the_spread_is_very_tight():
-    """Below 10% the haircut lands at or under the bid, so it fills. Fine — a
-    tight spread means little is being given away."""
+def test_a_tight_spread_also_rests_above_the_bid():
+    """This test previously asserted the opposite, and the reasoning it carried
+    -- "fine, a tight spread means little is being given away" -- was wrong.
+    Tight spreads are where 0.95*mid went furthest below the bid in dollar
+    terms, because the tightest markets are the expensive ones: AMD $610 at a
+    2.1% spread priced $1.26 under its 31.35 bid."""
     q = cq.fetch_chain_quote(_client(_one_strike_chain(3.70, 3.80)),   # 3%
                              "NVDA", "PUT", target_strike=152.5, target_dte=32)
-    assert q["order_limit"] <= q["bid"]
+    assert q["order_limit"] > q["bid"]
+    assert q["order_limit"] == pytest.approx(3.75)
 
 
 def test_the_spread_guard_still_rejects_the_xom_quote():
@@ -320,7 +325,7 @@ def test_requote_exposes_both_numbers_to_the_signal():
     out = cq.requote_signal(_client(_one_strike_chain(2.01, 2.40)), s)
     assert out is not None
     assert out["premium"] == pytest.approx(2.205)      # shown as PREMIUM
-    assert out["order_limit"] == pytest.approx(2.09)   # shown as LIMIT
+    assert out["order_limit"] == pytest.approx(2.21)   # shown as LIMIT
 
 
 # ===========================================================================
@@ -557,3 +562,87 @@ def test_weekend_gap_alone_trips_the_gate_when_nothing_trades():
         _client(_rich(volume=1, trade_age_s=fri_close_to_mon_open)),
         "META", "PUT", target_strike=152.5, target_dte=32)
     assert traded is not None
+
+
+# --- 5. the order limit: mid, rounded to a tradable tick --------------------
+#
+# The bug this replaces: limit = round(0.95 * mid, 2) lands BELOW the bid
+# whenever the spread is under 10.53% of mid, because 0.95*mid > bid requires
+# ask/bid > 1.05/0.95. A sell limit below the bid crosses the book and fills
+# immediately AT the bid, so the "patient" pricing silently became bid-selling
+# on exactly the liquid names we trade most. Measured live 2026-10-06 across 309
+# sellable candidates: 240 of them (77.7%) priced below the bid, median $0.16/sh
+# under it, worst $1.26 (AMD $610, spread 2.1%, bid 31.35 -> limit 30.09).
+#
+# The limit is now the mid rounded UP to the next valid tick. Rounding up rather
+# than down is load-bearing: on a one-tick-wide market (bid 3.55 / ask 3.60) the
+# mid is 3.575, and rounding DOWN gives 3.55 -- the bid again, crossing. Rounding
+# up cannot exceed the ask, because the ask is itself on a valid tick and
+# mid < ask, so the invariant bid < limit <= ask holds for every quote.
+#
+# Tick sizes confirmed against 3,837 live quotes: $0.01 below $3.00 (76% of
+# those were non-nickel), $0.05 at or above (0 of 2,636 were non-nickel). A
+# limit off-tick risks outright rejection by the exchange.
+
+
+def test_tick_is_a_penny_below_three_and_a_nickel_above():
+    assert cq._tick(0.55) == 0.01
+    assert cq._tick(2.99) == 0.01
+    assert cq._tick(3.00) == 0.05
+    assert cq._tick(31.68) == 0.05
+
+
+def test_order_limit_rounds_the_mid_up_to_a_valid_tick():
+    # AAPL live: mid 3.675 is not a nickel, so it must move to 3.70, not 3.65.
+    assert cq.order_limit_for(3.55, 3.80) == 3.70
+    # AMD live: mid 31.675 -> 31.70
+    assert cq.order_limit_for(31.35, 32.00) == 31.70
+    # already on a tick: left alone
+    assert cq.order_limit_for(1.00, 1.50) == 1.25
+    assert cq.order_limit_for(3.50, 3.70) == 3.60
+
+
+def test_order_limit_never_crosses_the_bid_on_a_one_tick_market():
+    """The case that rounding DOWN would break."""
+    assert cq.order_limit_for(3.55, 3.60) == 3.60   # mid 3.575 -> up, not 3.55
+    assert cq.order_limit_for(0.55, 0.56) == 0.56   # penny-wide
+
+
+def test_order_limit_invariant_holds_across_the_whole_quote_space():
+    """bid < limit <= ask for every plausible quote, both tick regimes."""
+    checked = 0
+    for bid_c in range(1, 600):
+        bid = bid_c / 100
+        if abs(round(bid / cq._tick(bid)) * cq._tick(bid) - bid) > 1e-9:
+            continue                      # not a price this option could quote
+        for n in range(1, 12):            # ask from one to eleven ticks wider
+            ask = round(bid + n * cq._tick(bid), 2)
+            if abs(round(ask / cq._tick(ask)) * cq._tick(ask) - ask) > 1e-9:
+                continue                  # straddles $3.00 onto an invalid tick
+            lim = cq.order_limit_for(bid, ask)
+            assert lim > bid - 1e-9, f"bid {bid} ask {ask} -> limit {lim} crosses"
+            assert lim <= ask + 1e-9, f"bid {bid} ask {ask} -> limit {lim} over ask"
+            assert abs(round(lim / cq._tick(lim)) * cq._tick(lim) - lim) < 1e-6, \
+                f"limit {lim} is not on a tradable tick"
+            checked += 1
+    assert checked > 3000, f"only {checked} quotes exercised"
+
+
+def test_order_limit_is_at_least_the_mid():
+    """We never ask for less than fair value; rounding only ever helps us."""
+    for bid, ask in [(3.55, 3.80), (0.55, 0.65), (31.35, 32.00), (1.66, 2.13)]:
+        assert cq.order_limit_for(bid, ask) >= (bid + ask) / 2 - 1e-9
+
+
+def test_locked_market_does_not_blow_up():
+    """bid == ask: nothing to be patient about, and it must not crash."""
+    assert cq.order_limit_for(2.00, 2.00) == 2.00
+
+
+def test_fetch_chain_quote_uses_the_tick_limit():
+    q = cq.fetch_chain_quote(_client(_rich(bid=3.55, ask=3.80)), "AAPL", "PUT",
+                             target_strike=152.5, target_dte=32)
+    assert q is not None
+    assert q["premium"] == q["mid"] == 3.675      # mid stays the fair-value ref
+    assert q["order_limit"] == 3.70               # the price we actually ask
+    assert q["order_limit"] > q["bid"], "must rest above the bid, never cross"

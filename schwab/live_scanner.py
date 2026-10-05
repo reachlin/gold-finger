@@ -41,7 +41,7 @@ import timesfm_advisor
 import wheel_router
 import allocator
 import cash_ledger as cl
-from chain_quotes import requote_signal
+from chain_quotes import requote_signal, round_up_to_tick
 import signal_confidence
 from vault76.overseer import Overseer
 from vault76.armory.raider import Raider
@@ -742,7 +742,8 @@ def _print_signal(s: dict, paper: bool = False, kronos_cache: dict | None = None
         print(f"STRIKE:  ${s['strike']}  ({s.get('otm_pct', '5')}% OTM)")
         print(f"PREMIUM: ${s['premium']}/sh  (${s['premium']*100:.0f}/contract)  "
               f"+{s['premium_pct']:.2f}% yield")
-        _lim = s.get("order_limit") or round(float(s.get("premium", 0)) * 0.95, 2)
+        _lim = (s.get("order_limit")
+                or round_up_to_tick(float(s.get("premium", 0))))
         print(f"LIMIT:   ${_lim}/sh  (${_lim*100:.0f}/contract) — the price the "
               f"order is placed at; may not fill today")
         print(f"DTE:     {s['dte']} days")
@@ -782,7 +783,8 @@ def _print_signal(s: dict, paper: bool = False, kronos_cache: dict | None = None
         print(f"STRIKE:  ${s['strike']}  ({s.get('otm_pct', '8')}% OTM)")
         print(f"PREMIUM: ${s['premium']}/sh  (${s['premium']*100:.0f}/contract)  "
               f"+{s['premium_pct']:.2f}% yield")
-        _lim = s.get("order_limit") or round(float(s.get("premium", 0)) * 0.95, 2)
+        _lim = (s.get("order_limit")
+                or round_up_to_tick(float(s.get("premium", 0))))
         print(f"LIMIT:   ${_lim}/sh  (${_lim*100:.0f}/contract) — the price the "
               f"order is placed at; may not fill today")
         print(f"COST BASIS: ${s.get('cost_basis', '?')}")
