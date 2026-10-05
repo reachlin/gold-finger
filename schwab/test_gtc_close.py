@@ -1,10 +1,16 @@
 """
 Tests for GTC buy-to-close behaviour in real_overseer.
 
-Run (production-style, from repo root so the schwab-py library resolves
-ahead of the local schwab/ package dir):
+Runs under pytest with the rest of the suite -- conftest.py grafts schwab-py
+onto the local schwab package's __path__ so both resolve. It is still runnable as
+a plain script (python schwab/test_gtc_close.py), which was the ONLY way before
+that conftest existed, because the local schwab/ package shadowed schwab-py
+whenever the repo root was on sys.path.
 
-    /Users/lincai/anaconda3/envs/gold-finger-py312/bin/python schwab/test_gtc_close.py
+That exclusion had a cost worth remembering: being outside the suite let
+test_cover_skipped_when_already_covered sit red long enough for the
+duplicate-cover bug it guards to reach production and fire 45 rejected orders on
+2026-09-04. A test nobody runs is not a test.
 
 Covers:
   1. _submit_close_order places a GOOD_TILL_CANCEL (not DAY) BUY_TO_CLOSE,
@@ -21,8 +27,8 @@ from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# Pre-import the real schwab-py library so the local schwab/ dir can't shadow
-# it once real_overseer inserts the repo root onto sys.path.
+# Resolved by conftest.py when run under pytest; still needed for a direct
+# script run, where nothing has grafted the two packages together yet.
 import schwab.orders.options  # noqa: F401
 
 import real_overseer as ro
