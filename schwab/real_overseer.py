@@ -52,6 +52,7 @@ PENDING_ORDERS_PATH  = os.path.join(_DATA_DIR, "pending_orders.json")
 _SINGLETON_LOCK_PATH = os.path.join(_DATA_DIR, "overseer.lock")
 _LOCK_FH             = None   # held open for the process lifetime (see main)
 _TRADE_COUNTER_PATH  = os.path.join(_DATA_DIR, "trade_counter.json")
+_COVER_REJECTS_PATH  = os.path.join(_DATA_DIR, "cover_rejects.json")
 _VAULT8_SIGNALS_PATH = os.path.join(_DATA_DIR, "vault8_weekly_signals.json")
 SLACK_MENTION        = "<@U02DQJ9KKFZ>"   # user's Slack ID for trade notifications
 
@@ -77,6 +78,102 @@ def _next_trade_id() -> str:
     with open(_TRADE_COUNTER_PATH, "w") as f:
         json.dump({"counter": n}, f)
     return f"T{n:04d}"
+
+
+
+# --------------------------------------------------------------------------- #
+# Rejected-cover memory
+#
+# A GTC cover that Schwab rejects must not be re-placed every cycle forever. On
+# 2026-09-04 the same IBM 260925P00225000 BUY_TO_CLOSE at $1.44 went out 45
+# times in four hours, each rejected "may result in an oversold/overbought
+# position", each firing its own Slack alert.
+#
+# Two correct behaviours combined into a loop: place_gtc_close is idempotent
+# against pending_orders.json, and _reconcile prunes DEAD_STATUSES from that
+# same file because a rejected order will never fill. Place -> rejected
+# asynchronously at Schwab's risk check -> pruned -> no cover on record -> place
+# again. The pending file cannot hold this state, since pruning it is the whole
+# point of that code, so rejections get their own small ledger.
+#
+# Every read fails OPEN: a missing or corrupt ledger must never be able to stop
+# a cover being placed, because a cover is what caps the loss on a short option.
+# The failure mode we are preventing is noise; the one we must not create is an
+# uncovered position.
+# --------------------------------------------------------------------------- #
+
+MAX_COVER_ATTEMPTS = 3     # rejections for one cover before we stop and ask
+
+
+def _cover_key(opening_ref, occ_sym: str) -> str:
+    """Identity for a cover, matching place_gtc_close's idempotency key.
+
+    opening_ref is per OPENING position, so two stacked opens of one contract
+    are tracked separately. Falls back to the contract when no ref exists,
+    normalising the OCC space padding ("IBM   2609.." vs "IBM2609..").
+    """
+    if opening_ref:
+        return f"ref:{opening_ref}"
+    return f"occ:{(occ_sym or '').replace(' ', '')}"
+
+
+def _load_cover_rejects() -> dict:
+    try:
+        with open(_COVER_REJECTS_PATH) as f:
+            d = json.load(f)
+            return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}      # absent or damaged -> no blocks, covers keep flowing
+
+
+def _save_cover_rejects(d: dict) -> None:
+    try:
+        os.makedirs(_DATA_DIR, exist_ok=True)
+        with open(_COVER_REJECTS_PATH, "w") as f:
+            json.dump(d, f, indent=2)
+    except Exception as exc:
+        print(f"  [AutoClose] could not persist cover rejections: {exc}")
+
+
+def _record_cover_reject(key: str, reason: str) -> int:
+    """Count one rejection for `key`; returns the running total."""
+    d = _load_cover_rejects()
+    rec = d.get(key) or {}
+    rec["count"]  = int(rec.get("count", 0)) + 1
+    rec["reason"] = (reason or "")[:300]
+    rec["last"]   = _now_et().strftime("%Y-%m-%d %H:%M:%S")
+    d[key] = rec
+    _save_cover_rejects(d)
+    return rec["count"]
+
+
+def _note_dead_order(entry: dict, status: str, reason: str) -> bool:
+    """Count a rejected cover. True when this rejection reached the cap.
+
+    Only REJECTED counts, and only for a BUY_TO_CLOSE. A CANCELED or EXPIRED
+    cover is not a systematic failure -- a human cancelling one by hand, or a
+    GTC order Schwab purges, must not burn the budget that protects us from a
+    genuine retry storm. A rejected SELL_PUT is a separate problem (no buying
+    power, closed market) and is not tracked here.
+    """
+    if status != "REJECTED" or entry.get("signal") != "BUY_TO_CLOSE":
+        return False
+    key = _cover_key(entry.get("opening_ref"), entry.get("occ_sym", ""))
+    was_blocked = _cover_is_blocked(key)
+    count = _record_cover_reject(key, reason)
+    return count >= MAX_COVER_ATTEMPTS and not was_blocked
+
+
+def _cover_is_blocked(key: str) -> bool:
+    return int((_load_cover_rejects().get(key) or {}).get("count", 0)) \
+        >= MAX_COVER_ATTEMPTS
+
+
+def _clear_cover_reject(key: str) -> None:
+    """Forget a cover's rejections once one is accepted."""
+    d = _load_cover_rejects()
+    if d.pop(key, None) is not None:
+        _save_cover_rejects(d)
 
 
 def _load_pending() -> list:
@@ -1090,14 +1187,37 @@ class RealOverseer:
         for e in _load_pending():
             if e.get("signal") != "BUY_TO_CLOSE":
                 continue
-            # Idempotent PER OPENING POSITION (opening_ref) — so two stacked
-            # opens of the same contract each get their own cover. Fall back to
-            # the per-contract key only when no opening_ref is available.
-            if opening_ref is not None:
-                if e.get("opening_ref") == opening_ref:
-                    return None    # this specific open already has a cover
-            elif e.get("occ_sym", "").replace(" ", "") == occ_norm:
-                return None
+            # Idempotent on EITHER key. Matching only on opening_ref left a
+            # hole: a pending cover written without one (an older entry, or a
+            # path that did not pass it) never matched, so a second cover went
+            # out for a contract already covered -- which Schwab refuses with
+            # "may result in an oversold/overbought position". That rejection
+            # is then pruned by _reconcile, and the next cycle tries again,
+            # which is how 45 identical IBM orders went out on 2026-09-04.
+            #
+            # Checking occ_sym unconditionally was previously avoided to let two
+            # stacked opens of one contract each hold their own cover. That no
+            # longer applies: one open position per underlying is enforced in
+            # _pre_trade_check, so a resting cover for this contract always
+            # means this position is already covered.
+            if opening_ref is not None and e.get("opening_ref") == opening_ref:
+                return None        # this specific open already has a cover
+            if e.get("occ_sym", "").replace(" ", "") == occ_norm:
+                return None        # this contract already has a resting cover
+
+        # Schwab has already refused this exact cover MAX_COVER_ATTEMPTS times.
+        # Re-sending it every cycle achieved nothing but 45 rejected orders and
+        # 45 Slack alerts on 2026-09-04, so stop and leave it to a human. The
+        # position is NOT silently unprotected: the alert below fired when the
+        # cap was reached, and overseer_status.py reconciles covers against the
+        # live account.
+        _ck = _cover_key(opening_ref, occ_sym)
+        if _cover_is_blocked(_ck):
+            _rec = _load_cover_rejects().get(_ck) or {}
+            print(f"  [AutoClose] ⏸ cover for {symbol} ${strike} is blocked "
+                  f"after {_rec.get('count')} rejections "
+                  f"(last: {_rec.get('reason', '?')[:80]}) — not retrying")
+            return None
 
         try:
             from schwab.orders.options import option_buy_to_close_limit
@@ -1135,6 +1255,9 @@ class RealOverseer:
             "entry_iv":        entry_iv,  # % at open; used by v2 IV-crush early-TP
         })
         _save_pending(pending)
+        # Accepted — forget any earlier rejections for this cover so a later,
+        # unrelated failure starts from a clean count.
+        _clear_cover_reject(_ck)
 
         est_pnl  = round((entry_prem - target_price) * 100, 2)
         where    = "resting on open" if trigger == "open" else "target near"
@@ -1440,6 +1563,17 @@ class RealOverseer:
                     f"{entry.get('trade_id', '')}*\n{entry['symbol']} "
                     f"{entry['signal']} ${entry['strike']}\nReason: {reason}"
                 )
+                # This entry is about to be dropped from the pending list. If it
+                # was a rejected cover, that drop is exactly what lets the next
+                # cycle place it again, so count it before it disappears.
+                if _note_dead_order(entry, status, reason):
+                    scanner._send_slack(
+                        f"{SLACK_MENTION} ⏸ *Giving up on this cover* — "
+                        f"{entry['symbol']} ${entry.get('strike')}\n"
+                        f"Schwab rejected it {MAX_COVER_ATTEMPTS} times: "
+                        f"{reason}\nNo further attempts will be made. The short "
+                        f"position has no resting cover — check it by hand."
+                    )
                 continue
             keep.append(entry)
 

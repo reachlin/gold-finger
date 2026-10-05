@@ -61,6 +61,7 @@ def _fresh_state(tmp):
     ro._DATA_DIR = tmp
     ro.PENDING_ORDERS_PATH = os.path.join(tmp, "pending_orders.json")
     ro._TRADE_COUNTER_PATH = os.path.join(tmp, "trade_counter.json")
+    ro._COVER_REJECTS_PATH = os.path.join(tmp, "cover_rejects.json")
 
 
 def _bare_overseer():
@@ -316,6 +317,69 @@ def test_cover_skipped_when_already_covered():
     print("ok  test_cover_skipped_when_already_covered")
 
 
+def test_cover_still_placed_when_rejections_are_under_the_cap():
+    """Regression for the retry-storm guard: it must not break normal covers."""
+    with tempfile.TemporaryDirectory() as tmp:
+        _fresh_state(tmp)
+        client = FakeClient()
+        ov = _bare_overseer()
+        k = ro._cover_key("T0101", "XOM   260919P00144000")
+        ro._record_cover_reject(k, "transient")      # 1 of MAX_COVER_ATTEMPTS
+
+        tid = ov._submit_close_order(
+            FakeScanner(), client, "acct", symbol="XOM", strike=144.0,
+            expiry="2026-09-19", days_left=14,
+            occ_sym="XOM   260919P00144000", entry_prem=2.00,
+            target_price=1.00, opening_ref="T0101")
+
+        assert tid is not None, "a cover under the cap must still be placed"
+        assert len(client.placed) == 1
+    print("ok  test_cover_still_placed_when_rejections_are_under_the_cap")
+
+
+def test_a_placed_cover_clears_earlier_rejections():
+    """Two rejections then a success must not leave a nearly-full counter."""
+    with tempfile.TemporaryDirectory() as tmp:
+        _fresh_state(tmp)
+        client = FakeClient()
+        ov = _bare_overseer()
+        k = ro._cover_key("T0101", "XOM   260919P00144000")
+        ro._record_cover_reject(k, "transient")
+        ro._record_cover_reject(k, "transient")
+
+        ov._submit_close_order(
+            FakeScanner(), client, "acct", symbol="XOM", strike=144.0,
+            expiry="2026-09-19", days_left=14,
+            occ_sym="XOM   260919P00144000", entry_prem=2.00,
+            target_price=1.00, opening_ref="T0101")
+
+        assert k not in ro._load_cover_rejects(), \
+            "an accepted cover must reset the count"
+    print("ok  test_a_placed_cover_clears_earlier_rejections")
+
+
+def test_blocked_cover_is_not_sent_to_schwab():
+    """The storm guard itself, through the real order path."""
+    with tempfile.TemporaryDirectory() as tmp:
+        _fresh_state(tmp)
+        client = FakeClient()
+        ov = _bare_overseer()
+        k = ro._cover_key("T0101", "XOM   260919P00144000")
+        for _ in range(ro.MAX_COVER_ATTEMPTS):
+            ro._record_cover_reject(k, "oversold/overbought position")
+
+        tid = ov._submit_close_order(
+            FakeScanner(), client, "acct", symbol="XOM", strike=144.0,
+            expiry="2026-09-19", days_left=14,
+            occ_sym="XOM   260919P00144000", entry_prem=2.00,
+            target_price=1.00, opening_ref="T0101")
+
+        assert tid is None
+        assert client.placed == [], "blocked cover must never reach Schwab"
+        assert ro._load_pending() == [], "and must not be tracked as pending"
+    print("ok  test_blocked_cover_is_not_sent_to_schwab")
+
+
 if __name__ == "__main__":
     test_places_gtc_close()
     test_idempotent()
@@ -324,4 +388,7 @@ if __name__ == "__main__":
     test_retry_gives_up()
     test_cover_placed_far_from_target()
     test_cover_skipped_when_already_covered()
+    test_cover_still_placed_when_rejections_are_under_the_cap()
+    test_a_placed_cover_clears_earlier_rejections()
+    test_blocked_cover_is_not_sent_to_schwab()
     print("\nALL PASS")
