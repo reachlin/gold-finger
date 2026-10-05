@@ -48,9 +48,25 @@ MAX_SPREAD_PCT = 0.25
 # is also the property that makes this safe in a disorderly market: an order
 # that cannot cross cannot be filled at a price we did not choose.
 #
-# Tick sizes verified against 3,837 live quotes on 2026-10-06: $0.01 below
-# $3.00, $0.05 at or above it (0 of 2,636 quotes at/above $3 were off-nickel).
-# An off-tick limit risks outright rejection by the exchange.
+# Increments follow what the market DISPLAYS, verified against 3,837 live quotes
+# on 2026-10-06: $0.01 below $3.00, $0.05 at or above it (0 of 2,636 quotes
+# at/above $3 were off-nickel).
+#
+# Be careful about why. Rounding to the displayed increment is a CHOICE, not a
+# requirement -- an off-nickel limit above $3 is accepted and fills exactly as
+# sent. Checked on the two we have sent: NVDA 260918P00205000 at $4.84 and
+# IBM 260918P00220000 at $3.06, both 2026-08-21, both executed at precisely
+# those prices, no rounding in either direction. None of the 48 rejections in
+# the last 90 days was tick-related either. So this is not protection against
+# rejection; an earlier version of this comment claimed it was, and that was
+# wrong.
+#
+# It is kept because matching the displayed increment costs almost nothing and
+# keeps the limit a price the book actually shows: measured across 236 live
+# candidates with a mid at/above $3, nickel rounding asks a mean $0.0115/sh over
+# the mid against $0.0023 for penny rounding -- about $0.90 per contract -- and
+# lands at the ask on 1 of 236. Penny rounding would satisfy the same invariant
+# if we ever want the extra fill probability.
 TICK_BREAK_PRICE = 3.00
 TICK_BELOW_BREAK = 0.01
 TICK_AT_OR_ABOVE = 0.05

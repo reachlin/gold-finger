@@ -580,9 +580,12 @@ def test_weekend_gap_alone_trips_the_gate_when_nothing_trades():
 # up cannot exceed the ask, because the ask is itself on a valid tick and
 # mid < ask, so the invariant bid < limit <= ask holds for every quote.
 #
-# Tick sizes confirmed against 3,837 live quotes: $0.01 below $3.00 (76% of
-# those were non-nickel), $0.05 at or above (0 of 2,636 were non-nickel). A
-# limit off-tick risks outright rejection by the exchange.
+# Increments match what the market displays, confirmed against 3,837 live
+# quotes: $0.01 below $3.00 (76% of those were non-nickel), $0.05 at or above
+# (0 of 2,636 were non-nickel). This is NOT rejection protection -- the two
+# off-nickel limits we have sent above $3 (NVDA $4.84, IBM $3.06, 2026-08-21)
+# both filled at exactly those prices. It is a choice that costs ~$0.90 per
+# contract against penny rounding, and keeps the limit on a displayed price.
 
 
 def test_tick_is_a_penny_below_three_and_a_nickel_above():
