@@ -750,6 +750,19 @@ def _print_signal(s: dict, paper: bool = False, kronos_cache: dict | None = None
         print(f"MAX LOSS:${s.get('max_loss', '?')}/contract if assigned")
         print(f"HV:      {s.get('hv', '?')}%  ADX: {s.get('adx', '?')}")
         if s.get("quote_source") == "schwab_chain":
+            # Liquidity context: is the quote real, or a number nobody trades
+            # against? lastSize is typically 1-4 contracts and the last print
+            # can be minutes or DAYS old, so this is judgement material for the
+            # LLM, not a price.
+            _bs, _as_ = s.get("bid_size"), s.get("ask_size")
+            _age = s.get("trade_age_min")
+            _age_txt = (f"{_age:.0f}m ago" if isinstance(_age, (int, float))
+                        else "unknown")
+            print(f"LIQUIDITY: bid×ask size {_bs if _bs is not None else '?'}"
+                  f"×{_as_ if _as_ is not None else '?'}  "
+                  f"vol {s.get('volume', '?')}  OI {s.get('open_interest', '?')}  "
+                  f"last ${s.get('last', '?')} (size {s.get('last_size', '?')}, "
+                  f"traded {_age_txt})")
             print(f"QUOTE:   real chain — exp {s.get('expiry', '?')}  "
                   f"IV {s.get('iv', '?')}%  delta {s.get('delta', '?')}  "
                   f"bid/ask ${s.get('bid', '?')}/${s.get('ask', '?')}")
@@ -777,6 +790,19 @@ def _print_signal(s: dict, paper: bool = False, kronos_cache: dict | None = None
         print(f"MAX GAIN:${s.get('max_gain', '?')}/contract if called away")
         print(f"HV:      {s.get('hv', '?')}%  ADX: {s.get('adx', '?')}")
         if s.get("quote_source") == "schwab_chain":
+            # Liquidity context: is the quote real, or a number nobody trades
+            # against? lastSize is typically 1-4 contracts and the last print
+            # can be minutes or DAYS old, so this is judgement material for the
+            # LLM, not a price.
+            _bs, _as_ = s.get("bid_size"), s.get("ask_size")
+            _age = s.get("trade_age_min")
+            _age_txt = (f"{_age:.0f}m ago" if isinstance(_age, (int, float))
+                        else "unknown")
+            print(f"LIQUIDITY: bid×ask size {_bs if _bs is not None else '?'}"
+                  f"×{_as_ if _as_ is not None else '?'}  "
+                  f"vol {s.get('volume', '?')}  OI {s.get('open_interest', '?')}  "
+                  f"last ${s.get('last', '?')} (size {s.get('last_size', '?')}, "
+                  f"traded {_age_txt})")
             print(f"QUOTE:   real chain — exp {s.get('expiry', '?')}  "
                   f"IV {s.get('iv', '?')}%  delta {s.get('delta', '?')}  "
                   f"bid/ask ${s.get('bid', '?')}/${s.get('ask', '?')}")

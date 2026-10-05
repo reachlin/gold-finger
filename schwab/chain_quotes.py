@@ -36,6 +36,27 @@ MAX_SPREAD_PCT = 0.25
 # a missed entry beats a badly-priced position. Matches the haircut the
 # model-fallback path already used, so both paths now price identically.
 ORDER_LIMIT_PCT = 0.95
+# Minimum contracts resting on the bid. This, not open interest, is the real
+# liquidity gate: OI counts contracts somebody HOLDS, bidSize counts contracts
+# somebody will BUY today. Measured 2026-10-06, KO quoted bid 0.00 / bidSize 0
+# / volume 0 with open interest clearing MIN_OPEN_INT=1 -- unsellable at any
+# price, and only the `bid <= 0` check kept it out. 10 is ~10x the 1-contract
+# size traded, and well under the 43-635 seen on healthy strikes.
+MIN_BID_SIZE = 10
+
+
+def _trade_age_min(opt: dict) -> float | None:
+    """Minutes between the last print and the current quote, or None.
+
+    A large value means the price you see is a quote nobody has traded against
+    recently — the condition that made XOM's mid meaningless. Reported rather
+    than filtered on: a stale print alongside a live two-sided quote is still
+    perfectly tradeable.
+    """
+    q_t, t_t = opt.get("quoteTimeInLong"), opt.get("tradeTimeInLong")
+    if not q_t or not t_t:
+        return None
+    return round(max(0.0, (float(q_t) - float(t_t)) / 1000 / 60), 1)
 
 
 def fetch_chain_quote(client, symbol: str, option_type: str,
@@ -102,6 +123,11 @@ def fetch_chain_quote(client, symbol: str, option_type: str,
             oi     = int(opt.get("openInterest", 0) or 0)
             if bid <= 0 or oi < MIN_OPEN_INT:
                 continue
+            # A missing size must not read as zero — some quotes omit it, and
+            # treating absent data as "no liquidity" drops every signal.
+            bid_size = opt.get("bidSize")
+            if bid_size is not None and int(bid_size) < MIN_BID_SIZE:
+                continue
             mid = (bid + ask) / 2
             if mid <= 0 or (ask - bid) / mid > MAX_SPREAD_PCT:
                 continue   # unquotable — selling at the bid here gives away
@@ -118,6 +144,18 @@ def fetch_chain_quote(client, symbol: str, option_type: str,
                     # Where the order actually goes in.
                     "order_limit":   round(mid * ORDER_LIMIT_PCT, 2),
                     "bid":           bid,
+                    # Liquidity context for the LLM. `last` is deliberately NOT
+                    # a pricing input: lastSize is 1-4 contracts in practice and
+                    # trade_age_min has been measured anywhere from 0.2 to 5863
+                    # minutes. It is here so the model can judge whether a quote
+                    # is real, which is judgement rather than arithmetic.
+                    "last":          float(opt.get("last", 0) or 0),
+                    "last_size":     int(opt.get("lastSize", 0) or 0),
+                    "volume":        int(opt.get("totalVolume", 0) or 0),
+                    "bid_size":      int(bid_size) if bid_size is not None else None,
+                    "ask_size":      (int(opt["askSize"])
+                                      if opt.get("askSize") is not None else None),
+                    "trade_age_min": _trade_age_min(opt),
                     "ask":           ask,
                     "dte":           dte,
                     "expiry":        exp_str,
@@ -171,6 +209,12 @@ def requote_signal(client, s: dict, target_dte: int | None = None) -> dict | Non
         "order_limit":  q["order_limit"],
         "bid":          q["bid"],
         "ask":          q["ask"],
+        "last":          q["last"],
+        "last_size":     q["last_size"],
+        "volume":        q["volume"],
+        "bid_size":      q["bid_size"],
+        "ask_size":      q["ask_size"],
+        "trade_age_min": q["trade_age_min"],
         "quote_source": "schwab_chain",
     })
     if s.get("signal") == "SELL_PUT":

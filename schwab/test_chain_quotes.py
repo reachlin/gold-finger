@@ -321,3 +321,122 @@ def test_requote_exposes_both_numbers_to_the_signal():
     assert out is not None
     assert out["premium"] == pytest.approx(2.205)      # shown as PREMIUM
     assert out["order_limit"] == pytest.approx(2.09)   # shown as LIMIT
+
+
+# ===========================================================================
+# Liquidity context + a bid-size gate (2026-10-06)
+# ===========================================================================
+#
+# Measured across the watchlist, the fields we were NOT using turned out to be
+# the ones that say whether a quote is real:
+#
+#   sym    last lastSize  vol  bidSz askSz  trade age
+#   AMZN   7.35     1     234   635   156      0.2m
+#   IBM   10.00     1      11   257    46     68.4m
+#   KO     0.07     4       0     0    122   5863.0m   <- 4 DAYS, bid 0.00
+#
+# lastSize is 1-4 contracts everywhere, and trade age ranges from 12 seconds to
+# four days -- which is why `last` is context, never a price reference.
+#
+# KO is the latent bug: no bid, no bid size, no volume, yet openInterest clears
+# MIN_OPEN_INT = 1. Only the `bid <= 0` check stopped it; a contract quoting
+# bid 0.05 with bidSize 0 would have passed. You cannot sell to a buyer who
+# isn't there, so bid SIZE is the real liquidity gate -- open interest counts
+# contracts someone holds, not contracts anyone will buy today.
+
+
+def _rich(bid=2.01, ask=2.40, bid_size=500, ask_size=400, last=2.20,
+          last_size=1, volume=150, trade_age_s=300):
+    quote_t = 1791223543231
+    return {
+        "underlying": {"last": 161.65},
+        "putExpDateMap": {
+            "2026-11-06:32": {
+                "152.5": [{
+                    "bid": bid, "ask": ask, "bidSize": bid_size,
+                    "askSize": ask_size, "last": last, "lastSize": last_size,
+                    "totalVolume": volume, "delta": -0.22, "volatility": 28.8,
+                    "openInterest": 500, "inTheMoney": False,
+                    "quoteTimeInLong": quote_t,
+                    "tradeTimeInLong": quote_t - trade_age_s * 1000,
+                }]
+            }
+        },
+    }
+
+
+# --- 3. the bid-size gate --------------------------------------------------
+
+def test_a_contract_with_no_bid_size_is_rejected():
+    """The KO case: you cannot sell into a bid that has no size behind it."""
+    q = cq.fetch_chain_quote(_client(_rich(bid=0.05, ask=0.10, bid_size=0)),
+                             "KO", "PUT", target_strike=152.5, target_dte=32)
+    assert q is None
+
+
+def test_a_thin_bid_size_is_rejected():
+    q = cq.fetch_chain_quote(_client(_rich(bid_size=1)),
+                             "XOM", "PUT", target_strike=152.5, target_dte=32)
+    assert q is None, f"bidSize 1 should not qualify (floor {cq.MIN_BID_SIZE})"
+
+
+def test_adequate_bid_size_is_accepted():
+    q = cq.fetch_chain_quote(_client(_rich(bid_size=cq.MIN_BID_SIZE)),
+                             "XOM", "PUT", target_strike=152.5, target_dte=32)
+    assert q is not None
+
+
+def test_a_missing_bid_size_does_not_block_the_signal():
+    """Some feeds omit sizes. Absent data must not be read as zero size, or
+    every signal disappears on a partial quote."""
+    payload = _rich()
+    del payload["putExpDateMap"]["2026-11-06:32"]["152.5"][0]["bidSize"]
+    q = cq.fetch_chain_quote(_client(payload), "XOM", "PUT",
+                             target_strike=152.5, target_dte=32)
+    assert q is not None
+
+
+# --- 2. liquidity context for the LLM -------------------------------------
+
+def test_liquidity_fields_are_carried_through():
+    q = cq.fetch_chain_quote(_client(_rich(last=2.20, last_size=3, volume=150,
+                                           bid_size=500, ask_size=400)),
+                             "XOM", "PUT", target_strike=152.5, target_dte=32)
+    assert q["last"] == pytest.approx(2.20)
+    assert q["last_size"] == 3
+    assert q["volume"] == 150
+    assert q["bid_size"] == 500 and q["ask_size"] == 400
+
+
+def test_trade_age_is_computed_in_minutes():
+    q = cq.fetch_chain_quote(_client(_rich(trade_age_s=4104)),   # 68.4 min
+                             "IBM", "PUT", target_strike=152.5, target_dte=32)
+    assert q["trade_age_min"] == pytest.approx(68.4, abs=0.1)
+
+
+def test_a_four_day_old_trade_is_reported_not_hidden():
+    """KO's last traded 5863 minutes ago. The number must reach the LLM so it
+    can distrust the quote -- it is not a reason to drop the signal on its own,
+    because a stale print with a live two-sided quote is still tradeable."""
+    q = cq.fetch_chain_quote(_client(_rich(trade_age_s=5863*60)),
+                             "KO", "PUT", target_strike=152.5, target_dte=32)
+    assert q is not None
+    assert q["trade_age_min"] > 5000
+
+
+def test_trade_age_is_none_when_timestamps_are_missing():
+    payload = _rich()
+    o = payload["putExpDateMap"]["2026-11-06:32"]["152.5"][0]
+    del o["tradeTimeInLong"]
+    q = cq.fetch_chain_quote(_client(payload), "XOM", "PUT",
+                             target_strike=152.5, target_dte=32)
+    assert q is not None and q["trade_age_min"] is None
+
+
+def test_requote_passes_liquidity_through_to_the_signal():
+    s = {"signal": "SELL_PUT", "symbol": "XOM", "strike": 152.5,
+         "close": 161.65, "dte": 32}
+    out = cq.requote_signal(_client(_rich()), s)
+    assert out is not None
+    for k in ("last", "last_size", "volume", "bid_size", "ask_size", "trade_age_min"):
+        assert k in out, f"{k} should reach the signal the LLM reads"

@@ -113,6 +113,29 @@ This is enforced in code as well, so approving such a signal only wastes a
 scan: the pre-trade check rejects it before any order reaches Schwab. Prefer a
 signal on a symbol you hold nothing in.
 
+## Price and liquidity — is this quote real?
+`premium` is the MID and is only an ESTIMATE of the fill. `order_limit` is the
+price the order is actually placed at (0.95 x mid); judge the trade on THAT, not
+on premium. An order that does not fill today is a perfectly good outcome — a
+fresh signal arrives tomorrow, and a missed entry is far cheaper than a
+badly-priced position. Never approve something marginal just because it is the
+only fundable candidate.
+
+Use the liquidity fields to decide how much to trust the quote:
+- `bid_size`/`ask_size` — contracts resting on each side. A badly skewed book
+  (e.g. 308 x 19) means the price you see is one-sided.
+- `volume` — contracts traded today. Single digits means almost nobody is
+  trading this strike.
+- `trade_age_min` — minutes since the last print. Tens of minutes or more means
+  the quote is a standing offer nobody has tested.
+- `last`/`last_size` — the last print and its size. `last_size` is usually 1-4
+  contracts, so it is NOT a fair value; it is only a sanity check. If `last`
+  sits far outside the current bid/ask, treat the quote as unreliable.
+
+A wide spread on a thin, stale, skewed book is the shape that loses money: the
+fill lands near the bid while the signal was priced off the mid. SKIP those even
+when the yield looks attractive.
+
 ## Soft rules (use your judgment)
 - SKIP if HV > 60% (too volatile for premium selling — gamma risk too high)
 - SKIP if ADX > 28 (stock is trending, not sideways — wrong strategy)
