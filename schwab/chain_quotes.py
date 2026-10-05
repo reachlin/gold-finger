@@ -43,6 +43,31 @@ ORDER_LIMIT_PCT = 0.95
 # price, and only the `bid <= 0` check kept it out. 10 is ~10x the 1-contract
 # size traded, and well under the 43-635 seen on healthy strikes.
 MIN_BID_SIZE = 10
+# Age of the last print, in minutes, past which a contract with ZERO volume
+# today is treated as an untested market rather than a merely thin one. Both
+# conditions are required: zero volume alone is common and perfectly fillable
+# (UNH trades a median of 6 contracts), and a stale print on something that DID
+# trade today is just quiet.
+#
+# Measured live on Monday 2026-10-06 against 314 contracts clearing every other
+# gate inside the delta band we sell: this rejects 5 of them (1.6%), all with
+# open interest of 1-42 and no trade since Friday.
+#
+# Know what this threshold does NOT do: 1440 minutes is 24 hours, while Friday
+# 16:00 ET to Monday 09:30 ET is 3930 minutes. A weekend gap therefore clears it
+# on its own, so for the whole Monday session the rule collapses to "zero volume
+# today" for anything untraded since Friday. That is stricter on Mondays than
+# Tuesdays, which is ugly but lands on the safe side: a contract nobody has
+# touched since Friday close genuinely has nothing behind its mid, and skipping
+# it costs one day. Fixing the asymmetry properly means counting trading
+# SESSIONS rather than wall-clock minutes, which needs the market calendar --
+# not worth it for 1.6% of candidates.
+#
+# Do not read a stale `last` as proof of a bad quote on its own. Across a
+# weekend the underlying moves, so Friday's print SHOULD diverge from Monday's
+# mid; META $705 showed last 27.56 against mid 22.02 purely from the gap. The
+# signal here is the absence of trading, not the size of that divergence.
+MAX_UNTRADED_AGE_MIN = 1440
 
 
 def _trade_age_min(opt: dict) -> float | None:
@@ -128,6 +153,15 @@ def fetch_chain_quote(client, symbol: str, option_type: str,
             bid_size = opt.get("bidSize")
             if bid_size is not None and int(bid_size) < MIN_BID_SIZE:
                 continue
+            # A market nobody has tested. Absent fields must not reject --
+            # treating a data gap as the worst case would silently drop
+            # signals, the same reasoning as bidSize above.
+            volume = opt.get("totalVolume")
+            age    = _trade_age_min(opt)
+            if (volume is not None and int(volume) == 0
+                    and age is not None and age > MAX_UNTRADED_AGE_MIN):
+                continue   # no volume today and no print for a full session:
+                           # the mid has nothing behind it
             mid = (bid + ask) / 2
             if mid <= 0 or (ask - bid) / mid > MAX_SPREAD_PCT:
                 continue   # unquotable — selling at the bid here gives away
@@ -151,11 +185,11 @@ def fetch_chain_quote(client, symbol: str, option_type: str,
                     # is real, which is judgement rather than arithmetic.
                     "last":          float(opt.get("last", 0) or 0),
                     "last_size":     int(opt.get("lastSize", 0) or 0),
-                    "volume":        int(opt.get("totalVolume", 0) or 0),
+                    "volume":        int(volume) if volume is not None else 0,
                     "bid_size":      int(bid_size) if bid_size is not None else None,
                     "ask_size":      (int(opt["askSize"])
                                       if opt.get("askSize") is not None else None),
-                    "trade_age_min": _trade_age_min(opt),
+                    "trade_age_min": age,
                     "ask":           ask,
                     "dte":           dte,
                     "expiry":        exp_str,

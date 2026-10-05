@@ -440,3 +440,120 @@ def test_requote_passes_liquidity_through_to_the_signal():
     assert out is not None
     for k in ("last", "last_size", "volume", "bid_size", "ask_size", "trade_age_min"):
         assert k in out, f"{k} should reach the signal the LLM reads"
+
+
+# --- 4. the untraded-market gate -------------------------------------------
+#
+# Measured on the live chain 2026-10-06: of 322 contracts that survived every
+# other gate inside the delta band we sell (-0.10..-0.40), 7 had traded zero
+# contracts today AND had a last print ~3 days old -- they sat untested through
+# a full session and then some. Two of them:
+#
+#   META $705  spread  5.7%  oi  12  bidSz 239  vol 0  age 3.1d  last 27.56 / mid 22.02
+#   PG   $139  spread  8.5%  oi 100  bidSz  51  vol 0  age 3.0d  last  1.73 / mid  1.29
+#
+# Both look healthy on every axis we gated: tight spread, deep bid, real open
+# interest. The only tell is that nobody has traded them, and `last` sits 25-34%
+# away from the mid -- so the mid is a market maker's opinion, not a price. This
+# is the one case that is objectively broken rather than merely thin, which is
+# why it earns a hard reject instead of a warning: a stale, untraded contract
+# gives the LLM no way to sanity-check the quote it is pricing off.
+#
+# Note the original proposal here was `openInterest == 0 and volume == 0`. That
+# is dead code: MIN_OPEN_INT = 1 already rejects all 823 oi==0 contracts, and
+# the 740 matching oi==0-and-vol==0 are a strict subset. It would reject nothing.
+
+
+def test_untraded_and_stale_contract_is_rejected():
+    """Zero volume today plus a days-old print: nobody has tested this quote."""
+    q = cq.fetch_chain_quote(
+        _client(_rich(volume=0, trade_age_s=3 * 86400)),
+        "PG", "PUT", target_strike=152.5, target_dte=32)
+    assert q is None
+
+
+def test_untraded_but_freshly_printed_contract_is_kept():
+    """vol==0 with a recent print is thin, not broken — that is the LLM's call.
+
+    Volume resets each session, so a contract that printed 30 minutes ago can
+    legitimately show zero volume across a session boundary.
+    """
+    q = cq.fetch_chain_quote(
+        _client(_rich(volume=0, trade_age_s=1800)),
+        "PG", "PUT", target_strike=152.5, target_dte=32)
+    assert q is not None
+    assert q["volume"] == 0
+
+
+def test_stale_contract_that_actually_traded_is_kept():
+    """A days-old quote that has traded today is tested, just quiet."""
+    q = cq.fetch_chain_quote(
+        _client(_rich(volume=5, trade_age_s=3 * 86400)),
+        "IBM", "PUT", target_strike=152.5, target_dte=32)
+    assert q is not None
+
+
+def test_missing_trade_timestamps_do_not_reject():
+    """Absent data is not evidence of a dead market.
+
+    Same principle as bidSize: treating a missing field as the worst case would
+    silently drop every signal from a quote that happens to omit it.
+    """
+    chain = _rich(volume=0)
+    opt = chain["putExpDateMap"]["2026-11-06:32"]["152.5"][0]
+    del opt["tradeTimeInLong"]
+    q = cq.fetch_chain_quote(_client(chain), "PG", "PUT",
+                             target_strike=152.5, target_dte=32)
+    assert q is not None
+    assert q["trade_age_min"] is None
+
+
+def test_missing_volume_field_does_not_reject():
+    """An absent totalVolume is a data gap, not a zero."""
+    chain = _rich(trade_age_s=3 * 86400)
+    opt = chain["putExpDateMap"]["2026-11-06:32"]["152.5"][0]
+    del opt["totalVolume"]
+    q = cq.fetch_chain_quote(_client(chain), "PG", "PUT",
+                             target_strike=152.5, target_dte=32)
+    assert q is not None
+
+
+def test_untraded_age_boundary():
+    """Exactly at the limit is kept; one minute past it is rejected."""
+    at = cq.fetch_chain_quote(
+        _client(_rich(volume=0, trade_age_s=cq.MAX_UNTRADED_AGE_MIN * 60)),
+        "PG", "PUT", target_strike=152.5, target_dte=32)
+    assert at is not None, "the boundary itself must not reject"
+    past = cq.fetch_chain_quote(
+        _client(_rich(volume=0, trade_age_s=(cq.MAX_UNTRADED_AGE_MIN + 1) * 60)),
+        "PG", "PUT", target_strike=152.5, target_dte=32)
+    assert past is None
+
+
+def test_healthy_contract_still_selected_after_the_gate():
+    """Regression: the common case must be untouched."""
+    q = cq.fetch_chain_quote(_client(_rich()), "IBM", "PUT",
+                             target_strike=152.5, target_dte=32)
+    assert q is not None
+    assert q["volume"] == 150
+
+
+def test_weekend_gap_alone_trips_the_gate_when_nothing_trades():
+    """Documents the Monday asymmetry so it is a decision, not a surprise.
+
+    A Friday-close print is ~3930 minutes old by Monday's open, well past
+    MAX_UNTRADED_AGE_MIN. So on Mondays this gate reduces to "zero volume
+    today". Measured cost: 5 of 314 in-zone candidates (1.6%), all with open
+    interest under 50. Accepted deliberately — skipping a contract nobody has
+    touched since Friday costs one day, and the next scan re-evaluates it.
+    """
+    fri_close_to_mon_open = 3930 * 60
+    q = cq.fetch_chain_quote(
+        _client(_rich(volume=0, trade_age_s=fri_close_to_mon_open)),
+        "META", "PUT", target_strike=152.5, target_dte=32)
+    assert q is None
+    # ...but the moment it trades, it is eligible again, same stale print.
+    traded = cq.fetch_chain_quote(
+        _client(_rich(volume=1, trade_age_s=fri_close_to_mon_open)),
+        "META", "PUT", target_strike=152.5, target_dte=32)
+    assert traded is not None
