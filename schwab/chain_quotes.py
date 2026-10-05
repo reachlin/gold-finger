@@ -29,6 +29,13 @@ MIN_OPEN_INT  = 1      # skip strikes nobody holds — unquotable in practice
 # unquotable strikes without second-guessing which signals qualify, a change
 # that would deserve a backtest.
 MAX_SPREAD_PCT = 0.25
+# Order limit as a fraction of the mid. Deliberately patient: 0.95*mid sits
+# ABOVE the bid whenever the spread exceeds 10% of mid (0.95*mid > bid requires
+# ask/bid > 1.05/0.95 = 1.1053), so wider-spread orders rest rather
+# than cross. An unfilled order is fine — tomorrow brings a fresh signal, and
+# a missed entry beats a badly-priced position. Matches the haircut the
+# model-fallback path already used, so both paths now price identically.
+ORDER_LIMIT_PCT = 0.95
 
 
 def fetch_chain_quote(client, symbol: str, option_type: str,
@@ -38,14 +45,17 @@ def fetch_chain_quote(client, symbol: str, option_type: str,
     Fetch the chain for symbol and return the contract nearest to
     (target_strike, target_dte):
 
-      {"strike", "premium" (the BID), "mid", "bid", "ask", "dte", "expiry",
-       "iv" (fraction), "delta", "open_interest"}
+      {"strike", "premium" (the MID), "order_limit", "mid", "bid", "ask",
+       "dte", "expiry", "iv" (fraction), "delta", "open_interest"}
 
-    `premium` is the BID, not the mid, because real_overseer places the order
-    at the bid. Pricing a signal off the mid and filling at the bid overstated
-    the yield of every wide-spread contract and cost -$82.66 on XOM on
-    2026-10-05. Contracts wider than MAX_SPREAD_PCT are skipped entirely, so a
-    nearer-but-liquid strike wins over an unquotable one.
+    `premium` is the MID — a fair estimate of the fill, since a sell limit
+    fills at the limit or better. `order_limit` is where the order is actually
+    placed: ORDER_LIMIT_PCT * mid, which rests above the bid on any spread
+    wider than 10% of mid. Both are shown to the LLM so it can judge the trade-off.
+
+    Contracts wider than MAX_SPREAD_PCT are skipped entirely — that guard is
+    what makes the mid trustworthy. The mid of a 250% stale quote is the number
+    that cost -$82.66 on XOM on 2026-10-05.
 
     option_type: "PUT" or "CALL". Returns None when nothing usable is found.
     """
@@ -101,9 +111,12 @@ def fetch_chain_quote(client, symbol: str, option_type: str,
             if best is None or rank < best[0]:
                 best = (rank, {
                     "strike":        strike,
-                    # The executable price: this is where the order is placed.
-                    "premium":       round(bid, 4),
+                    # Expected fill. A sell limit fills at the limit or better,
+                    # so the mid is the fair estimate; the bid is only a floor.
+                    "premium":       round(mid, 4),
                     "mid":           round(mid, 4),
+                    # Where the order actually goes in.
+                    "order_limit":   round(mid * ORDER_LIMIT_PCT, 2),
                     "bid":           bid,
                     "ask":           ask,
                     "dte":           dte,
@@ -124,8 +137,9 @@ def requote_signal(client, s: dict, target_dte: int | None = None) -> dict | Non
     the SCAV_MIN_PREMIUM_PCT floor — the trade the model priced does not
     actually exist at that yield, so the signal is dropped.
 
-    "Real" means the BID, which is what the order will be filled at. Judging
-    the floor on the mid let a 0.52%-yield trade through as "1.10%".
+    The floor is judged on the mid, which is a fair fill estimate now that
+    MAX_SPREAD_PCT rejects unquotable contracts. Before that guard existed the
+    mid of a 250% spread passed a 0.5% floor as "1.10%" and filled at 0.52%.
     Non-option signals pass through untouched.
     """
     if s.get("signal") not in ("SELL_PUT", "SELL_CALL"):
@@ -154,6 +168,7 @@ def requote_signal(client, s: dict, target_dte: int | None = None) -> dict | Non
         "expiry":       q["expiry"],
         "iv":           round(q["iv"] * 100, 1),      # store as % like hv
         "delta":        q["delta"],
+        "order_limit":  q["order_limit"],
         "bid":          q["bid"],
         "ask":          q["ask"],
         "quote_source": "schwab_chain",

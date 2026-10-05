@@ -70,15 +70,15 @@ class TestFetchChainQuote:
         assert q["dte"] == 35
         assert q["expiry"] == "2026-08-07"
 
-    def test_premium_is_the_bid(self):
-        """Changed 2026-10-06: was asserting the MID, which is what caused the
-        XOM loss — orders are placed at the bid (real_overseer.py:900), so the
-        mid overstated every wide-spread signal's yield."""
+    def test_premium_is_mid_price(self):
+        """premium is the MID (the fair fill estimate); order_limit is where the
+        order actually goes in. Briefly the bid on 2026-10-06 before the
+        patience-pricing decision superseded it."""
         client = _mock_client(_chain_response())
         q = cq.fetch_chain_quote(client, "KO", "PUT", target_strike=79.13,
                                  target_dte=30)
-        assert q["premium"] == pytest.approx(1.10)          # the bid
-        assert q["mid"] == pytest.approx((1.10 + 1.30) / 2)  # still reported
+        assert q["premium"] == pytest.approx((1.10 + 1.30) / 2)
+        assert q["order_limit"] == pytest.approx(round(1.20 * cq.ORDER_LIMIT_PCT, 2))
 
     def test_carries_real_greeks(self):
         client = _mock_client(_chain_response())
@@ -123,7 +123,7 @@ class TestRequoteSignal:
         s = cq.requote_signal(client, self._signal())
         assert s is not None
         assert s["strike"] == 79.0
-        assert s["premium"] == pytest.approx(1.10)   # the bid, not the 1.20 mid
+        assert s["premium"] == pytest.approx(1.20)   # the mid
         assert s["dte"] == 35
         assert s["quote_source"] == "schwab_chain"
 
@@ -171,8 +171,10 @@ class TestRequoteSignal:
 # a normal $2.01/$2.40 spread. Closed for -$82.66.
 #
 # Two fixes, both pinned here:
-#   1. premium IS the bid — the price orders actually get.
-#   2. a spread guard, so an unquotable strike is skipped rather than sold into.
+#   1. a spread guard, so an unquotable strike is skipped rather than sold into.
+#   2. (premium was briefly switched to the bid here; superseded the same day by
+#      the patience-pricing decision below — premium is the mid, the ORDER is
+#      placed at 0.95*mid.)
 
 
 def _one_strike_chain(bid, ask, oi=500, strike="152.5", dte=32):
@@ -198,15 +200,6 @@ def _client(payload):
 
 
 # --- 1. premium must be the executable price -------------------------------
-
-def test_premium_is_the_bid_not_the_mid():
-    """The order goes in at the bid, so that is what the yield must be based on."""
-    q = cq.fetch_chain_quote(_client(_one_strike_chain(2.01, 2.40)),
-                             "XOM", "PUT", target_strike=152.5, target_dte=32)
-    assert q is not None
-    assert q["premium"] == pytest.approx(2.01), \
-        f"premium should be the bid 2.01, got {q['premium']} (mid would be 2.205)"
-
 
 def test_mid_is_still_reported_for_context():
     q = cq.fetch_chain_quote(_client(_one_strike_chain(2.01, 2.40)),
@@ -257,28 +250,74 @@ def test_the_guard_prefers_a_liquid_neighbour_over_nothing():
     q = cq.fetch_chain_quote(_client(payload), "XOM", "PUT",
                              target_strike=152.5, target_dte=32)
     assert q is not None and q["strike"] == pytest.approx(155.0)
-    assert q["premium"] == pytest.approx(2.01)
+    assert q["premium"] == pytest.approx(2.205)      # mid of 2.01/2.40
 
 
 # --- 3. the yield floor now sees the truth ---------------------------------
 
-def test_yield_floor_is_applied_to_the_bid(monkeypatch):
-    """A contract whose MID clears SCAV_MIN_PREMIUM_PCT but whose BID does not
-    must be dropped — that is the XOM failure in miniature."""
-    monkeypatch.setattr(cq, "SCAV_MIN_PREMIUM_PCT", 0.009)   # 0.9% floor
-    # close 161.65, spread 19% so the guard lets it through:
-    #   bid 1.40 -> 0.866% (FAILS the floor)
-    #   mid 1.55 -> 0.959% (would have PASSED on the old mid pricing)
-    s = {"signal": "SELL_PUT", "symbol": "XOM", "strike": 152.5,
-         "close": 161.65, "dte": 32}
-    out = cq.requote_signal(_client(_one_strike_chain(1.40, 1.70)), s)
-    assert out is None, "a bid-based yield below the floor must drop the signal"
+# ===========================================================================
+# Patience pricing (2026-10-06, user decision)
+# ===========================================================================
+#
+# Supersedes the bid-pricing change made earlier the same day. The evidence
+# that drove it: across 12 STO fills placed AT the bid, the fills averaged
+# +$12.50/contract ABOVE the bid (a sell limit fills at the limit or better) —
+# so the bid is the guaranteed floor, not the expected fill, and showing it as
+# PREMIUM understated every signal.
+#
+# The user's call: show PREMIUM as the MID, place the order at
+# round(mid * 0.95, 2), and let the LLM see both. If it does not fill today a
+# fresh signal arrives tomorrow — "we'd rather be safe than in a bad-shaped
+# position." That also unifies pricing with the model-fallback path, which
+# already used premium * 0.95.
+#
+# The spread guard stays, and is what makes the mid meaningful at all: the mid
+# of a 250% stale quote is the number that cost -$82.66 on XOM.
 
 
-def test_max_loss_uses_the_bid():
+def test_premium_is_the_mid():
+    q = cq.fetch_chain_quote(_client(_one_strike_chain(2.01, 2.40)),
+                             "XOM", "PUT", target_strike=152.5, target_dte=32)
+    assert q["premium"] == pytest.approx(2.205)
+    assert q["bid"] == pytest.approx(2.01) and q["ask"] == pytest.approx(2.40)
+
+
+def test_order_limit_is_premium_times_the_haircut():
+    q = cq.fetch_chain_quote(_client(_one_strike_chain(2.01, 2.40)),
+                             "XOM", "PUT", target_strike=152.5, target_dte=32)
+    assert q["order_limit"] == pytest.approx(round(2.205 * cq.ORDER_LIMIT_PCT, 2))
+    assert q["order_limit"] == pytest.approx(2.09)
+
+
+def test_the_limit_is_passive_when_the_spread_is_wide():
+    """0.95*mid sits ABOVE the bid once the spread exceeds 10% of mid, so the
+    order rests instead of crossing. Verified live 2026-10-06: AAPL/IBM at 11%
+    and XOM at 16% rest; GOOGL 7%, AMZN 4%, NVDA 3% cross."""
+    q = cq.fetch_chain_quote(_client(_one_strike_chain(9.60, 10.70)),  # 11%
+                             "IBM", "PUT", target_strike=152.5, target_dte=32)
+    assert q["order_limit"] > q["bid"], \
+        f"limit {q['order_limit']} should rest above the bid {q['bid']}"
+
+
+def test_the_limit_crosses_when_the_spread_is_very_tight():
+    """Below 10% the haircut lands at or under the bid, so it fills. Fine — a
+    tight spread means little is being given away."""
+    q = cq.fetch_chain_quote(_client(_one_strike_chain(3.70, 3.80)),   # 3%
+                             "NVDA", "PUT", target_strike=152.5, target_dte=32)
+    assert q["order_limit"] <= q["bid"]
+
+
+def test_the_spread_guard_still_rejects_the_xom_quote():
+    """Pricing off the mid is only safe because this guard exists."""
+    q = cq.fetch_chain_quote(_client(_one_strike_chain(0.79, 2.76)),
+                             "XOM", "PUT", target_strike=152.5, target_dte=32)
+    assert q is None
+
+
+def test_requote_exposes_both_numbers_to_the_signal():
     s = {"signal": "SELL_PUT", "symbol": "XOM", "strike": 152.5,
          "close": 161.65, "dte": 32}
     out = cq.requote_signal(_client(_one_strike_chain(2.01, 2.40)), s)
     assert out is not None
-    # (152.5 - 2.01) * 100, not (152.5 - 2.205) * 100
-    assert out["max_loss"] == pytest.approx(15049.0)
+    assert out["premium"] == pytest.approx(2.205)      # shown as PREMIUM
+    assert out["order_limit"] == pytest.approx(2.09)   # shown as LIMIT

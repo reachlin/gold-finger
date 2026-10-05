@@ -894,14 +894,22 @@ class RealOverseer:
                                        s.get("signal", "SELL_PUT"),
                                        float(s["strike"]))
 
-            bid     = s.get("bid")
             premium = float(s.get("premium", 0))
-            if bid and float(bid) > 0 and s.get("quote_source") == "schwab_chain":
-                limit = round(float(bid), 2)
-                price_src = f"bid ${limit:.2f}"
-            else:
-                limit = round(premium * 0.95, 2)
-                price_src = f"model×0.95 ${limit:.2f}"
+            # One rule for both quote sources: ask 0.95 * premium, where
+            # premium is the mid on a real chain and the Black-Scholes estimate
+            # on fallback. Deliberately NOT the bid — a sell limit fills at the
+            # limit or better, and 0.95*mid rests above the bid on any spread
+            # wider than 10% of mid, so those orders wait rather than cross.
+            #
+            # An unfilled order is an accepted outcome: the DAY order expires,
+            # the collateral frees, and tomorrow brings a fresh signal. A missed
+            # entry is cheaper than a badly-priced position. (Before 2026-10-06
+            # chain signals were placed AT the bid, which filled faster but gave
+            # away the spread -- and on XOM, priced off a 250% stale quote, cost
+            # -$82.66.)
+            limit = s.get("order_limit")
+            limit = round(float(limit), 2) if limit else round(premium * 0.95, 2)
+            price_src = f"0.95×premium ${limit:.2f}"
 
             order = (
                 option_sell_to_open_limit(occ_sym, 1, limit)

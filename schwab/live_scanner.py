@@ -742,6 +742,9 @@ def _print_signal(s: dict, paper: bool = False, kronos_cache: dict | None = None
         print(f"STRIKE:  ${s['strike']}  ({s.get('otm_pct', '5')}% OTM)")
         print(f"PREMIUM: ${s['premium']}/sh  (${s['premium']*100:.0f}/contract)  "
               f"+{s['premium_pct']:.2f}% yield")
+        _lim = s.get("order_limit") or round(float(s.get("premium", 0)) * 0.95, 2)
+        print(f"LIMIT:   ${_lim}/sh  (${_lim*100:.0f}/contract) — the price the "
+              f"order is placed at; may not fill today")
         print(f"DTE:     {s['dte']} days")
         print(f"COLLAT:  ${collateral:,.0f}/contract (cash-secured, no margin)")
         print(f"MAX LOSS:${s.get('max_loss', '?')}/contract if assigned")
@@ -766,6 +769,9 @@ def _print_signal(s: dict, paper: bool = False, kronos_cache: dict | None = None
         print(f"STRIKE:  ${s['strike']}  ({s.get('otm_pct', '8')}% OTM)")
         print(f"PREMIUM: ${s['premium']}/sh  (${s['premium']*100:.0f}/contract)  "
               f"+{s['premium_pct']:.2f}% yield")
+        _lim = s.get("order_limit") or round(float(s.get("premium", 0)) * 0.95, 2)
+        print(f"LIMIT:   ${_lim}/sh  (${_lim*100:.0f}/contract) — the price the "
+              f"order is placed at; may not fill today")
         print(f"COST BASIS: ${s.get('cost_basis', '?')}")
         print(f"DTE:     {s['dte']} days")
         print(f"MAX GAIN:${s.get('max_gain', '?')}/contract if called away")
