@@ -22,6 +22,13 @@ from strategy_params import SCAV_MIN_PREMIUM_PCT
 MIN_DTE       = 21     # earliest expiration considered
 MAX_DTE       = 45     # latest expiration considered
 MIN_OPEN_INT  = 1      # skip strikes nobody holds — unquotable in practice
+# Widest (ask-bid)/mid we will sell into. Orders go in at the BID, so a wide
+# spread means handing the market maker the difference. Set from observation on
+# 2026-10-05: the good fills that day (AMZN, GOOGL, IBM) were 3-6%; the XOM
+# strike that cost -$82.66 was 250%. 25% is deliberately loose — it rejects
+# unquotable strikes without second-guessing which signals qualify, a change
+# that would deserve a backtest.
+MAX_SPREAD_PCT = 0.25
 
 
 def fetch_chain_quote(client, symbol: str, option_type: str,
@@ -31,8 +38,14 @@ def fetch_chain_quote(client, symbol: str, option_type: str,
     Fetch the chain for symbol and return the contract nearest to
     (target_strike, target_dte):
 
-      {"strike", "premium" (mid), "bid", "ask", "dte", "expiry",
+      {"strike", "premium" (the BID), "mid", "bid", "ask", "dte", "expiry",
        "iv" (fraction), "delta", "open_interest"}
+
+    `premium` is the BID, not the mid, because real_overseer places the order
+    at the bid. Pricing a signal off the mid and filling at the bid overstated
+    the yield of every wide-spread contract and cost -$82.66 on XOM on
+    2026-10-05. Contracts wider than MAX_SPREAD_PCT are skipped entirely, so a
+    nearer-but-liquid strike wins over an unquotable one.
 
     option_type: "PUT" or "CALL". Returns None when nothing usable is found.
     """
@@ -79,12 +92,18 @@ def fetch_chain_quote(client, symbol: str, option_type: str,
             oi     = int(opt.get("openInterest", 0) or 0)
             if bid <= 0 or oi < MIN_OPEN_INT:
                 continue
+            mid = (bid + ask) / 2
+            if mid <= 0 or (ask - bid) / mid > MAX_SPREAD_PCT:
+                continue   # unquotable — selling at the bid here gives away
+                           # most of the premium
             # Rank by distance to target strike first, then to target DTE
             rank = (abs(strike - target_strike), abs(dte - target_dte))
             if best is None or rank < best[0]:
                 best = (rank, {
                     "strike":        strike,
-                    "premium":       round((bid + ask) / 2, 4),
+                    # The executable price: this is where the order is placed.
+                    "premium":       round(bid, 4),
+                    "mid":           round(mid, 4),
                     "bid":           bid,
                     "ask":           ask,
                     "dte":           dte,
@@ -104,6 +123,9 @@ def requote_signal(client, s: dict, target_dte: int | None = None) -> dict | Non
     or "model" on fallback. Returns None when the *real* premium falls below
     the SCAV_MIN_PREMIUM_PCT floor — the trade the model priced does not
     actually exist at that yield, so the signal is dropped.
+
+    "Real" means the BID, which is what the order will be filled at. Judging
+    the floor on the mid let a 0.52%-yield trade through as "1.10%".
     Non-option signals pass through untouched.
     """
     if s.get("signal") not in ("SELL_PUT", "SELL_CALL"):
