@@ -268,3 +268,116 @@ def test_a_slack_failure_does_not_undo_the_cancel(monkeypatch):
         assert str(c.cancelled[0][0]) in ro._load_cancel_requests(), \
             "the cancel must still be recorded, or it will be re-issued"
         assert not ok
+
+
+# ===========================================================================
+# An intentional cancel must not be reported as a failure
+# ===========================================================================
+#
+# _process_pending alerts on every order in DEAD_STATUSES, which is right for a
+# cancel we did not ask for -- Schwab pulling an order, or a human cancelling in
+# the app -- but wrong for our own. Left alone, every deliberate cancel produced
+# TWO Slack messages: the "♻ Withdrew a resting order" above, then
+# "❌ Order CANCELED", which reads as a fault.
+#
+# That alert has already misled us once: a lone "Order CANCELED" on a winning
+# position in early August turned out to be ordinary DAY-order churn, and time
+# went into investigating it. An alert that cries wolf is worse than no alert.
+#
+# cancel_requests.json already records the order ids we cancelled on purpose, so
+# it is the natural place to look.
+
+class _Scanner:
+    def __init__(self):
+        self.slack = []
+
+    def _send_slack(self, msg):
+        self.slack.append(msg)
+
+
+def _dead(order_id, status="CANCELED", instruction="SELL_TO_OPEN"):
+    return {
+        "orderId": order_id,
+        "status": status,
+        "statusDescription": status,
+        "orderLegCollection": [
+            {"instruction": instruction,
+             "instrument": {"symbol": "AMZN  261023P00245000"}}
+        ],
+    }
+
+
+def _run_pending(tmp, pending, orders, monkeypatch):
+    ro._save_pending(pending)
+    sc = _Scanner()
+    monkeypatch.setattr(ro, "find_order",
+                        lambda os_, order_id=None, **kw: next(
+                            (o for o in os_ if str(o.get("orderId")) == str(order_id)),
+                            None))
+    ov = ro.RealOverseer.__new__(ro.RealOverseer)
+    monkeypatch.setattr(ov, "_readopt_untracked_covers",
+                        lambda *a, **k: 0, raising=False)
+    ro.RealOverseer._process_pending(ov, sc, None, "hash", orders)
+    return sc
+
+
+def test_our_own_cancel_is_not_reported_as_a_failure(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        _fresh(tmp)
+        ro._record_cancel_request("777")
+        sc = _run_pending(tmp, [{"trade_id": "T1", "symbol": "AMZN",
+                                 "signal": "SELL_PUT", "strike": 245.0,
+                                 "schwab_order_id": "777"}],
+                          [_dead("777")], monkeypatch)
+        assert not any("❌" in m for m in sc.slack), \
+            f"a deliberate cancel must not raise an error alert: {sc.slack}"
+
+
+def test_an_unexpected_cancel_still_alerts(monkeypatch):
+    """Schwab pulling an order, or a human cancelling in the app, is news."""
+    with tempfile.TemporaryDirectory() as tmp:
+        _fresh(tmp)
+        sc = _run_pending(tmp, [{"trade_id": "T1", "symbol": "AMZN",
+                                 "signal": "SELL_PUT", "strike": 245.0,
+                                 "schwab_order_id": "888"}],
+                          [_dead("888")], monkeypatch)
+        assert any("❌" in m and "CANCELED" in m for m in sc.slack), \
+            f"an unrequested cancel must still alert: {sc.slack}"
+
+
+def test_the_ledger_entry_is_pruned_once_confirmed(monkeypatch):
+    """A terminal order can never be seen WORKING again, so the record has done
+    its job. Left in place the file would grow for the life of the account."""
+    with tempfile.TemporaryDirectory() as tmp:
+        _fresh(tmp)
+        ro._record_cancel_request("777")
+        assert "777" in ro._load_cancel_requests()
+        _run_pending(tmp, [{"trade_id": "T1", "symbol": "AMZN",
+                            "signal": "SELL_PUT", "strike": 245.0,
+                            "schwab_order_id": "777"}],
+                     [_dead("777")], monkeypatch)
+        assert "777" not in ro._load_cancel_requests()
+
+
+def test_other_dead_statuses_still_alert_even_if_we_asked_to_cancel(monkeypatch):
+    """We asked to cancel; Schwab REJECTED instead. That is not what we
+    requested and must not be swallowed."""
+    with tempfile.TemporaryDirectory() as tmp:
+        _fresh(tmp)
+        ro._record_cancel_request("777")
+        sc = _run_pending(tmp, [{"trade_id": "T1", "symbol": "AMZN",
+                                 "signal": "SELL_PUT", "strike": 245.0,
+                                 "schwab_order_id": "777"}],
+                          [_dead("777", status="REJECTED")], monkeypatch)
+        assert any("❌" in m for m in sc.slack), \
+            "a REJECTED order is not a confirmed cancel"
+
+
+def test_an_expired_order_we_never_cancelled_still_alerts(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        _fresh(tmp)
+        sc = _run_pending(tmp, [{"trade_id": "T1", "symbol": "AMZN",
+                                 "signal": "SELL_PUT", "strike": 245.0,
+                                 "schwab_order_id": "999"}],
+                          [_dead("999", status="EXPIRED")], monkeypatch)
+        assert any("❌" in m for m in sc.slack)

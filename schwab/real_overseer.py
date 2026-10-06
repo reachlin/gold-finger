@@ -167,6 +167,21 @@ def _record_cancel_request(order_id: str) -> None:
         print(f"  [Overseer] could not persist cancel request: {exc}")
 
 
+def _clear_cancel_request(order_id: str) -> None:
+    """Forget a cancel once Schwab confirms it.
+
+    A terminal order can never appear as WORKING again, so the record has done
+    its job; left in place the file would grow for the life of the account.
+    """
+    d = _load_cancel_requests()
+    if d.pop(str(order_id), None) is not None:
+        try:
+            with open(_CANCEL_REQUESTS_PATH, "w") as f:
+                json.dump(d, f, indent=2)
+        except Exception as exc:
+            print(f"  [Overseer] could not prune cancel request: {exc}")
+
+
 def _order_age_minutes(order: dict) -> float | None:
     """Minutes since the order was entered, or None if unparseable."""
     raw = order.get("enteredTime")
@@ -1775,13 +1790,26 @@ class RealOverseer:
                 continue
             if status in DEAD_STATUSES:
                 reason = order.get("statusDescription", status)
-                print(f"  [Overseer] ❌ Order {status}: {entry['symbol']} "
-                      f"{entry['signal']} — {reason}")
-                scanner._send_slack(
-                    f"{SLACK_MENTION} ❌ *Order {status} — "
-                    f"{entry.get('trade_id', '')}*\n{entry['symbol']} "
-                    f"{entry['signal']} ${entry['strike']}\nReason: {reason}"
-                )
+                # A cancel WE asked for is not a fault, and alerting on it made
+                # every deliberate cancel produce two Slack messages, the second
+                # reading as an error. Only an exact CANCELED counts as
+                # confirmation: if we asked to cancel and Schwab REJECTED
+                # instead, that is not what we requested and must still surface.
+                oid = str(entry.get("schwab_order_id") or "")
+                ours = status == "CANCELED" and oid in _load_cancel_requests()
+                if ours:
+                    print(f"  [Overseer] ♻ cancel confirmed: {entry['symbol']} "
+                          f"{entry['signal']} ${entry['strike']} — collateral "
+                          f"freed, ticker open to new candidates")
+                    _clear_cancel_request(oid)
+                else:
+                    print(f"  [Overseer] ❌ Order {status}: {entry['symbol']} "
+                          f"{entry['signal']} — {reason}")
+                    scanner._send_slack(
+                        f"{SLACK_MENTION} ❌ *Order {status} — "
+                        f"{entry.get('trade_id', '')}*\n{entry['symbol']} "
+                        f"{entry['signal']} ${entry['strike']}\nReason: {reason}"
+                    )
                 # This entry is about to be dropped from the pending list. If it
                 # was a rejected cover, that drop is exactly what lets the next
                 # cycle place it again, so count it before it disappears.
