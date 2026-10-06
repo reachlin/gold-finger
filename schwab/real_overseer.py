@@ -971,6 +971,61 @@ class RealOverseer:
                 return False, (f"Already short {inst.get('symbol')} — one open "
                                f"position per underlying, skipping {symbol}")
 
+        # A RESTING ORDER IS AN OPEN POSITION IN WAITING (added 2026-10-06).
+        #
+        # The loop above sees filled positions only. That was enough while limits
+        # crossed the bid and filled in seconds, so "placed but not yet a
+        # position" barely existed. Moving limits to the mid changed that: an
+        # unfilled DAY order now rests for the whole session, and each of the ~80
+        # scans in that session would otherwise see a clean slate for the ticker.
+        #
+        # The budget gate does not cover this. _pending_collateral counts a
+        # resting order's collateral, so cash cannot be overdrawn -- but given
+        # enough free cash, two orders on one underlying both clear it. That is
+        # protection by being capital-starved, not by design.
+        #
+        # Schwab's live orders are authoritative; they also catch anything placed
+        # outside the overseer (place_order.py, or another machine). Only
+        # SELL_TO_OPEN counts: a BUY_TO_CLOSE rests for the life of every
+        # position by design, and blocking on it would mean one position per
+        # ticker per MONTH.
+        resting = None
+        try:
+            # 5 days, not the 90 used for reconciliation: an unfilled entry is a
+            # DAY order placed today, and the window only needs to clear a
+            # weekend. One extra call per candidate order, not per scan.
+            orders = fetch_orders(client, account_hash, days_back=5)
+        except Exception as exc:
+            orders = None
+            print(f"  [Overseer] could not read working orders ({exc}) — "
+                  f"falling back to pending_orders.json")
+
+        if orders is not None:
+            for o in orders:
+                if o.get("status") not in WORKING_STATUSES:
+                    continue
+                for leg in o.get("orderLegCollection", []):
+                    if leg.get("instruction") != "SELL_TO_OPEN":
+                        continue
+                    occ = ((leg.get("instrument") or {}).get("symbol") or "")
+                    if occ[:6].strip().upper() == symbol:
+                        resting = occ.strip()
+        else:
+            # Failing OPEN here would reinstate the hole this closes, so fall
+            # back to the local file, which is written on every placement and
+            # needs no network. Entries are removed once a fill is confirmed and
+            # DAY leftovers are evicted at the 04:00 ET cutoff, so a SELL_PUT
+            # still listed here means still live.
+            for e in _load_pending():
+                if e.get("signal") not in ("SELL_PUT", "SELL_CALL"):
+                    continue
+                if str(e.get("symbol", "")).upper() == symbol:
+                    resting = f"{symbol} ${e.get('strike')}"
+
+        if resting:
+            return False, (f"Order already resting on {resting} — one open "
+                           f"position per underlying, skipping {symbol}")
+
         return True, (f"Pre-check OK — Schwab available ${avail:,.0f}, "
                       f"collateral needed ${collateral_needed:,.0f}")
 
