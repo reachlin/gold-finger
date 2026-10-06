@@ -31,9 +31,18 @@ def test_build_prompt_contains_signal_fields():
     assert "79.13" in prompt
 
 
-def test_overseer_system_allows_duplicates():
+def test_overseer_system_forbids_duplicate_underlyings():
+    """Replaces test_overseer_system_allows_duplicates, which asserted
+    "ALLOWED" in the prompt. That rule was deliberately reversed -- one open
+    position per underlying is now the mandate, enforced in _pre_trade_check --
+    so the old assertion tested behaviour we had removed on purpose. Kept as the
+    inverse rather than deleted: the prompt forgetting this rule is worth
+    catching."""
     from schwab.real_overseer import OVERSEER_SYSTEM
-    assert "ALLOWED" in OVERSEER_SYSTEM
+    assert "ALLOWED" not in OVERSEER_SYSTEM
+    low = OVERSEER_SYSTEM.lower()
+    assert "one open position per underlying" in low or "per underlying" in low, \
+        "the one-position-per-underlying rule must be stated to the model"
 
 
 def test_parse_yes_response():
@@ -317,6 +326,12 @@ def test_main_wires_decision_and_scan_hook(monkeypatch):
     fake.llm.provider = "test"
     monkeypatch.setattr(ro, "RealOverseer", lambda **kw: fake)
     monkeypatch.setattr(ro, "check_market_open", lambda *a, **k: False)
+    # main() calls the real _acquire_singleton_lock, which sys.exit(0)s when
+    # data/overseer.lock is already held. With the launchd overseer running --
+    # its normal state -- that made this test fail for a reason having nothing
+    # to do with what it asserts. Never let a unit test contend for production
+    # state.
+    monkeypatch.setattr(ro, "_acquire_singleton_lock", lambda: None)
 
     decision, hooks = [], []
     monkeypatch.setattr(scanner, "set_decision_fn", lambda fn: decision.append(fn))

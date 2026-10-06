@@ -4,6 +4,15 @@
 import pandas as pd
 import pytest
 
+
+# These exercise dormant ML-experiment code (6-8 months old, not reachable from
+# schwab/ and not part of the live overseer). The dependency is not installed in
+# gold-finger-py312, so without this the module raises at COLLECTION and takes
+# the whole root suite down with it. Skipping keeps the suite runnable while
+# preserving the tests -- the code they cover still exists, so deleting them
+# would drop real coverage.
+pytest.importorskip("akshare", reason="optional ML dependency")
+
 from find_candidates import (
     _allocate_slots,
     exclude_st_stocks,

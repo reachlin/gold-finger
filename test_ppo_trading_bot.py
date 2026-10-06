@@ -5,6 +5,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
+# Dormant ML-experiment code (6-8 months old, not reachable from schwab/, not part
+# of the live overseer). The dependency is absent from gold-finger-py312, so every
+# test here failed on it. Skipping the module keeps the root suite runnable and
+# honest -- 81 red tests that all mean "optional dep not installed" train you to
+# ignore the suite, which is how a genuinely failing test stayed hidden long enough
+# to cost 45 rejected orders. The code these cover still exists, so they are kept
+# rather than deleted.
+pytest.importorskip("gymnasium", reason="optional ML dependency")
+
 from trading_bot import FEATURE_COLS, compute_indicators
 
 
