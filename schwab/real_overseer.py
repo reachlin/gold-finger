@@ -53,6 +53,7 @@ _SINGLETON_LOCK_PATH = os.path.join(_DATA_DIR, "overseer.lock")
 _LOCK_FH             = None   # held open for the process lifetime (see main)
 _TRADE_COUNTER_PATH  = os.path.join(_DATA_DIR, "trade_counter.json")
 _COVER_REJECTS_PATH  = os.path.join(_DATA_DIR, "cover_rejects.json")
+_CANCEL_REQUESTS_PATH = os.path.join(_DATA_DIR, "cancel_requests.json")
 _VAULT8_SIGNALS_PATH = os.path.join(_DATA_DIR, "vault8_weekly_signals.json")
 SLACK_MENTION        = "<@U02DQJ9KKFZ>"   # user's Slack ID for trade notifications
 
@@ -103,6 +104,158 @@ def _next_trade_id() -> str:
 # --------------------------------------------------------------------------- #
 
 MAX_COVER_ATTEMPTS = 3     # rejections for one cover before we stop and ask
+
+# --------------------------------------------------------------------------- #
+# Cancelling a stale resting entry
+#
+# Limits moved to the mid on 2026-10-06, so an unfilled SELL_TO_OPEN now rests for
+# the whole session instead of filling in seconds, and the one-position-per-
+# underlying gate then blocks that ticker all day. Without this, a stale order
+# beats a better one purely by arriving first.
+#
+# CANCEL ONLY -- deliberately nothing is placed in the same breath. The collateral
+# frees, the gate stops seeing a resting order, and the NEXT scan places whatever
+# wins through the normal approved path: budget check, LLM review, pre-trade gate.
+# No second placement path exists to get wrong, the better candidate gets no
+# privilege (it must win again next scan, or lose to something better), and there
+# is no cancel-then-place race because there is no "then place". A failed cancel
+# leaves the original order live and the ticker blocked, which is the safe way to
+# fail.
+# --------------------------------------------------------------------------- #
+
+# Relative premium-per-collateral gain required before cancelling. 0.25 means a
+# candidate must yield 25% MORE than the resting order (1.00% -> 1.25% of strike),
+# which is far outside intraday quote drift -- the point is that only a different
+# opportunity qualifies, never a re-quote of the same one. Not tuned against
+# measured intraday yield dispersion; set conservatively on purpose, because the
+# cost of churning is real and the cost of waiting a day is one day.
+MIN_CANCEL_IMPROVEMENT = 0.25
+# An order gets a fair chance to fill before being judged stale.
+MIN_REST_MINUTES = 30
+
+
+def _send_slack_safe(msg: str) -> None:
+    """Notify Slack without letting a notification problem affect trading.
+
+    live_scanner is imported lazily: real_overseer is imported BY the scanner in
+    some paths, and a module-level import would be circular.
+    """
+    try:
+        import live_scanner as scanner
+        scanner._send_slack(msg)
+    except Exception as exc:
+        print(f"  [Overseer] Slack notify failed: {exc}")
+
+
+def _load_cancel_requests() -> dict:
+    try:
+        with open(_CANCEL_REQUESTS_PATH) as f:
+            d = json.load(f)
+            return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _record_cancel_request(order_id: str) -> None:
+    d = _load_cancel_requests()
+    d[str(order_id)] = _now_et().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        os.makedirs(_DATA_DIR, exist_ok=True)
+        with open(_CANCEL_REQUESTS_PATH, "w") as f:
+            json.dump(d, f, indent=2)
+    except Exception as exc:
+        print(f"  [Overseer] could not persist cancel request: {exc}")
+
+
+def _order_age_minutes(order: dict) -> float | None:
+    """Minutes since the order was entered, or None if unparseable."""
+    raw = order.get("enteredTime")
+    if not raw:
+        return None
+    for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S.%f%z",
+                "%Y-%m-%dT%H:%M:%S+0000"):
+        try:
+            dt = datetime.strptime(raw, fmt)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+            return max(0.0, (datetime.now(ZoneInfo("UTC")) - dt).total_seconds() / 60)
+        except ValueError:
+            continue
+    return None
+
+
+def _collateral_yield(premium: float, strike: float) -> float | None:
+    """Premium as a fraction of the collateral a cash-secured put locks.
+
+    The right comparison for two puts on one underlying: $2.45 on a $245 strike
+    and $3.60 on a $240 strike are 1.00% and 1.50% of the cash each would tie up.
+    """
+    if not strike or strike <= 0:
+        return None
+    return premium / strike
+
+
+def _maybe_cancel_stale_resting(client, account_hash: str, s: dict,
+                                order: dict, occ: str) -> str | None:
+    """Cancel a resting entry that a materially better candidate has beaten.
+
+    Returns a message when a cancel was issued, else None. Never places anything.
+    """
+    order_id = order.get("orderId")
+    if not order_id:
+        return None
+
+    # Schwab takes time to report CANCELED, so the order keeps looking WORKING
+    # for a while. Re-issuing every 5 minutes is how a retry storm starts -- the
+    # 45 rejected IBM covers of 2026-09-04 began exactly that way.
+    if str(order_id) in _load_cancel_requests():
+        return None
+
+    age = _order_age_minutes(order)
+    if age is not None and age < MIN_REST_MINUTES:
+        return None
+
+    try:
+        _, _, _, old_strike = parse_occ_symbol(occ)
+    except Exception:
+        return None
+
+    old_y = _collateral_yield(float(order.get("price") or 0), old_strike)
+    new_prem = float(s.get("order_limit") or s.get("premium") or 0)
+    new_y = _collateral_yield(new_prem, float(s.get("strike") or 0))
+    if old_y is None or new_y is None or old_y <= 0:
+        return None
+    if new_y < old_y * (1 + MIN_CANCEL_IMPROVEMENT):
+        return None
+
+    try:
+        client.cancel_order(order_id, account_hash)
+    except Exception as exc:
+        # Not recorded as requested, so the next scan tries again -- one 503 must
+        # not strand the order for the session.
+        print(f"  [Overseer] cancel of {occ} failed ({exc}) — order still "
+              f"resting, ticker stays blocked")
+        return None
+
+    _record_cancel_request(order_id)
+    summary = (f"Cancelled resting {occ} ({old_y * 100:.2f}% of collateral) — "
+               f"beaten by {s['symbol']} ${s.get('strike')} at "
+               f"{new_y * 100:.2f}%. Next scan competes freely.")
+    try:
+        _send_slack_safe(
+            f"{SLACK_MENTION} ♻ *Withdrew a resting order*\n"
+            f"`{occ}` at ${float(order.get('price') or 0):.2f} "
+            f"({old_y * 100:.2f}% of collateral) — rested "
+            f"{age:.0f} min unfilled.\n"
+            f"Beaten by {s['symbol']} ${s.get('strike')} at "
+            f"{new_y * 100:.2f}%. Nothing placed now; the next scan decides on "
+            f"the merits.")
+    except Exception as exc:
+        # The broker has already cancelled. Never let this change the outcome.
+        print(f"  [Overseer] cancel notify failed: {exc}")
+    return summary
+
+
 
 
 def _cover_key(opening_ref, occ_sym: str) -> str:
@@ -990,6 +1143,7 @@ class RealOverseer:
         # position by design, and blocking on it would mean one position per
         # ticker per MONTH.
         resting = None
+        resting_order = None
         try:
             # 5 days, not the 90 used for reconciliation: an unfilled entry is a
             # DAY order placed today, and the window only needs to clear a
@@ -1010,6 +1164,7 @@ class RealOverseer:
                     occ = ((leg.get("instrument") or {}).get("symbol") or "")
                     if occ[:6].strip().upper() == symbol:
                         resting = occ.strip()
+                        resting_order = o
         else:
             # Failing OPEN here would reinstate the hole this closes, so fall
             # back to the local file, which is written on every placement and
@@ -1023,6 +1178,15 @@ class RealOverseer:
                     resting = f"{symbol} ${e.get('strike')}"
 
         if resting:
+            # A materially better candidate retires the stale order. Still skip
+            # THIS scan: Schwab may not have processed the cancel yet, and acting
+            # on an unconfirmed cancel is how two live orders happen.
+            if resting_order is not None:
+                cancelled = _maybe_cancel_stale_resting(
+                    client, account_hash, s, resting_order, resting)
+                if cancelled:
+                    print(f"  [Overseer] ♻ {cancelled}")
+                    return False, cancelled
             return False, (f"Order already resting on {resting} — one open "
                            f"position per underlying, skipping {symbol}")
 
