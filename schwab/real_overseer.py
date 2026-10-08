@@ -1214,8 +1214,10 @@ class RealOverseer:
         confirmed fill or leave it tracked in pending_orders.json for the
         scan hook to confirm on a later cycle — never fire-and-forget.
 
-        Limit price: live BID from the chain quote (guaranteed fill);
-        falls back to the tick-rounded model premium when there is no chain quote.
+        Limit price: the chain quote's MID, rounded up to a tradable tick
+        (chain_quotes.order_limit_for); falls back to the tick-rounded model
+        premium when there is no chain quote. It was the live BID until
+        2026-10-06 -- see the comment on the limit below for why that changed.
         """
         if s.get("signal") not in ("SELL_PUT", "SELL_CALL"):
             print(f"  [Overseer] {s.get('signal')} — no automated real "
@@ -1274,8 +1276,17 @@ class RealOverseer:
                      else round_up_to_tick(premium))
             price_src = f"mid-on-tick ${limit:.2f}"
 
+            # Send the price as a STRING. schwab-py accepts a float and warns
+            # that it is deprecated, but the real problem is that the float
+            # path truncates: 47 of the 640 tradable tick values from $0.01 to
+            # $20.00 arrive a cent BELOW what was asked, always downward.
+            # XOM 261106P00155000 on 2026-10-07 was logged at $2.01 and
+            # recorded by Schwab at $2.00. That silently defeats the
+            # round-UP-to-tick rule in chain_quotes and gives away a cent on
+            # the sell side. Both BUY_TO_CLOSE call sites already do this.
+            # Pinned by test_order_limit_price.py.
             order = (
-                option_sell_to_open_limit(occ_sym, 1, limit)
+                option_sell_to_open_limit(occ_sym, 1, f"{limit:.2f}")
                 .set_duration(Duration.DAY)
                 .set_session(Session.NORMAL)
                 .build()
