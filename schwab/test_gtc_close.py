@@ -194,6 +194,7 @@ def test_retry_succeeds_after_429(monkeypatch_sleep=None):
     try:
         with tempfile.TemporaryDirectory() as tmp:
             _fresh_state(tmp)
+            ro._reset_order_throttle()      # no carried-over spacing debt
             ov, scanner = _bare_overseer(), FakeScanner()
             client = FlakyClient(fail_times=2)
             tid = ov._submit_close_order(
@@ -204,8 +205,13 @@ def test_retry_succeeds_after_429(monkeypatch_sleep=None):
             )
             assert tid == "T0001", tid
             assert client.calls == 3, f"1 fail+1 fail+1 ok = 3 calls, got {client.calls}"
-            assert len(slept) == 2, f"backoff slept twice, got {slept}"
-            assert slept == [1.5, 3.0], slept        # exponential
+            # Assert against the configured schedule rather than literals: the
+            # delays were lengthened on 2026-10-08 because 1.5/3/6 never cleared
+            # a real 429 (see test_order_throttle.py). `slept` also carries the
+            # MIN_ORDER_GAP_S spacing waits between order writes.
+            first, second = ro.ORDER_RETRY_DELAYS[0], ro.ORDER_RETRY_DELAYS[1]
+            assert first in slept and second in slept, slept
+            assert slept.index(first) < slept.index(second), slept
             assert len(ro._load_pending()) == 1, "order tracked after retry"
     finally:
         ro.time.sleep = orig_sleep
@@ -228,7 +234,9 @@ def test_retry_gives_up():
                 target_price=1.02, trigger="open",
             )
             assert tid is None, "no trade_id when all attempts 429"
-            assert client.calls == 4, f"default 4 attempts, got {client.calls}"
+            expected = len(ro.ORDER_RETRY_DELAYS) + 1   # one try per delay, plus the last
+            assert client.calls == expected, (
+                f"expected {expected} attempts, got {client.calls}")
             assert ro._load_pending() == [], "nothing tracked on failure"
             assert any("failed" in m.lower() for m in scanner.slack), scanner.slack
     finally:

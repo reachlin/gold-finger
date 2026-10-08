@@ -769,36 +769,105 @@ def fetch_orders(client, account_hash: str, days_back: int = 90) -> list:
         return []
 
 
-def place_order_with_retry(client, account_hash: str, order,
-                           attempts: int = 4, base_delay: float = 1.5):
-    """
-    Place an order, retrying on HTTP 429 (rate limit) with exponential backoff.
+# Minimum spacing between WRITES to the /orders endpoint. The 2026-10-05 case
+# was an XOM open followed ~2s later by its own GTC cover; the cover 429'd and
+# was lost. A small gap removes that self-inflicted burst for free.
+#
+# It does NOT explain 2026-10-08, where a replace, fill-detection reads and a
+# placement spread over ~40 seconds still ended in a 429 — that looks like a
+# rolling COUNT per window, which spacing cannot fix. Hence the longer backoff
+# below as well. Both numbers are judgement: Schwab publishes no quota and
+# measuring it means deliberately tripping it on a live account.
+MIN_ORDER_GAP_S  = 2.0
+_LAST_ORDER_CALL = 0.0
 
-    Opening + immediately resting a GTC close fires several order/quote calls
-    within a couple of seconds, which trips Schwab's rate limiter (observed:
-    the close order after an XOM open failed with 429). A 429 means the request
-    was rejected, not accepted, so retrying is safe — it cannot double-place.
+# Retry schedule, in seconds between attempts. The old 1.5/3/6 (10.5s total)
+# failed all three retries on every one of the 5 rate-limit events in
+# data/overseer.log — a burst limit would have cleared inside 10s, so the window
+# is longer than that. This reaches 76.5s cumulative, past a rolling minute,
+# while no single sleep exceeds 30s so one stall can't eat a 5-minute scan.
+ORDER_RETRY_DELAYS = (1.5, 3.0, 6.0, 12.0, 24.0, 30.0)
 
-    Returns the successful response. Re-raises the last error on other failures
-    or once attempts are exhausted.
+
+def _reset_order_throttle() -> None:
+    """Forget the last order-write time (tests; also safe after a long idle)."""
+    global _LAST_ORDER_CALL
+    _LAST_ORDER_CALL = 0.0
+
+
+def _space_order_calls() -> None:
+    """Hold off until MIN_ORDER_GAP_S has passed since the last order write."""
+    global _LAST_ORDER_CALL
+    if _LAST_ORDER_CALL:
+        wait = MIN_ORDER_GAP_S - (time.monotonic() - _LAST_ORDER_CALL)
+        if wait > 0:
+            time.sleep(wait)
+    _LAST_ORDER_CALL = time.monotonic()
+
+
+def _retry_after(exc) -> float | None:
+    """Seconds Schwab asked us to wait, if it said so."""
+    hdrs = getattr(getattr(exc, "response", None), "headers", None) or {}
+    raw  = hdrs.get("Retry-After") or hdrs.get("retry-after")
+    try:
+        return float(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None          # HTTP-date form — fall back to our own schedule
+
+
+def _order_call_with_retry(call, label: str, order):
+    """Run one /orders write, spaced and retried on 429.
+
+    A 429 means the request was REJECTED, not accepted, so retrying can never
+    double-place. Any other status fails fast — resubmitting a rejected order
+    five times just multiplies the rejection.
     """
     last_exc = None
-    for i in range(attempts):
+    for i, delay in enumerate((*ORDER_RETRY_DELAYS, None)):
+        _space_order_calls()
         try:
-            resp = client.place_order(account_hash, order)
+            resp = call()
             resp.raise_for_status()
             return resp
         except Exception as exc:
             last_exc = exc
             status = getattr(getattr(exc, "response", None), "status_code", None)
-            if status == 429 and i < attempts - 1:
-                delay = base_delay * (2 ** i)
-                print(f"  [Overseer] ⏳ 429 rate-limited placing order — "
-                      f"retry {i + 1}/{attempts - 1} in {delay:.1f}s")
-                time.sleep(delay)
+            if status == 429 and delay is not None:
+                wait = _retry_after(exc) or delay
+                print(f"  [Overseer] ⏳ 429 rate-limited {label} — retry "
+                      f"{i + 1}/{len(ORDER_RETRY_DELAYS)} in {wait:.1f}s"
+                      f"{' (Retry-After)' if _retry_after(exc) else ''}")
+                time.sleep(wait)
                 continue
             raise
     raise last_exc     # pragma: no cover — loop always returns or raises
+
+
+def place_order_with_retry(client, account_hash: str, order,
+                           attempts: int = 4, base_delay: float = 1.5):
+    """
+    Place an order, spaced from the previous order write and retried on HTTP 429.
+
+    `attempts` / `base_delay` are kept for call-site compatibility and ignored;
+    the schedule lives in ORDER_RETRY_DELAYS so placements and replaces share it.
+
+    Returns the successful response. Re-raises on other failures or once the
+    retries are exhausted.
+    """
+    return _order_call_with_retry(
+        lambda: client.place_order(account_hash, order), "placing order", order)
+
+
+def replace_order_with_retry(client, account_hash: str, old_order_id: str, order):
+    """
+    Atomically replace a resting order, with the same spacing and 429 retries.
+
+    The EarlyTP replace used to call client.replace_order directly with no retry
+    at all, so a single transient 429 lost the attempt — XOM on 2026-10-08.
+    """
+    return _order_call_with_retry(
+        lambda: client.replace_order(account_hash, old_order_id, order),
+        f"replacing order {old_order_id}", order)
 
 
 def parse_entered_time(order: dict) -> datetime | None:
@@ -1983,7 +2052,12 @@ class RealOverseer:
         deep-target GTC stays live. One-shot per position (early_tp flag) and
         only ever raises the buy-back price, so it never churns or loosens the
         floor. See options_pricer.should_take_early_profit (v1 fixed thresholds,
-        made market/stock-aware later)."""
+        made market/stock-aware later).
+
+        The flag is set ONLY on a confirmed replace — a new order id returned by
+        a 2xx. Nothing ever clears early_tp, so setting it on a failed replace
+        retires that position's take-profit for good; XOM on 2026-10-08 was
+        exactly that. Pinned by test_early_take_profit.py."""
         from options_pricer import should_take_early_profit
 
         pending = _load_pending()
@@ -2031,12 +2105,29 @@ class RealOverseer:
                 .set_session(Session.NORMAL)
                 .build()
             )
-            resp   = client.replace_order(account_hash, old_order_id, new_order)
+            # Spaced + 429-retried, and raise_for_status'd inside the helper.
+            # A non-2xx returns normally from the raw client call, so without
+            # that check nothing raises and the code below books a tighten that
+            # never happened.
+            resp = replace_order_with_retry(client, account_hash,
+                                            old_order_id, new_order)
             loc    = resp.headers.get("Location", "")
-            new_id = loc.rstrip("/").split("/")[-1] if loc else old_order_id
+            # No new id means no new order to track. Falling back to
+            # old_order_id here made a failed replace indistinguishable from a
+            # successful one — XOM on 2026-10-08 kept its $0.77 cover WORKING
+            # under the SAME order id while pending_orders.json claimed $1.40.
+            new_id = loc.rstrip("/").split("/")[-1] if loc else None
+            if not new_id:
+                print(f"  [EarlyTP] ❌ replace for {opening['symbol']} returned "
+                      f"{getattr(resp, 'status_code', '?')} with no order id "
+                      f"(original GTC ${old_limit:.2f} intact) — retrying next scan")
+                return
         except Exception as exc:
+            # early_tp is deliberately NOT set: the flag is one-shot and nothing
+            # clears it, so setting it on a failure would retire the position's
+            # take-profit permanently. Leave the state alone and try next scan.
             print(f"  [EarlyTP] ❌ replace failed for {opening['symbol']} "
-                  f"(original GTC intact): {exc}")
+                  f"(original GTC ${old_limit:.2f} intact): {exc}")
             return
 
         entry["limit"]           = new_target
