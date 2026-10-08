@@ -71,6 +71,32 @@ TICK_BREAK_PRICE = 3.00
 TICK_BELOW_BREAK = 0.01
 TICK_AT_OR_ABOVE = 0.05
 
+# How far toward the money a re-quote may move the strike, as a fraction of the
+# OTM distance the strategy asked for. 0.70 of a 5%-OTM target = a 3.5% floor.
+#
+# Why a bound is needed at all: the liquidity filters above reject the thinner
+# strikes, and the ranking below takes the nearest ELIGIBLE strike with no limit
+# on the distance. On 2026-10-08 every XOM strike near the $160.17 target was
+# rejected (spread 31-84%, or bid size 5) and the picker substituted $165 at a
+# different expiry -- 2.1% OTM, delta -0.42, on a stock at $168.60. That is a
+# different trade from the one the Scavenger decided to make: roughly double the
+# assignment probability on a book whose mandate is steady income.
+#
+# 0.70 comes from measurement, not taste. Across 14,331 SELL_PUT signals in
+# data/overseer.log the realized OTM% sits at p0.1=3.88, p1=4.00, p50=4.97,
+# p100=6.51. The natural floor is ~3.86% -- NVDA, where the nearest listed
+# strike on a high-priced stock simply lands there. Exactly 2 signals ever fell
+# below 3.5%: the two pathological XOM re-quotes (2.14% and 2.92%), neither of
+# which became a position (one budget-blocked, one rejected with a 429). So this
+# rejects the defect and nothing else we have on record.
+#
+# Deliberately NOT a delta cap, which was the obvious first idea: delta is a bad
+# discriminator here. A correct 5%-OTM strike on a high-IV name legitimately
+# reaches |delta| 0.37 (INTC at 4.6% OTM), so any cap tight enough to catch the
+# XOM case at 0.42 also rejects 278 sound signals (1.9%). Distance from the
+# intended strike is what actually went wrong, so that is what is bounded.
+MIN_OTM_FRACTION = 0.70
+
 
 def _tick(price: float) -> float:
     """Minimum price increment for an option trading at `price`."""
@@ -284,8 +310,17 @@ def requote_signal(client, s: dict, target_dte: int | None = None) -> dict | Non
 
     option_type = "CALL" if s["signal"] == "SELL_CALL" else "PUT"
     target_dte  = target_dte or int(s.get("dte", 30) or 30)
+    model_close  = float(s.get("close", 0) or 0)
+    model_strike = float(s.get("strike", 0) or 0)
+    # Set the label from the MODEL strike up front so the key always exists,
+    # including on the fallback path below. live_scanner prints
+    # s.get("otm_pct", "5") / ("otm_pct", "8"), and those hardcoded defaults are
+    # how a 2.1% OTM XOM put displayed as "(5% OTM)" on 2026-10-08.
+    if model_close:
+        s["otm_pct"] = round((abs(model_close - model_strike) / model_close)
+                             * 100, 1)
     q = fetch_chain_quote(client, s["symbol"], option_type,
-                          target_strike=float(s.get("strike", 0) or 0),
+                          target_strike=model_strike,
                           target_dte=target_dte)
 
     if q is None or q["premium"] <= 0:
@@ -297,7 +332,20 @@ def requote_signal(client, s: dict, target_dte: int | None = None) -> dict | Non
     if close and q["premium"] / close < SCAV_MIN_PREMIUM_PCT:
         return None   # real premium too thin — the modeled trade doesn't exist
 
+    # How far OTM the chain's strike actually sits, versus how far the strategy
+    # asked for. Measured from the ORIGINAL s["strike"] (still the model's
+    # target — s.update below is what overwrites it), so this works for puts and
+    # for both covered-call widths without importing any strategy parameter.
+    is_put       = s.get("signal") == "SELL_PUT"
+    realized_otm = ((close - q["strike"]) / close if is_put
+                    else (q["strike"] - close) / close) if close else 0.0
+    target_otm   = (abs(close - float(s.get("strike", 0) or 0)) / close
+                    if close else 0.0)
+    if target_otm > 0 and realized_otm < target_otm * MIN_OTM_FRACTION:
+        return None   # drifted too far toward the money — skip, don't substitute
+
     s.update({
+        "otm_pct":      round(realized_otm * 100, 1),
         "strike":       q["strike"],
         "premium":      q["premium"],
         "premium_pct":  round(premium_pct, 2),

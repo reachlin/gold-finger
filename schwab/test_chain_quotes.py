@@ -649,3 +649,103 @@ def test_fetch_chain_quote_uses_the_tick_limit():
     assert q["premium"] == q["mid"] == 3.675      # mid stays the fair-value ref
     assert q["order_limit"] == 3.70               # the price we actually ask
     assert q["order_limit"] > q["bid"], "must rest above the bid, never cross"
+
+
+# ===========================================================================
+# Strike-drift guard + honest OTM label (added 2026-10-08)
+#
+# The liquidity filters (spread, bid size, untraded age) reject the thin
+# strikes nearest the 5%-OTM target, and the ranking then takes the nearest
+# ELIGIBLE strike with no bound on how far that is. On 2026-10-08 that turned
+# a 5% OTM XOM put into a 2.1% OTM, delta -0.42 contract at a different
+# expiry -- and the display still said "(5% OTM)" because
+# live_scanner printed s.get("otm_pct", "5") and nothing ever set otm_pct.
+#
+# Threshold from measurement, not taste: across 14,331 SELL_PUT signals in
+# data/overseer.log the realized OTM% sits at p0.1=3.88, p1=4.00, p50=4.97.
+# The natural floor is ~3.86% (NVDA, nearest listed strike on a high-priced
+# stock). Only 2 signals ever fell below 3.5% -- the two pathological XOM
+# re-quotes. So 0.70 x target (3.5% of a 5% target) separates the defect from
+# every legitimate signal we have on record.
+# ===========================================================================
+
+def _two_strike_chain(dte=43):
+    """A chain where only a far-from-target strike survives the filters."""
+    def opt(bid, ask, delta, oi=1800, bsz=366, vol=26):
+        return [{"bid": bid, "ask": ask, "delta": delta, "volatility": 27.0,
+                 "openInterest": oi, "bidSize": bsz, "totalVolume": vol,
+                 "inTheMoney": False}]
+    return {
+        "underlying": {"last": 168.60},
+        "putExpDateMap": {
+            f"2026-11-20:{dte}": {
+                # the 5%-OTM strike: real quote but a thin bid size -> rejected
+                "160.0": opt(3.35, 3.45, -0.236, bsz=5),
+                # liquid, but far too close to the money
+                "165.0": opt(5.00, 5.30, -0.420),
+            },
+        },
+    }
+
+
+def test_a_strike_that_drifted_toward_the_money_is_rejected():
+    """The live XOM case: $165 on a $168.60 stock is 2.1% OTM, not 5%."""
+    s = {"symbol": "XOM", "signal": "SELL_PUT", "close": 168.60,
+         "strike": 160.17, "premium": 1.76, "dte": 30, "reason": "test"}
+    assert cq.requote_signal(_client(_two_strike_chain()), s) is None, (
+        "a 2.1% OTM substitute for a 5% OTM target must be skipped, not sold")
+
+
+def test_the_real_five_percent_strike_is_accepted():
+    """Same chain with the bid size healthy: $160 is eligible and wins."""
+    payload = _two_strike_chain()
+    payload["putExpDateMap"]["2026-11-20:43"]["160.0"][0]["bidSize"] = 366
+    s = {"symbol": "XOM", "signal": "SELL_PUT", "close": 168.60,
+         "strike": 160.17, "premium": 1.76, "dte": 30, "reason": "test"}
+    out = cq.requote_signal(_client(payload), s)
+    assert out is not None
+    assert out["strike"] == 160.0
+    assert out["otm_pct"] == pytest.approx(5.1, abs=0.1)
+
+
+def test_the_natural_low_tail_still_passes():
+    """NVDA's nearest listed strike lands at 3.86% OTM -- legitimate, keep it."""
+    payload = {
+        "underlying": {"last": 207.00},
+        "putExpDateMap": {"2026-11-06:29": {
+            "199.0": [{"bid": 4.20, "ask": 4.40, "delta": -0.28,
+                       "volatility": 38.0, "openInterest": 900,
+                       "bidSize": 120, "totalVolume": 400,
+                       "inTheMoney": False}]}},
+    }
+    s = {"symbol": "NVDA", "signal": "SELL_PUT", "close": 207.00,
+         "strike": 196.65, "premium": 4.30, "dte": 30, "reason": "test"}
+    out = cq.requote_signal(_client(payload), s)
+    assert out is not None, "3.86% OTM is the natural floor, not a defect"
+    assert out["otm_pct"] == pytest.approx(3.9, abs=0.1)
+
+
+def test_otm_pct_is_set_so_the_display_stops_guessing():
+    """live_scanner prints s.get('otm_pct', '5') -- the key must exist."""
+    out = cq.requote_signal(_client(_rich(bid=3.55, ask=3.80)), {
+        "symbol": "AAPL", "signal": "SELL_PUT", "close": 160.53,
+        "strike": 152.50, "premium": 3.60, "dte": 30, "reason": "test"})
+    assert out is not None
+    assert "otm_pct" in out, "otm_pct missing -> the label silently says 5%"
+    assert out["otm_pct"] == pytest.approx(5.0, abs=0.1)
+
+
+def test_otm_pct_is_measured_the_other_way_for_calls():
+    payload = {
+        "underlying": {"last": 100.00},
+        "callExpDateMap": {"2026-11-06:29": {
+            "108.0": [{"bid": 1.20, "ask": 1.30, "delta": 0.25,
+                       "volatility": 30.0, "openInterest": 500,
+                       "bidSize": 90, "totalVolume": 50,
+                       "inTheMoney": False}]}},
+    }
+    out = cq.requote_signal(_client(payload), {
+        "symbol": "KO", "signal": "SELL_CALL", "close": 100.00,
+        "strike": 108.00, "premium": 1.25, "dte": 30, "reason": "test"})
+    assert out is not None
+    assert out["otm_pct"] == pytest.approx(8.0, abs=0.1)
