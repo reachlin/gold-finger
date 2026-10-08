@@ -662,8 +662,11 @@ def test_locked_market_does_not_blow_up():
 
 
 def test_fetch_chain_quote_uses_the_tick_limit():
-    q = cq.fetch_chain_quote(_client(_rich(bid=3.55, ask=3.80)), "AAPL", "PUT",
-                             target_strike=152.5, target_dte=32)
+    # `last` must move with bid/ask: a contract quoted 3.55/3.80 whose last
+    # print is the fixture default 2.20 on volume 150 is not a real quote, and
+    # the session-range check correctly rejects it.
+    q = cq.fetch_chain_quote(_client(_rich(bid=3.55, ask=3.80, last=3.70)),
+                             "AAPL", "PUT", target_strike=152.5, target_dte=32)
     assert q is not None
     assert q["premium"] == q["mid"] == 3.675      # mid stays the fair-value ref
     assert q["order_limit"] == 3.65               # the price we actually ask
@@ -874,3 +877,125 @@ def test_fetch_chain_quote_uses_the_size_weighted_limit():
     assert q["mid"] == pytest.approx(7.525)      # mid still reported for context
     assert q["order_limit"] == 7.20, (
         f"placed {q['order_limit']} — the unfillable 7.55 bug")
+
+
+# ===========================================================================
+# Limit plausibility against the contract's own session range (added 2026-10-08)
+#
+# GOOGL 11-06 $335 went in at 7.55 while the contract's own session high was
+# 7.30 and its last print 7.16. We asked a price it had never traded at, and
+# nothing in the pipeline looked at that. It rested unfillable for 25 minutes.
+#
+# Note what this does and does not do. The size-weighted limit already stops
+# THAT case (it prices 7.20, not 7.55). This is the backstop for the other
+# direction -- a heavily BID book walks the limit up toward the ask, past where
+# the contract actually trades -- and for any future pricing bug that puts the
+# limit outside reality.
+#
+# Both thresholds are measured against 1,104 live eligible contracts (126 in the
+# 3-7% OTM range we actually trade), sampled 2026-10-08:
+#
+#   MIN_RANGE_VOLUME = 10. The session range is only a ceiling if contracts
+#   stand behind it. EVERY overshoot above 2% in the tradeable range had volume
+#   <= 6 (PG +9.9% on vol 1, IBM +7.2% on vol 1, MSFT +3.4% on vol 1) -- a
+#   single stale print, not a ceiling. Contracts with volume >= 10 never
+#   overshot by more than 1.82%.
+#
+#   MAX_LIMIT_OVER_SESSION = 0.02. Overshoot percentiles in the tradeable
+#   range: p50 -4.31, p90 +0.68, p95 +1.82, p98 +3.57. Sub-1% overshoots are
+#   ordinary drift since the last print and must pass. GOOGL's failure was
+#   +3.42%. 2% sits in the empty gap between the two populations: 0 false
+#   rejections across all 126 tradeable contracts.
+# ===========================================================================
+
+def _book(bid, ask, bid_size, ask_size, high, last, volume, dte=29):
+    return {
+        "underlying": {"last": 352.20},
+        "putExpDateMap": {f"2026-11-06:{dte}": {"335.0": [{
+            "bid": bid, "ask": ask, "delta": -0.305, "volatility": 36.8,
+            "openInterest": 1032, "bidSize": bid_size, "askSize": ask_size,
+            "highPrice": high, "last": last, "totalVolume": volume,
+            "inTheMoney": False}]}},
+    }
+
+
+def test_a_limit_above_a_well_traded_session_high_is_rejected():
+    """Bid-heavy book walks the limit to 7.85; the contract traded up to 7.30."""
+    q = cq.fetch_chain_quote(
+        _client(_book(7.15, 7.90, 500, 17, high=7.30, last=7.16, volume=20)),
+        "GOOGL", "PUT", target_strike=334.59, target_dte=30)
+    assert q is None, (
+        f"limit {q and q['order_limit']} is above a session high of 7.30 that "
+        f"20 contracts stand behind")
+
+
+def test_the_googl_order_as_actually_placed_would_be_rejected():
+    """The 7.55 that stranded: +3.42% over the ceiling, on volume of 11."""
+    ceiling = max(7.30, 7.16)
+    assert 7.55 > ceiling * (1 + cq.MAX_LIMIT_OVER_SESSION), (
+        "the rule must catch the order that actually stranded")
+    assert 11 >= cq.MIN_RANGE_VOLUME, "and its volume must clear the floor"
+
+
+def test_a_thin_contract_is_not_judged_on_one_print():
+    """PG: limit 9.9% over a 'high' set by a single contract. Must still pass."""
+    q = cq.fetch_chain_quote(
+        _client(_book(7.15, 7.90, 500, 17, high=6.00, last=6.00, volume=1)),
+        "GOOGL", "PUT", target_strike=334.59, target_dte=30)
+    assert q is not None, (
+        "a 1-contract print is not a ceiling — rejecting on it would have "
+        "dropped 6 of 14 live symbols")
+
+
+def test_ordinary_drift_since_the_last_print_passes():
+    """Sub-1% overshoots are the p90 of normal; they must not be rejected."""
+    q = cq.fetch_chain_quote(
+        _client(_book(7.15, 7.90, 17, 509, high=7.15, last=7.10, volume=44)),
+        "GOOGL", "PUT", target_strike=334.59, target_dte=30)
+    assert q is not None, "0.7% over the last print is drift, not a defect"
+    assert q["order_limit"] == 7.20
+
+
+def test_a_limit_inside_the_session_range_passes():
+    q = cq.fetch_chain_quote(
+        _client(_book(6.95, 7.25, 125, 87, high=7.30, last=7.25, volume=33)),
+        "GOOGL", "PUT", target_strike=334.59, target_dte=30)
+    assert q is not None
+    assert q["order_limit"] == 7.10
+
+
+def test_a_contract_with_no_prints_is_not_gated_here():
+    """Documents a REAL GAP, deliberately left open.
+
+    With no session range there is nothing to validate against, so this check
+    goes quiet rather than blocking. That is the right behaviour inside RTH --
+    32% of eligible contracts have no print yet and the existing
+    MAX_UNTRADED_AGE_MIN filter covers the stale ones. It is NOT the right
+    behaviour for a pre-market or overnight options session, where nothing
+    trades and so nothing can be validated. Turning "no range" into a refusal
+    would reject ~40% of current signals, so it needs an explicit decision and
+    a backtest, not a quiet default. See project_overnight_trading_dec2026.
+    """
+    q = cq.fetch_chain_quote(
+        _client(_book(7.15, 7.90, 500, 17, high=0, last=0, volume=0)),
+        "GOOGL", "PUT", target_strike=334.59, target_dte=30)
+    assert q is not None, "no session range -> this check must abstain, not block"
+
+
+def test_a_quote_that_repriced_before_printing_is_rejected():
+    """The known false positive, made explicit so it is a choice and not a surprise.
+
+    If the underlying moves hard, the puts reprice on the QUOTE before anything
+    prints at the new level. The session high still reflects the old regime, so
+    this check skips the signal even though the price is honest.
+
+    Accepted, for the reason the module already states elsewhere: an unfilled
+    order is a fine outcome and a missed entry is cheaper than a badly-priced
+    position. The signal returns on the next scan once a print lands. The cost
+    is a missed entry on a volatility spike -- the moment premium is richest,
+    so this is the trade-off to revisit first if the filter proves expensive.
+    """
+    q = cq.fetch_chain_quote(
+        _client(_book(3.55, 3.80, 200, 200, high=2.50, last=2.45, volume=150)),
+        "GOOGL", "PUT", target_strike=334.59, target_dte=30)
+    assert q is None, "documents the behaviour; change deliberately, not by accident"

@@ -97,6 +97,45 @@ TICK_AT_OR_ABOVE = 0.05
 # intended strike is what actually went wrong, so that is what is bounded.
 MIN_OTM_FRACTION = 0.70
 
+# A limit above where the contract actually traded today is a price nobody will
+# pay. GOOGL 11-06 $335 went in at 7.55 against a session high of 7.30 and a
+# last print of 7.16, and rested unfillable for 25 minutes. Nothing looked.
+#
+# Scope: the size-weighted limit already prevents THAT case (it prices 7.20).
+# This is the backstop for the other direction -- a heavily BID book walking the
+# limit up past where the contract trades -- and for any future pricing change
+# that puts the limit outside reality.
+#
+# Both numbers measured against 1,104 live eligible contracts (126 in the 3-7%
+# OTM band we actually trade) on 2026-10-08:
+#
+#   MIN_RANGE_VOLUME -- the session range is only a ceiling if contracts stand
+#   behind it. Every overshoot above 2% in the tradeable band had volume <= 6
+#   (PG +9.9% on volume 1, IBM +7.2% on volume 1): a single stale print. No
+#   contract with volume >= 10 overshot by more than 1.82%.
+#
+#   MAX_LIMIT_OVER_SESSION -- overshoot percentiles in that band: p50 -4.31%,
+#   p90 +0.68%, p95 +1.82%, p98 +3.57%. Sub-1% is ordinary drift since the last
+#   print and must pass; GOOGL's failure was +3.42%. 2% sits in the empty gap
+#   between the two populations, giving 0 false rejections across all 126.
+#
+# Known gap, left open deliberately: with no print at all there is no range to
+# validate against, so this abstains rather than blocks. Correct inside RTH (32%
+# of eligible contracts have no print yet, and MAX_UNTRADED_AGE_MIN covers the
+# stale ones); NOT correct for a pre-market or overnight options session, where
+# nothing trades. Making "no range" a refusal would reject ~40% of current
+# signals, so it needs a decision and a backtest, not a quiet default.
+#
+# Known false positive: if the underlying moves hard, the puts reprice on the
+# QUOTE before anything prints at the new level, so the session high reflects
+# the old regime and an honest price gets skipped. Accepted on the same grounds
+# the rest of this module uses -- a missed entry is cheaper than a badly-priced
+# position, and the signal returns next scan once a print lands. But it costs
+# entries exactly when premium is richest, so revisit this first if the filter
+# proves expensive. Pinned by test_a_quote_that_repriced_before_printing_is_rejected.
+MIN_RANGE_VOLUME        = 10
+MAX_LIMIT_OVER_SESSION  = 0.02
+
 
 def _tick(price: float) -> float:
     """Minimum price increment for an option trading at `price`."""
@@ -295,6 +334,21 @@ def fetch_chain_quote(client, symbol: str, option_type: str,
             if mid <= 0 or (ask - bid) / mid > MAX_SPREAD_PCT:
                 continue   # unquotable — selling at the bid here gives away
                            # most of the premium
+            limit = order_limit_for(
+                bid, ask,
+                bid_size=int(bid_size) if bid_size is not None else None,
+                ask_size=(int(opt["askSize"])
+                          if opt.get("askSize") is not None else None))
+            # Would we be asking a price this contract has not traded at today?
+            # Only meaningful once enough contracts stand behind the range; with
+            # no print at all there is nothing to check and this abstains.
+            session_hi = max(float(opt.get("highPrice", 0) or 0),
+                             float(opt.get("last", 0) or 0))
+            if (session_hi > 0
+                    and volume is not None and int(volume) >= MIN_RANGE_VOLUME
+                    and limit > session_hi * (1 + MAX_LIMIT_OVER_SESSION)):
+                continue   # a limit above a well-traded session high will rest
+                           # unfilled all day — GOOGL 11-06 $335 at 7.55
             # Rank by distance to target strike first, then to target DTE
             rank = (abs(strike - target_strike), abs(dte - target_dte))
             if best is None or rank < best[0]:
@@ -305,11 +359,7 @@ def fetch_chain_quote(client, symbol: str, option_type: str,
                     "premium":       round(mid, 4),
                     "mid":           round(mid, 4),
                     # Where the order actually goes in.
-                    "order_limit":   order_limit_for(
-                        bid, ask,
-                        bid_size=int(bid_size) if bid_size is not None else None,
-                        ask_size=(int(opt["askSize"])
-                                  if opt.get("askSize") is not None else None)),
+                    "order_limit":   limit,
                     "bid":           bid,
                     # Liquidity context for the LLM. `last` is deliberately NOT
                     # a pricing input: lastSize is 1-4 contracts in practice and
