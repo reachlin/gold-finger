@@ -287,8 +287,10 @@ def test_premium_is_the_mid():
 def test_order_limit_is_the_mid_on_the_next_tick():
     q = cq.fetch_chain_quote(_client(_one_strike_chain(2.01, 2.40)),
                              "XOM", "PUT", target_strike=152.5, target_dte=32)
-    # mid 2.205, penny ticks below $3 -> 2.21
-    assert q["order_limit"] == pytest.approx(2.21)
+    # Sizes absent in this fixture, so fair value is the mid: 2.205, penny
+    # ticks below $3, rounded DOWN -> 2.20. (Was 2.21 while the rule rounded
+    # up; superseded 2026-10-08, see the size-weighted block at the bottom.)
+    assert q["order_limit"] == pytest.approx(2.20)
     assert q["order_limit"] > q["bid"]
 
 
@@ -325,7 +327,7 @@ def test_requote_exposes_both_numbers_to_the_signal():
     out = cq.requote_signal(_client(_one_strike_chain(2.01, 2.40)), s)
     assert out is not None
     assert out["premium"] == pytest.approx(2.205)      # shown as PREMIUM
-    assert out["order_limit"] == pytest.approx(2.21)   # shown as LIMIT
+    assert out["order_limit"] == pytest.approx(2.20)   # shown as LIMIT
 
 
 # ===========================================================================
@@ -595,11 +597,18 @@ def test_tick_is_a_penny_below_three_and_a_nickel_above():
     assert cq._tick(31.68) == 0.05
 
 
-def test_order_limit_rounds_the_mid_up_to_a_valid_tick():
-    # AAPL live: mid 3.675 is not a nickel, so it must move to 3.70, not 3.65.
-    assert cq.order_limit_for(3.55, 3.80) == 3.70
-    # AMD live: mid 31.675 -> 31.70
-    assert cq.order_limit_for(31.35, 32.00) == 31.70
+def test_order_limit_rounds_fair_value_down_to_a_valid_tick():
+    """Rounding goes DOWN since 2026-10-08: never ask above fair value.
+
+    It used to round UP, so the limit could not land on the bid. That job now
+    belongs to an explicit bid + one tick floor, which states the invariant
+    instead of leaning on the rounding direction -- and rounding up became
+    actively harmful once fair value could sit just under the ask.
+    """
+    # AAPL live: mid 3.675 is not a nickel -> 3.65
+    assert cq.order_limit_for(3.55, 3.80) == 3.65
+    # AMD live: mid 31.675 -> 31.65
+    assert cq.order_limit_for(31.35, 32.00) == 31.65
     # already on a tick: left alone
     assert cq.order_limit_for(1.00, 1.50) == 1.25
     assert cq.order_limit_for(3.50, 3.70) == 3.60
@@ -631,10 +640,20 @@ def test_order_limit_invariant_holds_across_the_whole_quote_space():
     assert checked > 3000, f"only {checked} quotes exercised"
 
 
-def test_order_limit_is_at_least_the_mid():
-    """We never ask for less than fair value; rounding only ever helps us."""
+def test_order_limit_never_exceeds_fair_value():
+    """The invariant flipped on 2026-10-08, and this is why.
+
+    The old rule was "never ask LESS than fair value, rounding only helps us".
+    It cost a fill: GOOGL 11-06 $335 went in at 7.55 against a size-weighted
+    fair value of 7.17 and never traded within 25c of it. Asking above our own
+    estimate is not edge, it is a missed trade -- so the limit is now capped at
+    fair value, with the bid + one tick floor protecting the other side.
+    """
     for bid, ask in [(3.55, 3.80), (0.55, 0.65), (31.35, 32.00), (1.66, 2.13)]:
-        assert cq.order_limit_for(bid, ask) >= (bid + ask) / 2 - 1e-9
+        lim  = cq.order_limit_for(bid, ask)
+        fair = (bid + ask) / 2                      # no sizes -> the mid
+        assert lim <= fair + 1e-9, f"{bid}/{ask} -> {lim} above fair {fair}"
+        assert lim > bid, f"{bid}/{ask} -> {lim} crosses the book"
 
 
 def test_locked_market_does_not_blow_up():
@@ -647,8 +666,9 @@ def test_fetch_chain_quote_uses_the_tick_limit():
                              target_strike=152.5, target_dte=32)
     assert q is not None
     assert q["premium"] == q["mid"] == 3.675      # mid stays the fair-value ref
-    assert q["order_limit"] == 3.70               # the price we actually ask
+    assert q["order_limit"] == 3.65               # the price we actually ask
     assert q["order_limit"] > q["bid"], "must rest above the bid, never cross"
+    assert q["order_limit"] <= q["mid"], "never above fair value"
 
 
 # ===========================================================================
@@ -749,3 +769,108 @@ def test_otm_pct_is_measured_the_other_way_for_calls():
         "strike": 108.00, "premium": 1.25, "dte": 30, "reason": "test"})
     assert out is not None
     assert out["otm_pct"] == pytest.approx(8.0, abs=0.1)
+
+
+# ===========================================================================
+# Size-weighted limit price (added 2026-10-08)
+#
+# The plain mid is only fair when the book is balanced. All three mid-priced
+# orders we have placed say so:
+#
+#   XOM  11-06 155  bid 1.87(10)  / ask 2.14(11)   mid 2.005  balanced
+#        -> filled instantly at 2.00. The mid was right.
+#   AMZN 11-06 245  bid 5.65(427) / ask 5.95(13)   mid 5.80   heavily BID
+#        -> filled instantly at 5.80; size-weighted fair value was 5.94,
+#           so the mid gave away ~14c.
+#   GOOGL 11-06 335 bid 7.15(17)  / ask 7.90(509)  mid 7.525  heavily OFFERED
+#        -> limit 7.55 landed ABOVE the day's high (7.30) and above the later
+#           ask (7.35). Unfillable, and it blocked GOOGL for the session.
+#
+# So weight by resting size (the standard microprice), which is already fetched
+# and already printed on the LIQUIDITY line:
+#
+#     fair = (bid * ask_size + ask * bid_size) / (bid_size + ask_size)
+#
+# Large bid size means buyers are stacked and the price is likelier to tick up,
+# so fair value sits nearer the ask -- and vice versa.
+#
+# Rounding changes direction with it. The old rule rounded UP to avoid landing
+# on the bid; combined with a size-weighted value that can sit a hair under the
+# ask, rounding up lands exactly ON the ask (AMZN: 5.9411 -> 5.95), the least
+# fillable price in the spread. So: round DOWN to a tick, then floor at one
+# tick above the bid, which keeps the never-cross invariant explicitly rather
+# than as a side effect of the rounding direction.
+# ===========================================================================
+
+def _micro(bid, ask, bid_size, ask_size):
+    return (bid * ask_size + ask * bid_size) / (bid_size + ask_size)
+
+
+def test_balanced_book_still_prices_at_the_mid():
+    """XOM: sizes 10x11, so the size-weighted value IS the mid."""
+    lim = cq.order_limit_for(1.87, 2.14, bid_size=10, ask_size=11)
+    assert lim == pytest.approx(1.99, abs=0.011), lim
+    assert 1.87 < lim <= 2.14
+
+
+def test_a_heavily_offered_book_prices_near_the_bid():
+    """GOOGL: 509 offered against 17 bid -- must not ask 7.55."""
+    lim = cq.order_limit_for(7.15, 7.90, bid_size=17, ask_size=509)
+    assert lim == 7.20, lim                  # one tick above the bid
+    assert lim < 7.30, "must sit below the day's traded high, unlike 7.55"
+    assert 7.15 < lim <= 7.90
+
+
+def test_a_heavily_bid_book_prices_near_the_ask():
+    """AMZN: 427 bid against 13 offered -- worth more than the 5.80 mid."""
+    lim = cq.order_limit_for(5.65, 5.95, bid_size=427, ask_size=13)
+    assert lim > 5.80, f"size-weighted value is ~5.94, asked {lim}"
+    assert lim < 5.95, "landing exactly on the ask is the least fillable price"
+
+
+def test_the_limit_never_crosses_or_exceeds_the_ask():
+    """The invariant, over a grid of quotes and book shapes."""
+    quotes = [(1.87, 2.14), (5.65, 5.95), (7.15, 7.90), (0.55, 0.65),
+              (3.55, 3.60), (31.35, 32.00), (0.05, 0.40), (12.00, 12.05)]
+    shapes = [(1, 1), (1, 1000), (1000, 1), (17, 509), (427, 13), (50, 50)]
+    for bid, ask in quotes:
+        for bs, asz in shapes:
+            lim = cq.order_limit_for(bid, ask, bid_size=bs, ask_size=asz)
+            assert bid < lim <= ask or bid == ask, (
+                f"bid {bid} ask {ask} sizes {bs}x{asz} -> {lim}")
+
+
+def test_missing_sizes_fall_back_to_the_mid():
+    """Some quotes omit sizes; absent data must not change the price."""
+    assert cq.order_limit_for(1.87, 2.14) == cq.order_limit_for(
+        1.87, 2.14, bid_size=None, ask_size=None)
+    lim = cq.order_limit_for(7.15, 7.90)
+    assert 7.15 < lim <= 7.90
+
+
+def test_zero_total_size_does_not_divide_by_zero():
+    lim = cq.order_limit_for(1.87, 2.14, bid_size=0, ask_size=0)
+    assert 1.87 < lim <= 2.14, lim
+
+
+def test_a_one_tick_market_rests_at_the_ask():
+    """No price exists between them; the ask is the only non-crossing choice."""
+    assert cq.order_limit_for(3.55, 3.60, bid_size=100, ask_size=100) == 3.60
+
+
+def test_fetch_chain_quote_uses_the_size_weighted_limit():
+    """The sizes in the chain must reach the limit, not just the display."""
+    payload = {
+        "underlying": {"last": 352.20},
+        "putExpDateMap": {"2026-11-06:29": {
+            "335.0": [{"bid": 7.15, "ask": 7.90, "delta": -0.305,
+                       "volatility": 36.8, "openInterest": 1032,
+                       "bidSize": 17, "askSize": 509, "totalVolume": 11,
+                       "inTheMoney": False}]}},
+    }
+    q = cq.fetch_chain_quote(_client(payload), "GOOGL", "PUT",
+                             target_strike=334.59, target_dte=30)
+    assert q is not None
+    assert q["mid"] == pytest.approx(7.525)      # mid still reported for context
+    assert q["order_limit"] == 7.20, (
+        f"placed {q['order_limit']} — the unfillable 7.55 bug")

@@ -114,18 +114,56 @@ def round_up_to_tick(price: float) -> float:
     return round(math.ceil(round(price / tick, 6)) * tick, 2)
 
 
-def order_limit_for(bid: float, ask: float) -> float:
-    """The price we ask for, given a quote: the mid on the next tradable tick.
+def order_limit_for(bid: float, ask: float,
+                    bid_size: int | None = None,
+                    ask_size: int | None = None) -> float:
+    """The price we ask for: the SIZE-WEIGHTED fair value, on a tradable tick.
 
     Guarantees bid < limit <= ask for any bid < ask, so the order always rests
     instead of crossing. A locked market (bid == ask) returns that price.
+
+    Why weighted and not the plain mid. The mid is only fair when the book is
+    balanced, and all three mid-priced orders we placed proved it:
+
+      XOM  11-06 155   bid 1.87(10)  ask 2.14(11)   balanced
+          mid 2.005 -> filled instantly at 2.00. Right.
+      AMZN 11-06 245   bid 5.65(427) ask 5.95(13)   heavily BID
+          mid 5.80 -> filled instantly, but fair value was 5.94: ~14c given away.
+      GOOGL 11-06 335  bid 7.15(17)  ask 7.90(509)  heavily OFFERED
+          mid 7.525 -> limit 7.55, ABOVE the day's high of 7.30 and above the
+          later ask of 7.35. Unfillable, and it blocked GOOGL for the session.
+
+    A large bid size means buyers are stacked and the price is likelier to tick
+    up, so fair value sits nearer the ask; a stacked offer means the reverse.
+    That is the standard microprice, and the sizes are already fetched -- they
+    were only being printed on the LIQUIDITY line.
+
+    Rounding direction flips with it. The old rule rounded UP so the limit could
+    never land on the bid; with a weighted value that can sit just under the ask
+    that lands exactly ON the ask (AMZN: 5.9411 -> 5.95), the least fillable
+    price in the spread. So round DOWN and floor at one tick above the bid,
+    which states the never-cross invariant instead of relying on the rounding
+    direction to imply it.
+
+    Spreads alone will not catch this: GOOGL's was only 10%, well inside
+    MAX_SPREAD_PCT. Both failures happened in the first 40 minutes after the
+    open, when books are widest and most lopsided.
     """
     mid = (bid + ask) / 2
-    tick = _tick(mid)
+    total = (bid_size or 0) + (ask_size or 0)
+    if bid_size is None or ask_size is None or total <= 0:
+        fair = mid                      # no size data — the mid is all we have
+    else:
+        fair = (bid * ask_size + ask * bid_size) / total
+
+    tick = _tick(fair)
     # Work in integer ticks to dodge binary-float surprises: 3.675/0.05 is
-    # 73.49999... in floating point, which would round down to 3.70 - tick.
-    steps = math.ceil(round(mid / tick, 6))
-    return round(min(steps * tick, ask), 2)
+    # 73.49999... in floating point, which floor()s to the wrong step.
+    limit = math.floor(round(fair / tick, 6)) * tick
+    # Never cross: the limit must sit strictly above the bid. On a one-tick
+    # market this forces the ask, which is the only non-crossing price there.
+    limit = max(limit, bid + _tick(bid))
+    return round(min(limit, ask), 2)
 # Minimum contracts resting on the bid. This, not open interest, is the real
 # liquidity gate: OI counts contracts somebody HOLDS, bidSize counts contracts
 # somebody will BUY today. Measured 2026-10-06, KO quoted bid 0.00 / bidSize 0
@@ -267,7 +305,11 @@ def fetch_chain_quote(client, symbol: str, option_type: str,
                     "premium":       round(mid, 4),
                     "mid":           round(mid, 4),
                     # Where the order actually goes in.
-                    "order_limit":   order_limit_for(bid, ask),
+                    "order_limit":   order_limit_for(
+                        bid, ask,
+                        bid_size=int(bid_size) if bid_size is not None else None,
+                        ask_size=(int(opt["askSize"])
+                                  if opt.get("askSize") is not None else None)),
                     "bid":           bid,
                     # Liquidity context for the LLM. `last` is deliberately NOT
                     # a pricing input: lastSize is 1-4 contracts in practice and
