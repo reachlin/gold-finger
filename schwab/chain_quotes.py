@@ -251,8 +251,21 @@ def _trade_age_min(opt: dict) -> float | None:
     return round(max(0.0, (float(q_t) - float(t_t)) / 1000 / 60), 1)
 
 
+def _tally(reasons: dict | None, key: str) -> None:
+    """Count one per-strike rejection.
+
+    Tallied rather than printed: this loop walks every strike in the DTE window
+    for 14 symbols every 5 minutes (1,104 eligible contracts in a live sample),
+    so a line per rejection would bury a log that is already 20MB. requote_signal
+    prints the tally once, and only when the signal actually dies.
+    """
+    if reasons is not None:
+        reasons[key] = reasons.get(key, 0) + 1
+
+
 def fetch_chain_quote(client, symbol: str, option_type: str,
                       target_strike: float, target_dte: int,
+                      reasons: dict | None = None,
                       min_dte: int = MIN_DTE, max_dte: int = MAX_DTE) -> dict | None:
     """
     Fetch the chain for symbol and return the contract nearest to
@@ -314,12 +327,17 @@ def fetch_chain_quote(client, symbol: str, option_type: str,
             bid    = float(opt.get("bid", 0) or 0)
             ask    = float(opt.get("ask", 0) or 0)
             oi     = int(opt.get("openInterest", 0) or 0)
-            if bid <= 0 or oi < MIN_OPEN_INT:
+            if bid <= 0:
+                _tally(reasons, "no_bid")
+                continue
+            if oi < MIN_OPEN_INT:
+                _tally(reasons, "open_interest")
                 continue
             # A missing size must not read as zero — some quotes omit it, and
             # treating absent data as "no liquidity" drops every signal.
             bid_size = opt.get("bidSize")
             if bid_size is not None and int(bid_size) < MIN_BID_SIZE:
+                _tally(reasons, "bid_size")
                 continue
             # A market nobody has tested. Absent fields must not reject --
             # treating a data gap as the worst case would silently drop
@@ -328,10 +346,12 @@ def fetch_chain_quote(client, symbol: str, option_type: str,
             age    = _trade_age_min(opt)
             if (volume is not None and int(volume) == 0
                     and age is not None and age > MAX_UNTRADED_AGE_MIN):
+                _tally(reasons, "untraded")
                 continue   # no volume today and no print for a full session:
                            # the mid has nothing behind it
             mid = (bid + ask) / 2
             if mid <= 0 or (ask - bid) / mid > MAX_SPREAD_PCT:
+                _tally(reasons, "spread")
                 continue   # unquotable — selling at the bid here gives away
                            # most of the premium
             limit = order_limit_for(
@@ -347,6 +367,7 @@ def fetch_chain_quote(client, symbol: str, option_type: str,
             if (session_hi > 0
                     and volume is not None and int(volume) >= MIN_RANGE_VOLUME
                     and limit > session_hi * (1 + MAX_LIMIT_OVER_SESSION)):
+                _tally(reasons, "limit_over_session")
                 continue   # a limit above a well-traded session high will rest
                            # unfilled all day — GOOGL 11-06 $335 at 7.55
             # Rank by distance to target strike first, then to target DTE
@@ -411,17 +432,29 @@ def requote_signal(client, s: dict, target_dte: int | None = None) -> dict | Non
     if model_close:
         s["otm_pct"] = round((abs(model_close - model_strike) / model_close)
                              * 100, 1)
+    rejects: dict[str, int] = {}
     q = fetch_chain_quote(client, s["symbol"], option_type,
                           target_strike=model_strike,
-                          target_dte=target_dte)
+                          target_dte=target_dte, reasons=rejects)
 
     if q is None or q["premium"] <= 0:
+        # No eligible strike anywhere in the DTE window. Name the filters that
+        # did it -- otherwise this symbol just silently stops producing signals
+        # and nobody can tell a dead market from an over-tight threshold.
+        if rejects:
+            tally = "  ".join(f"{k} {v}" for k, v in
+                              sorted(rejects.items(), key=lambda kv: -kv[1]))
+            print(f"  [Quote] ⊘ {s['symbol']} {s['signal']} — no eligible "
+                  f"strike near ${model_strike:.2f}: {tally}")
         s["quote_source"] = "model"
         return s
 
     close = float(s.get("close", 0) or 0)
     premium_pct = q["premium"] / close * 100 if close else 0.0
     if close and q["premium"] / close < SCAV_MIN_PREMIUM_PCT:
+        print(f"  [Quote] ⊘ {s['symbol']} {s['signal']} ${q['strike']} dropped — "
+              f"real premium {premium_pct:.2f}% of close, floor "
+              f"{SCAV_MIN_PREMIUM_PCT * 100:.2f}%")
         return None   # real premium too thin — the modeled trade doesn't exist
 
     # How far OTM the chain's strike actually sits, versus how far the strategy
@@ -434,6 +467,10 @@ def requote_signal(client, s: dict, target_dte: int | None = None) -> dict | Non
     target_otm   = (abs(close - float(s.get("strike", 0) or 0)) / close
                     if close else 0.0)
     if target_otm > 0 and realized_otm < target_otm * MIN_OTM_FRACTION:
+        print(f"  [Quote] ⊘ {s['symbol']} {s['signal']} dropped — strike drift: "
+              f"chain gave ${q['strike']} ({realized_otm * 100:.1f}% OTM) vs "
+              f"{target_otm * 100:.1f}% target, floor "
+              f"{target_otm * MIN_OTM_FRACTION * 100:.1f}%")
         return None   # drifted too far toward the money — skip, don't substitute
 
     s.update({

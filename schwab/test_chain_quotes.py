@@ -999,3 +999,122 @@ def test_a_quote_that_repriced_before_printing_is_rejected():
         _client(_book(3.55, 3.80, 200, 200, high=2.50, last=2.45, volume=150)),
         "GOOGL", "PUT", target_strike=334.59, target_dte=30)
     assert q is None, "documents the behaviour; change deliberately, not by accident"
+
+
+# ===========================================================================
+# Rejection visibility (added 2026-10-08)
+#
+# Every filter in fetch_chain_quote was a bare `continue`, and live_scanner.py
+# drops a dead signal with `if s is not None:` and no else. So a signal removed
+# by the spread guard, the bid-size floor, the untraded-age gate, the yield
+# floor, MIN_OTM_FRACTION or the session-range check left NO trace anywhere.
+#
+# That made the main risk of the 2026-10-08 batch -- rejecting trades we should
+# have taken -- the one thing that could not be measured during the observation
+# period opened to measure it. A quiet log was not evidence the filters were
+# harmless; it was the absence of evidence either way.
+#
+# Noise budget matters here. The loop walks EVERY strike in the DTE window for
+# 14 symbols every 5 minutes (1,104 eligible contracts in a live sample), so
+# per-strike logging would bury a log that is already 20MB. Instead: per-strike
+# rejections are TALLIED, and one line is printed only when a signal is actually
+# dropped -- at most 14 lines a scan, and zero on a clean scan.
+# ===========================================================================
+
+def _drop_reasons(payload, signal, target_dte=30):
+    """Run a requote and hand back (result, printed output)."""
+    import io, contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        out = cq.requote_signal(_client(payload), signal, target_dte=target_dte)
+    return out, buf.getvalue()
+
+
+def test_a_strike_drift_rejection_says_so_with_numbers():
+    s = {"symbol": "XOM", "signal": "SELL_PUT", "close": 168.60,
+         "strike": 160.17, "premium": 1.76, "dte": 30, "reason": "test"}
+    out, log = _drop_reasons(_two_strike_chain(), s)
+    assert out is None
+    assert "XOM" in log and "drift" in log.lower(), log
+    for n in ("2.1", "165", "3.5"):          # realized, strike, the floor
+        assert n in log, f"{n!r} missing from: {log}"
+
+
+def test_a_yield_floor_rejection_says_so_with_numbers():
+    payload = _chain_response()
+    for strikes in payload["putExpDateMap"].values():
+        for opts in strikes.values():
+            opts[0]["bid"], opts[0]["ask"] = 0.05, 0.06
+    s = {"symbol": "KO", "signal": "SELL_PUT", "close": 83.29, "strike": 79.13,
+         "premium": 0.71, "dte": 30, "reason": "test"}
+    out, log = _drop_reasons(payload, s)
+    assert out is None
+    assert "KO" in log and "premium" in log.lower(), log
+    assert "0.5" in log, f"the floor itself must appear: {log}"
+
+
+def test_no_eligible_strike_reports_the_tally_by_reason():
+    """When every strike is filtered out, say which filters did it."""
+    payload = _book(7.15, 7.90, 500, 17, high=6.00, last=6.00, volume=99)
+    # add a second strike killed by a DIFFERENT filter, so the tally has two keys
+    payload["putExpDateMap"]["2026-11-06:29"]["330.0"] = [{
+        "bid": 5.00, "ask": 9.00, "delta": -0.28, "volatility": 36.0,
+        "openInterest": 400, "bidSize": 200, "askSize": 200,
+        "highPrice": 9.0, "last": 9.0, "totalVolume": 50, "inTheMoney": False}]
+    s = {"symbol": "GOOGL", "signal": "SELL_PUT", "close": 352.20,
+         "strike": 334.59, "premium": 7.1, "dte": 30, "reason": "test"}
+    out, log = _drop_reasons(payload, s)
+    # NOTE: with no eligible strike, requote_signal falls back to the MODEL
+    # premium and the signal survives — it does not return None. That fallback
+    # predates these filters; see test_model_fallback_bypasses_the_quality_gates.
+    assert out["quote_source"] == "model", out
+    assert "GOOGL" in log, log
+    assert "spread" in log.lower(), f"the wide-spread strike must be counted: {log}"
+    assert "session" in log.lower(), f"the session-range strike must be counted: {log}"
+
+
+def test_a_clean_requote_prints_nothing():
+    """Zero noise on the happy path — this runs 14x every 5 minutes."""
+    out, log = _drop_reasons(_rich(bid=3.55, ask=3.80, last=3.70), {
+        "symbol": "AAPL", "signal": "SELL_PUT", "close": 160.53,
+        "strike": 152.50, "premium": 3.60, "dte": 32, "reason": "test"},
+        target_dte=32)
+    assert out is not None
+    assert log == "", f"a successful requote must be silent, got: {log!r}"
+
+
+def test_the_tally_counts_each_filter_separately():
+    """fetch_chain_quote fills a caller-supplied dict; absent dict is fine."""
+    payload = _book(7.15, 7.90, 500, 17, high=6.00, last=6.00, volume=99)
+    tally = {}
+    q = cq.fetch_chain_quote(_client(payload), "GOOGL", "PUT",
+                             target_strike=334.59, target_dte=30, reasons=tally)
+    assert q is None
+    assert sum(tally.values()) == 1, tally
+    assert "limit_over_session" in tally, tally
+    # and the call must still work with no dict at all (every other call site)
+    assert cq.fetch_chain_quote(_client(payload), "GOOGL", "PUT",
+                                target_strike=334.59, target_dte=30) is None
+
+
+def test_model_fallback_bypasses_the_quality_gates():
+    """A second-order effect of the 2026-10-08 filters, pinned so it is visible.
+
+    When every strike is filtered out, fetch_chain_quote returns None and
+    requote_signal keeps the signal with the Black-Scholes premium and
+    quote_source="model". real_overseer._place_order then has no `order_limit`
+    and prices off round_up_to_tick(premium) -- so a signal whose entire chain we
+    judged unquotable can still reach the broker at a MODELLED price.
+
+    That fallback predates these filters, but the filters make it reachable more
+    often, which is precisely the kind of new state worth stating out loud. Not
+    changed here: the observation period is open and this needs its own decision.
+    """
+    payload = _book(7.15, 7.90, 500, 17, high=6.00, last=6.00, volume=99)
+    out = cq.requote_signal(_client(payload), {
+        "symbol": "GOOGL", "signal": "SELL_PUT", "close": 352.20,
+        "strike": 334.59, "premium": 7.1, "dte": 30, "reason": "test"})
+    assert out is not None and out["quote_source"] == "model"
+    assert out["premium"] == 7.1, "still the model premium, no real quote behind it"
+    assert "order_limit" not in out, (
+        "no chain limit — _place_order falls back to the modelled premium")
