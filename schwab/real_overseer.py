@@ -460,6 +460,21 @@ broken market plumbing). These are small budget positions, not collateral.
 - model_auc: chronological holdout AUC of the LGBM model behind the field
   above (0.5 = coin flip). Discount the advisory when AUC is below ~0.6;
   trust it more above ~0.7.
+- earnings_date / earnings_source / earnings_days_away /
+  earnings_before_expiry / earnings_move_pct: the next scheduled report.
+  source "confirmed" = scraped date, "projected" = the symbol's own
+  quarterly cadence when the feed is stale. earnings_move_pct is the median
+  absolute one-session reaction over that symbol's history.
+  A SELL_PUT whose window contains a print is ALREADY REFUSED in code and
+  never reaches you (measured: mean -$33.46/cycle vs +$23.65 on a clean
+  window, 5th percentile 16x worse). So on a SELL_PUT you are seeing either
+  a print after expiry or "unknown". Two things to do with these fields:
+  treat earnings_date "unknown" as real uncertainty and demand more from the
+  rest of the setup; and on a SELL_CALL — which is NOT gated, because being
+  called away caps a gain rather than opening a loss — weigh a print inside
+  the window against how far the cost basis sits below the strike.
+  Do NOT reject a SELL_PUT merely for having an earnings_date: if it reached
+  you, the print falls after expiry.
 - timesfm_30d_pct: TimesFM (zero-shot foundation model) forecast of the
   SMA5 change over the next 30 trading days, in %. Independent second
   opinion next to Kronos: both bearish on a SELL_PUT → stronger SKIP;
