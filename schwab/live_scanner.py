@@ -37,7 +37,6 @@ from trend_scanner import compute_indicators
 from options_pricer import historical_vol
 import options_ledger as ol
 import assignment_risk
-import earnings_calendar
 import timesfm_advisor
 import wheel_router
 import allocator
@@ -566,18 +565,6 @@ def _scan_all(client, regime: str = Overseer.RECLAMATION,
         if s["signal"] != "NONE":
             s = requote_signal(client, s)
             if s is not None:
-                # Earnings gate. Measured over 4,360 backtested put cycles:
-                # holding a print is mean -$33.46/cycle against +$23.65 when
-                # the window is clean, with a 5th percentile 16x worse. The
-                # fields are attached either way so the LLM sees the date
-                # even when the gate lets the trade through.
-                earnings_calendar.annotate(s)
-                earn_block = earnings_calendar.block_reason(s)
-                if earn_block:
-                    print(f"  [Earnings] \u2298 {symbol} SELL_PUT "
-                          f"${s.get('strike')} dropped \u2014 {earn_block}")
-                    s = None
-            if s is not None:
                 if tfm_pct is not None:
                     s["timesfm_30d_pct"] = tfm_pct
                 # LGBM advisory: P(>5% drop within 30 trading days).
@@ -599,9 +586,6 @@ def _scan_all(client, regime: str = Overseer.RECLAMATION,
             if c["signal"] != "NONE":
                 c = requote_signal(client, c)
                 if c is not None:
-                    # Context only: a call across a print risks being called
-                    # away, which caps a gain rather than opening a loss.
-                    earnings_calendar.annotate(c)
                     if tfm_pct is not None:
                         c["timesfm_30d_pct"] = tfm_pct
                     # LGBM advisory: P(>8% rally within 30 trading days) —
@@ -1478,16 +1462,6 @@ def main():
     _cash_ledger = cl.CashLedger(CASH_LEDGER_PATH, starting_capital=starting)
 
     price_fetcher = _make_price_fetcher(client)
-
-    # Forward earnings calendar: a confirmed date beats a projection, and the
-    # gate stops trusting a cache older than CACHE_MAX_AGE_DAYS. No-op on most
-    # startups; never fatal, since a stale cache still projects from cadence.
-    try:
-        _cal = earnings_calendar.refresh_if_stale(WATCHLIST)
-        print(f"  [Earnings] calendar: {_cal['fresh']} fresh, "
-              f"{_cal['refreshed']} refreshed, {_cal['failed']} failed")
-    except Exception as exc:
-        print(f"  [Earnings] calendar refresh skipped ({exc})")
 
     # Train LGBM move-risk models from local history (seconds/symbol):
     # drop risk for SELL_PUT/BUY, rally (called-away) risk for SELL_CALL
