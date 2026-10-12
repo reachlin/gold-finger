@@ -22,8 +22,23 @@
   <dict>
     <key>PYTHONUNBUFFERED</key>
     <string>1</string>
+    <!-- Was the OLD gold-finger env while ProgramArguments runs
+         gold-finger-py312: any subprocess resolving bare `python` from PATH
+         got the wrong interpreter. Fixed 2026-10-12. -->
     <key>PATH</key>
-    <string>/Users/lincai/anaconda3/envs/gold-finger/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin</string>
+    <string>/Users/lincai/anaconda3/envs/gold-finger-py312/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin</string>
+    <!-- The env loads THREE OpenMP runtimes in one process: torch's
+         libomp.dylib, sklearn's libomp.dylib, and LightGBM's own. The
+         overseer imports all three (TimesFM/Kronos, CalibratedClassifierCV in
+         assignment_risk, LGBMClassifier), and on 2026-10-12 it died with
+         SIGSEGV in libomp __kmp_suspend_initialize_thread during the
+         LightGBM training that runs at every startup — launchd relaunched it
+         twice in one morning with no Python traceback.
+         Single-threaded OpenMP creates no worker pool, so there is no fork
+         barrier and no suspend path to crash in. Costs some LightGBM/torch
+         speed; training 14 symbols takes seconds either way. -->
+    <key>OMP_NUM_THREADS</key>
+    <string>1</string>
   </dict>
 
   <!-- start on login/boot -->
