@@ -841,6 +841,31 @@ def _space_order_calls() -> None:
     _LAST_ORDER_CALL = time.monotonic()
 
 
+# Headers worth recording on a 429. Schwab publishes no quota, so the only way
+# to learn one is to keep whatever it returns when we trip it. Deliberately a
+# allowlist: the response also carries cookies, which must never reach the log.
+_RATE_LIMIT_HEADERS = ("Retry-After", "X-RateLimit-Limit",
+                       "X-RateLimit-Remaining", "X-RateLimit-Reset")
+
+
+def _rate_limit_detail(exc) -> str:
+    """What Schwab actually said on a 429, for the log. Never raises."""
+    try:
+        resp = getattr(exc, "response", None)
+        hdrs = getattr(resp, "headers", None) or {}
+        found = []
+        for name in _RATE_LIMIT_HEADERS:
+            val = hdrs.get(name) or hdrs.get(name.lower())
+            if val is not None:
+                found.append(f"{name}={val}")
+        body = (getattr(resp, "text", "") or "").strip().replace("\n", " ")
+        if body:
+            found.append(f"body={body[:200]}")
+        return "  ".join(found) if found else "no rate-limit headers or body"
+    except Exception:
+        return "no rate-limit headers or body"
+
+
 def _retry_after(exc) -> float | None:
     """Seconds Schwab asked us to wait, if it said so."""
     hdrs = getattr(getattr(exc, "response", None), "headers", None) or {}
@@ -872,7 +897,8 @@ def _order_call_with_retry(call, label: str, order):
                 wait = _retry_after(exc) or delay
                 print(f"  [Overseer] ⏳ 429 rate-limited {label} — retry "
                       f"{i + 1}/{len(ORDER_RETRY_DELAYS)} in {wait:.1f}s"
-                      f"{' (Retry-After)' if _retry_after(exc) else ''}")
+                      f"{' (Retry-After)' if _retry_after(exc) else ''}"
+                      f"  [{_rate_limit_detail(exc)}]")
                 time.sleep(wait)
                 continue
             raise
