@@ -804,6 +804,27 @@ _LAST_ORDER_CALL = 0.0
 ORDER_RETRY_DELAYS = (1.5, 3.0, 6.0, 12.0, 24.0, 30.0)
 
 
+# Contracts we have already flagged as unknown this process. Reconcile runs
+# every scan (~78 a trading day), and the alert @-mentions the user, so a
+# single deliberate manual trade would page them all day. Memory only, never
+# persisted: a restart should say it again, and a file here would quietly
+# hide a position that reappeared after a crash.
+_UNKNOWN_POSITIONS_SEEN: set[str] = set()
+
+
+def _reset_unknown_position_alerts() -> None:
+    _UNKNOWN_POSITIONS_SEEN.clear()
+
+
+def _should_alert_unknown_position(occ: str) -> bool:
+    """True the first time this contract is seen unknown, False after."""
+    key = (occ or "").replace(" ", "")
+    if key in _UNKNOWN_POSITIONS_SEEN:
+        return False
+    _UNKNOWN_POSITIONS_SEEN.add(key)
+    return True
+
+
 def _reset_order_throttle() -> None:
     """Forget the last order-write time (tests; also safe after a long idle)."""
     global _LAST_ORDER_CALL
@@ -1758,12 +1779,13 @@ class RealOverseer:
         pending = {e.get("occ_sym", "").replace(" ", "") for e in _load_pending()}
         for occ in option_positions:
             if occ not in known and occ not in pending:
-                print(f"  [Reconcile] ⚠ Schwab has option {occ} not in local "
-                      f"ledger — manual trade?")
-                scanner._send_slack(
-                    f"{SLACK_MENTION} ⚠ *Unknown Schwab position:* `{occ}`\n"
-                    f"Not in local ledger — was this placed manually?"
-                )
+                if _should_alert_unknown_position(occ):
+                    print(f"  [Reconcile] ⚠ Schwab has option {occ} not in "
+                          f"local ledger — manual trade?")
+                    scanner._send_slack(
+                        f"{SLACK_MENTION} ⚠ *Unknown Schwab position:* `{occ}`\n"
+                        f"Not in local ledger — was this placed manually?"
+                    )
         return occ_map
 
     # -- 2. Pending orders: confirm fills, drop dead orders ------------ #
