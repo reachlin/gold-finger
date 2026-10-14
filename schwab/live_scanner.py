@@ -954,23 +954,30 @@ def _pending_collateral() -> float:
     total = 0.0
     for o in orders:
         sig = o.get("signal", "")
+        n   = ol.contracts_of(o)
         if sig == "SELL_PUT":
-            total += float(o.get("strike", 0)) * 100
+            total += float(o.get("strike", 0)) * 100 * n
         elif sig == "BUY_CALL":
-            total += float(o.get("limit", o.get("premium", 0))) * 100
+            total += float(o.get("limit", o.get("premium", 0))) * 100 * n
     return total
 
 
 def _collateral_required(s: dict) -> float:
     """Return cash required for a signal.
-    SELL_PUT: strike × 100 (collateral locked).
-    BUY_CALL: cost_per_ct (debit paid upfront).
+    SELL_PUT: strike × 100 × contracts (collateral locked).
+    BUY_CALL: cost_per_ct × contracts (debit paid upfront).
     Other: 0.
+
+    Quantity comes from ol.contracts_of, which reads an absent or unparseable
+    `contracts` as 1 — so a signal that does not size itself costs exactly what
+    it costs today. This function feeds _budget_check, so under-counting here
+    would approve a put the account cannot cash-secure.
     """
+    n = ol.contracts_of(s)
     if s.get("signal") == "SELL_PUT":
-        return float(s.get("strike", 0)) * 100
+        return float(s.get("strike", 0)) * 100 * n
     if s.get("signal") == "BUY_CALL":
-        return float(s.get("cost_per_ct", 0))
+        return float(s.get("cost_per_ct", 0)) * n
     return 0.0
 
 

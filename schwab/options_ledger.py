@@ -40,6 +40,7 @@ FIELDNAMES = [
     "date", "symbol", "signal", "close", "strike",
     "premium_sh", "premium_ct", "premium_pct", "dte", "hv", "adx",
     "confidence", "regime", "verdict", "reason", "pnl", "ref",
+    "contracts",
 ]
 
 _OPEN_VERDICT = "APPROVED"
@@ -54,6 +55,23 @@ def _now_et() -> datetime:
 def row_key(row: dict) -> str:
     """Stable identifier of an opening row: symbol + open timestamp."""
     return f"{row['symbol']}_{row['date']}"
+
+
+def contracts_of(row: dict) -> int:
+    """
+    Contract count for a ledger row or a scanner signal, defaulting to 1.
+
+    Every row written before this column existed, and every signal that does
+    not size itself, must read as one contract — that is what the account
+    actually holds. Anything unparseable also reads as 1 rather than 0:
+    collateral is a spending gate, so the only safe failure is to over-report
+    what is committed, never to free cash the book has already locked.
+    """
+    try:
+        n = int(float(row.get("contracts") or 1))
+    except (TypeError, ValueError):
+        return 1
+    return n if n >= 1 else 1
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +163,7 @@ def committed_collateral(rows: list[dict]) -> float:
         if r.get("signal") != "SELL_PUT" or s["status"] == "closed":
             continue
         try:
-            total += float(r["strike"]) * SHARES_PER_CONTRACT
+            total += float(r["strike"]) * SHARES_PER_CONTRACT * contracts_of(r)
         except (ValueError, KeyError):
             pass
     return total

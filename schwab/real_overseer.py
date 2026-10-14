@@ -44,6 +44,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from chain_quotes import round_up_to_tick
+import options_ledger
 
 _ET = ZoneInfo("America/New_York")
 
@@ -523,7 +524,8 @@ def peer_summaries(all_signals: list[dict], current: dict) -> list[dict]:
             if s.get(k) is not None:
                 p[k] = s[k]
         if s.get("signal") == "SELL_PUT" and s.get("strike"):
-            p["collateral"] = float(s["strike"]) * 100
+            p["collateral"] = (float(s["strike"]) * 100
+                               * options_ledger.contracts_of(s))
         peers.append(p)
     return peers
 
@@ -1241,7 +1243,12 @@ class RealOverseer:
         avail = available_funds(sec.get("currentBalances", {}))
         if avail is None:
             return False, "Schwab balances missing availableFunds — abort"
-        collateral_needed = float(s.get("strike", 0)) * 100
+        # × contracts: this is the last gate before the order goes out, and it
+        # computes its own figure rather than reusing
+        # live_scanner._collateral_required. A quantity-blind number here would
+        # clear a multi-contract order on the cash for one.
+        collateral_needed = (float(s.get("strike", 0)) * 100
+                             * options_ledger.contracts_of(s))
         if avail < collateral_needed:
             return False, (f"Schwab available ${avail:,.0f} < "
                            f"collateral needed ${collateral_needed:,.0f} — abort")
@@ -1423,7 +1430,8 @@ class RealOverseer:
                 .build()
             )
 
-            collat = int(float(s.get("strike", 0)) * 100)
+            collat = int(float(s.get("strike", 0)) * 100
+                         * options_ledger.contracts_of(s))
             scanner._send_slack(
                 f"*🤖 AUTO ORDER SUBMITTING*\n"
                 f"  {occ_sym}  limit {price_src}  collat ~${collat:,}\n"
@@ -1499,7 +1507,8 @@ class RealOverseer:
             f"*{entry['symbol']} {entry['signal']}* ${entry['strike']} "
             f"exp {entry['expiry']}\n"
             f"*Fill:* ${fill:.2f}/sh  (${premium_ct:.0f}/contract)\n"
-            f"*Collateral committed:* ${entry['strike'] * 100:,.0f}"
+            f"*Collateral committed:* "
+            f"${entry['strike'] * 100 * options_ledger.contracts_of(entry):,.0f}"
         )
 
         # Rest a GTC buy-to-close at the profit target immediately, so decay is

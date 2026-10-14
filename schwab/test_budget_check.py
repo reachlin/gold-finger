@@ -8,6 +8,7 @@ so the message and the gate agree.
 import os, sys
 sys.path.insert(0, os.path.dirname(__file__))
 import live_scanner as ls
+import options_ledger as ol
 
 import pytest
 
@@ -25,12 +26,32 @@ def _no_ambient_unsettled_flag(monkeypatch):
     monkeypatch.delenv("ALLOW_UNSETTLED_CASH", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _restore_module_globals():
+    """Undo _setup's direct assignments after every test.
+
+    _setup below rebinds module globals rather than monkeypatching them, so
+    without this the stubs outlive this module and every later test in the
+    session sees them. That silently masked a real change: the old
+    _collateral_required stub ignored contract counts, so once the production
+    function became quantity-aware, tests asserting multi-contract collateral
+    kept seeing the single-contract stub and failed only in a full-suite run.
+    """
+    names = ("_committed_collateral", "_pending_collateral",
+             "_collateral_required", "_schwab_pending_deposits")
+    saved = {n: getattr(ls, n) for n in names}
+    yield
+    for n, v in saved.items():
+        setattr(ls, n, v)
 
 
 def _setup(committed=0.0, order_pending=0.0, ach=None):
     ls._committed_collateral = lambda: committed
     ls._pending_collateral   = lambda: order_pending
-    ls._collateral_required  = lambda s: s["strike"] * 100
+    # Mirrors production: collateral scales with the contract count. These
+    # tests all use one contract, so the factor is 1 — it is here so the stub
+    # cannot hide a quantity bug the real function would catch.
+    ls._collateral_required  = lambda s: s["strike"] * 100 * ol.contracts_of(s)
     ls._schwab_pending_deposits = ach
 
 
