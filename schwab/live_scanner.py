@@ -1082,6 +1082,45 @@ def size_put(s: dict, cash: float, exposure: float, available: float) -> int:
     return min(n, int(available // per_contract))
 
 
+def symbol_cap_block(s: dict, cash: float) -> str | None:
+    """
+    Reason this SELL_PUT is refused by the per-symbol cap, or None.
+
+    Cheap pre-filter, mirroring earnings_calendar.block_reason. size_put in the
+    order path is still the authoritative check — the scanner's `cash` is a
+    cached sync from the overseer's scan hook, so the cap is re-applied against
+    live balances before the order goes out.
+
+    This exists because arming the cap retired the one-position-per-underlying
+    check in _pre_trade_check, which used to return from the positions loop
+    BEFORE fetch_orders. Without a gate here, every scan holding an at-cap
+    symbol spends an LLM call, a fetch_account and a fetch_orders — and
+    fetch_orders reads /accounts/{h}/orders, the endpoint order writes share
+    and whose rate limit killed a live GTC cover on 2026-10-13.
+
+    Never raises: a throwing gate would stop the scan, and the worst case
+    without it is a wasted call, not a bad trade.
+    """
+    try:
+        if s.get("signal") != "SELL_PUT":
+            return None
+        if not MULTI_CONTRACT_SIZING:
+            return None             # _pre_trade_check's blanket gate is in force
+        exposure = _symbol_exposure(s.get("symbol", ""))
+        if exposure <= 0:
+            return None             # unheld: the floor allows a first contract
+        cap = MAX_SYMBOL_FRACTION * float(cash or 0)
+        per_contract = float(s.get("strike") or 0) * 100
+        if per_contract <= 0 or cap - exposure >= per_contract:
+            return None
+        return (f"{s.get('symbol')} already holds ${exposure:,.0f} of the "
+                f"${cap:,.0f} per-symbol cap "
+                f"({int(MAX_SYMBOL_FRACTION * 100)}% of ${float(cash or 0):,.0f}) "
+                f"— no room for another ${per_contract:,.0f} contract")
+    except Exception:
+        return None
+
+
 def _budget_check(s: dict, portfolio_cash: float) -> tuple[bool, str]:
     """
     Returns (ok, message).
@@ -1818,6 +1857,20 @@ def main():
 
                 if budget_msg:
                     print(f"  ✓ {budget_msg}")
+
+                # Per-symbol cap — before the LLM and the account fetches, so a
+                # symbol sitting at its cap costs nothing per scan. See
+                # symbol_cap_block for why the cheap path matters here.
+                cap_block = symbol_cap_block(s, cash)
+                if cap_block:
+                    print(f"\n  \u2298 [Sizing] {cap_block}")
+                    print(f"\n{VERDICT_SKIP}")
+                    print(f"SKIPPED: {s['symbol']} {s['signal']} — per-symbol cap")
+                    print(VERDICT_SKIP)
+                    scan_events.append(
+                        f"\u2298 {s['symbol']} {s['signal']} "
+                        f"${s.get('strike')} per-symbol cap")
+                    continue
 
                 # Close signals (SELL equity, BUY_TO_CLOSE options) need no approval
                 _close_signals = {"SELL", "BUY_TO_CLOSE"}
