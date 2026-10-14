@@ -56,6 +56,18 @@ MARKET_CLOSE_ET   = 16
 BUDGET_PCT_MIN    = 0.10    # 10% of capital at lowest confidence
 BUDGET_PCT_MAX    = 0.20    # 20% of capital at highest confidence
 
+# Largest share of total cash any ONE underlying may hold in short puts.
+# Change this number to retune concentration; no logic depends on its value.
+#
+# Measured over the trailing year (earnings gate applied, 7-day mean hold):
+# 20% holds ~6.2 names with the largest at 32% of the book and a p99 drawdown
+# of ~$21k on a $336k account; a 1/3 cap holds ~3.4 names at 44% for ~4% more
+# income and ~88% more p99 loss. Deliberately NOT scaled by signal confidence:
+# across all 26 Stage 1 round trips, confidence vs P&L was Spearman r=+0.030
+# (p=0.88) and r=-0.128 against P&L/collateral, and replaying Stage 1 with
+# confidence weights earned +0.4%.
+MAX_SYMBOL_FRACTION = 0.20
+
 
 def _equity_budget(confidence, capital: float) -> float:
     """Return dollar budget for an equity BUY: 10–20% of capital scaled by confidence."""
@@ -934,7 +946,7 @@ def _committed_collateral() -> float:
 _PENDING_ORDERS_PATH = os.path.join(DATA_DIR, "pending_orders.json")
 
 
-def _pending_collateral() -> float:
+def _pending_collateral(symbol: str | None = None) -> float:
     """
     Cash locked by options orders notified via Slack but not yet confirmed
     filled (pending_orders.json).  Must be counted to prevent overdraft when
@@ -942,7 +954,10 @@ def _pending_collateral() -> float:
     SELL_PUT  → strike × 100 per contract (cash-secured)
     BUY_CALL  → limit × 100 per contract  (debit)
     SELL_CALL → 0 (covered by shares the user already holds)
+
+    With `symbol`, narrows to one underlying, for the per-symbol cap.
     """
+    want = symbol.strip().upper() if symbol else None
     if not os.path.exists(_PENDING_ORDERS_PATH):
         return 0.0
     try:
@@ -955,6 +970,8 @@ def _pending_collateral() -> float:
     for o in orders:
         sig = o.get("signal", "")
         n   = ol.contracts_of(o)
+        if want is not None and str(o.get("symbol", "")).strip().upper() != want:
+            continue
         if sig == "SELL_PUT":
             total += float(o.get("strike", 0)) * 100 * n
         elif sig == "BUY_CALL":
@@ -979,6 +996,74 @@ def _collateral_required(s: dict) -> float:
     if s.get("signal") == "BUY_CALL":
         return float(s.get("cost_per_ct", 0)) * n
     return 0.0
+
+
+def _symbol_exposure(symbol: str) -> float:
+    """
+    Collateral already committed to one underlying: open and assigned puts in
+    the ledger, plus orders placed but not yet confirmed filled.
+
+    The pending half is not optional. Reconcile runs once per scan and a fill
+    can take several; without it one scan would size to the cap and the next
+    would size to the cap again before the first order filled — the same
+    double-order hole _pre_trade_check closes for the single-contract case.
+    """
+    want = (symbol or "").strip().upper()
+    if not want:
+        return 0.0
+    rows = ol.read_rows(OPTION_LEDGER_PATH)
+    return ol.committed_collateral(rows, symbol=want) + _pending_collateral(want)
+
+
+def size_put(s: dict, cash: float, exposure: float, available: float) -> int:
+    """
+    Contracts to sell for a SELL_PUT, or 0 to skip. Non-put signals return 1.
+
+      symbol not held : at least 1 contract, up to MAX_SYMBOL_FRACTION of cash
+      symbol held     : only what keeps combined exposure under that cap
+
+    The asymmetry is deliberate. A floor on an unheld name forces breadth —
+    without it, 20% of today's $45,838 is $9,167, under a single $21,500
+    contract, and the cap would block 12 of 14 watchlist symbols and stop the
+    book trading. A top-up has no floor: it must earn its room, which is what
+    replaces the blanket "one open position per underlying" rule.
+
+    `cash` is TOTAL cash, not free cash and not account equity:
+      - a cap on what is *left* compounds, since 20% of the remainder, taken
+        repeatedly, converges on one name holding the whole book;
+      - equity includes positions that cannot secure a put (Vault 76 holds a
+        $51k INTC LEAP), so it would authorise collateral the account cannot
+        post.
+
+    `available` is free cash and always clamps the result — the floor relaxes
+    the concentration cap, never the no-margin rule.
+    """
+    if s.get("signal") != "SELL_PUT":
+        return 1
+
+    try:
+        per_contract = float(s.get("strike") or 0) * 100
+    except (TypeError, ValueError):
+        return 0
+    if per_contract <= 0:
+        return 0
+
+    try:
+        cash      = float(cash or 0)
+        exposure  = float(exposure or 0)
+        available = float(available or 0)
+    except (TypeError, ValueError):
+        return 0
+    if cash <= 0 or available < per_contract:
+        return 0
+
+    room = MAX_SYMBOL_FRACTION * cash - exposure
+    n    = int(room // per_contract)
+    if n < 1 and exposure <= 0:
+        n = 1                        # floor, but only for a name we do not hold
+    if n < 1:
+        return 0
+    return min(n, int(available // per_contract))
 
 
 def _budget_check(s: dict, portfolio_cash: float) -> tuple[bool, str]:

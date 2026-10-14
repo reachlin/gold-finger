@@ -151,22 +151,34 @@ def open_options(rows: list[dict], symbol: str | None = None) -> list[dict]:
     return out
 
 
-def committed_collateral(rows: list[dict]) -> float:
+def committed_collateral(rows: list[dict], symbol: str | None = None) -> float:
     """
     Cash locked by short puts: open puts (may be assigned any time) plus
     assigned puts (cash became shares, released only when shares leave).
     Covered calls need shares, not cash.
+
+    With `symbol`, narrows to one underlying — the per-symbol exposure the
+    concentration cap is measured against. Same status rule either way, so the
+    cap can never disagree with the total about what is committed.
     """
+    want = symbol.strip().upper() if symbol else None
     total = 0.0
     for s in _states(rows).values():
         r = s["row"]
         if r.get("signal") != "SELL_PUT" or s["status"] == "closed":
+            continue
+        if want is not None and str(r.get("symbol", "")).strip().upper() != want:
             continue
         try:
             total += float(r["strike"]) * SHARES_PER_CONTRACT * contracts_of(r)
         except (ValueError, KeyError):
             pass
     return total
+
+
+def symbol_collateral(rows: list[dict], symbol: str) -> float:
+    """Cash locked by short puts on one underlying."""
+    return committed_collateral(rows, symbol=symbol)
 
 
 # ---------------------------------------------------------------------------
