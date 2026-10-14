@@ -237,34 +237,19 @@ def test_exposure_is_zero_for_an_untouched_symbol(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Nothing is wired up yet
+# Wiring
 # ---------------------------------------------------------------------------
-
-def test_order_quantity_is_still_hardcoded_to_one():
-    """
-    This commit adds the sizing function and nothing else. Both order paths
-    must still send 1, so landing it cannot change live behaviour -- including
-    on a launchd KeepAlive restart after a crash.
-    """
-    here = os.path.dirname(os.path.abspath(__file__))
-    for name, fn in (("place_order.py", "option_sell_to_open_limit"),
-                     ("real_overseer.py", "option_sell_to_open_limit"),
-                     ("real_overseer.py", "option_buy_to_close_limit")):
-        src = open(os.path.join(here, name)).read()
-        assert f"{fn}(occ_sym, 1," in src or f"{fn}(occ_spaced, 1," in src, \
-            f"{name}:{fn} no longer sends a literal 1 -- is this still commit 2?"
+# The guards that pinned "nothing calls size_put yet" lived here through the
+# commit that added it. The wiring commit replaced them with the invariant that
+# actually matters going forward -- with MULTI_CONTRACT_SIZING off the
+# effective quantity is 1 whatever the capital -- which is asserted in
+# test_multi_contract_orders.py alongside the cover-quantity tests it belongs
+# with.
 
 
-def test_sizing_is_not_called_from_production_code_yet():
-    """
-    size_put must be dead code until commit 3 wires it in. In live_scanner it
-    may appear only as its own definition; in the overseer and order path, not
-    at all.
-    """
-    here = os.path.dirname(os.path.abspath(__file__))
-    scanner = open(os.path.join(here, "live_scanner.py")).read()
-    assert scanner.count("size_put") == 1, \
-        "size_put is referenced as well as defined — is this still commit 2?"
-    assert "def size_put" in scanner
-    for name in ("real_overseer.py", "place_order.py"):
-        assert "size_put" not in open(os.path.join(here, name)).read(), name
+def test_sizing_is_reachable_from_the_order_path():
+    """The counterpart: size_put is no longer dead code."""
+    import real_overseer as ro
+    assert hasattr(ro, "_sized_contracts")
+    assert ls.MULTI_CONTRACT_SIZING is False, \
+        "sizing must still ship disarmed"

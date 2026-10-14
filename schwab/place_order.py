@@ -76,6 +76,19 @@ def _schwab_client():
     return _schwab_lib.auth.client_from_token_file(token_path, client_id, client_secret)
 
 
+def _entry_contracts(entry: dict) -> int:
+    """
+    Contracts for a pending order, as the overseer sized and recorded it.
+
+    Deliberately not re-sized here. This CLI places an order that was already
+    decided when the entry was written; sizing it again against today's cash
+    would send a different quantity than the one that passed the budget and
+    per-symbol checks.
+    """
+    import options_ledger
+    return options_ledger.contracts_of(entry or {})
+
+
 def _get_account_hash(client) -> str | None:
     resp = client.get_account_numbers()
     resp.raise_for_status()
@@ -237,7 +250,8 @@ def cmd_place(trade_id: str, price_override: float | None, skip_confirm: bool = 
 
         if sig in ("SELL_PUT", "SELL_CALL"):
             order = (
-                option_sell_to_open_limit(occ_sym, 1, f"{limit:.2f}")
+                option_sell_to_open_limit(occ_sym, _entry_contracts(entry),
+                                          f"{limit:.2f}")
                 .set_duration(Duration.DAY)
                 .set_session(Session.NORMAL)
                 .build()

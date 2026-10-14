@@ -65,7 +65,7 @@ def _check(client, orders, signal, monkeypatch, avail=100000.0):
         "positions": [],
     })
     monkeypatch.setattr(ro, "fetch_orders",
-                        lambda c, h, days_back=90: orders)
+                        lambda c, h, days_back=90, strict=False: orders)
     monkeypatch.setattr(ro, "_load_pending", lambda: [])
     ov = ro.RealOverseer.__new__(ro.RealOverseer)
     return ro.RealOverseer._pre_trade_check(ov, client, "hash", signal)

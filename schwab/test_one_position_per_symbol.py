@@ -170,7 +170,7 @@ def check_with_orders(positions, orders, signal, monkeypatch, avail=100000.0,
         "positions": positions,
     })
 
-    def _fetch(client, account_hash, days_back=90):
+    def _fetch(client, account_hash, days_back=90, strict=False):
         if raise_on_fetch:
             raise RuntimeError("Schwab orders endpoint down")
         return orders

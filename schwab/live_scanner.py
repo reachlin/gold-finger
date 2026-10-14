@@ -68,6 +68,18 @@ BUDGET_PCT_MAX    = 0.20    # 20% of capital at highest confidence
 # confidence weights earned +0.4%.
 MAX_SYMBOL_FRACTION = 0.20
 
+# Arms multi-contract sizing. OFF means every order is one contract and the
+# blanket "one open position per underlying" gate stays in force — i.e. exactly
+# the behaviour measured through Stage 1.
+#
+# It ships off on purpose. The overseer runs under launchd with KeepAlive, so a
+# crash restarts it from this source with nobody deciding; landing this armed
+# would change live position sizing on a segfault. It is also inert below about
+# $100k of cash — 20% of $45,838 is $9,167, under a single $21,500 contract —
+# so there is nothing to gain by arming it early and a full book of live
+# evidence to gain by not.
+MULTI_CONTRACT_SIZING = False
+
 
 def _equity_budget(confidence, capital: float) -> float:
     """Return dollar budget for an equity BUY: 10–20% of capital scaled by confidence."""

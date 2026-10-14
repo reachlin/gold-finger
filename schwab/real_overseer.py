@@ -345,6 +345,95 @@ def _clear_cover_reject(key: str) -> None:
         _save_cover_rejects(d)
 
 
+def _sized_contracts(scanner, s: dict, cash: float, exposure: float,
+                     available: float) -> int:
+    """
+    Contracts for a new short put.
+
+    Returns 1 while MULTI_CONTRACT_SIZING is off, which is exactly today's
+    behaviour: the budget and pre-trade gates have already decided whether the
+    single contract is affordable. With sizing armed this returns size_put's
+    answer, and 0 means refuse — never fall back to one contract, because 0
+    here means the per-symbol cap is full.
+    """
+    if not getattr(scanner, "MULTI_CONTRACT_SIZING", False):
+        return 1
+    return scanner.size_put(s, cash, exposure, available)
+
+
+def _cover_contracts(opening) -> int:
+    """
+    Contracts a cover must buy back: whatever the opening position is short.
+
+    Never sized. Sizing decides how much to sell; the cover copies it. A cover
+    smaller than the short leaves the remainder naked, and the sufficiency
+    check below would then read the position as protected.
+    """
+    return options_ledger.contracts_of(opening or {})
+
+
+def _short_quantities(opens: list, occ_map: dict) -> dict:
+    """
+    Contracts short per OCC symbol, from the ledger's open rows.
+
+    Counts CONTRACTS, not rows. This used to add 1 per row while the cover
+    tally read the real leg quantity, so a 3-contract short with a 1-contract
+    cover compared 1 >= 1 and the overseer concluded the position was fully
+    covered — two naked short puts, indefinitely, looking protected.
+    """
+    out: dict[str, int] = {}
+    for op in opens:
+        occ = occ_map.get(options_ledger.row_key(op))
+        if not occ:
+            continue            # not confirmed open on Schwab this cycle
+        n = occ.replace(" ", "")
+        out[n] = out.get(n, 0) + options_ledger.contracts_of(op)
+    return out
+
+
+def _cover_quantities(orders: list) -> dict:
+    """Contracts of resting BUY_TO_CLOSE per OCC symbol, from working orders."""
+    out: dict[str, int] = {}
+    for o in orders or []:
+        if o.get("status") not in WORKING_STATUSES:
+            continue
+        for leg in o.get("orderLegCollection", []):
+            if leg.get("instruction") != "BUY_TO_CLOSE":
+                continue
+            n = (leg.get("instrument", {}).get("symbol", "") or "").replace(" ", "")
+            out[n] = out.get(n, 0) + int(leg.get("quantity", 1) or 1)
+    return out
+
+
+def _symbol_rule_text(scanner) -> str:
+    """
+    The per-symbol rule, as stated to the model. It has to track the flag: if
+    the prompt keeps asserting one short per underlying after the cap is armed,
+    the model vetoes the top-ups the allocator now permits and the two fight.
+    """
+    if getattr(scanner, "MULTI_CONTRACT_SIZING", False):
+        pct = int(getattr(scanner, "MAX_SYMBOL_FRACTION", 0.20) * 100)
+        return (
+f"""## Duplicate positions — allowed, under a per-symbol cap
+Several positions on one underlying are permitted. The limit is enforced in
+code: combined collateral on any one symbol stays under {pct}% of total cash,
+and sizing has already applied it before you see this signal.
+
+Judge this entry on its own merits, not on whether the symbol is already held.
+Do not skip a signal for being a duplicate — that is the allocator's job, and
+refusing here only leaves capital idle.""")
+    return (
+"""## Duplicate positions — ONE OPEN POSITION PER SYMBOL, no exceptions
+If ANY open position is listed on this symbol, SKIP this signal. It does not
+matter that the strike differs, the expiry differs, or that the existing
+position was opened weeks ago — one open short per underlying is the rule.
+Never stack a second contract on a ticker you are already short.
+
+This is enforced in code as well, so approving such a signal only wastes a
+scan: the pre-trade check rejects it before any order reaches Schwab. Prefer a
+signal on a symbol you hold nothing in.""")
+
+
 def _load_pending() -> list:
     if not os.path.exists(PENDING_ORDERS_PATH):
         return []
@@ -371,15 +460,7 @@ Approve or reject each SELL_PUT signal. Goal: capture steady premium income whil
 - Budget check already confirmed collateral is available — you do not need to recheck
 - Fast risk-off conditions are already filtered — trust the pre-screening
 
-## Duplicate positions — ONE OPEN POSITION PER SYMBOL, no exceptions
-If ANY open position is listed on this symbol, SKIP this signal. It does not
-matter that the strike differs, the expiry differs, or that the existing
-position was opened weeks ago — one open short per underlying is the rule.
-Never stack a second contract on a ticker you are already short.
-
-This is enforced in code as well, so approving such a signal only wastes a
-scan: the pre-trade check rejects it before any order reaches Schwab. Prefer a
-signal on a symbol you hold nothing in.
+@@SYMBOL_RULE@@
 
 ## Price and liquidity — is this quote real?
 `premium` is the MID and is only an ESTIMATE of the fill. `order_limit` is the
@@ -752,7 +833,8 @@ def available_funds(balances: dict) -> float | None:
     return avail - pending
 
 
-def fetch_orders(client, account_hash: str, days_back: int = 90) -> list:
+def fetch_orders(client, account_hash: str, days_back: int = 90,
+                 strict: bool = False) -> list:
     """All orders entered in the last `days_back` days (one call per scan).
 
     The window is keyed on when an order was ENTERED, not when it filled, and
@@ -783,6 +865,14 @@ def fetch_orders(client, account_hash: str, days_back: int = 90) -> list:
         return resp.json()
     except Exception as exc:
         print(f"  [Overseer] ⚠ Could not fetch Schwab orders: {exc}")
+        if strict:
+            # Callers that must not confuse "no orders" with "could not ask".
+            # _pre_trade_check reads this to decide whether an order is already
+            # resting on the symbol; an empty list on a failed fetch reads as
+            # "nothing resting" and reinstates the double-order hole its
+            # pending_orders.json fallback exists to close. 429s and SSL
+            # blackouts both reached this path during the week of 2026-10-13.
+            raise
         return []
 
 
@@ -1216,7 +1306,10 @@ class RealOverseer:
                               open_positions=open_positions,
                               peer_signals=peers,
                               vault8_range=vault8_range)
-        raw = self.llm.chat(system=OVERSEER_SYSTEM, user=prompt)
+        import live_scanner as _sc
+        system = OVERSEER_SYSTEM.replace("@@SYMBOL_RULE@@",
+                                         _symbol_rule_text(_sc))
+        raw = self.llm.chat(system=system, user=prompt)
         decision, reason = parse_llm_response(raw) if raw else ("no", "LLM returned empty response")
 
         verdict = "y" if decision == "yes" else "n"
@@ -1274,8 +1367,15 @@ class RealOverseer:
             # substring: "V" is inside "AVGO  261023P00200000", so a substring
             # test blocked Visa whenever a Broadcom position was open.
             if inst.get("symbol", "")[:6].strip().upper() == symbol:
-                return False, (f"Already short {inst.get('symbol')} — one open "
-                               f"position per underlying, skipping {symbol}")
+                # With the per-symbol cap armed, exposure decides, not
+                # presence: sizing already refuses anything over the cap, so a
+                # blanket block here would only leave capital idle. The cap is
+                # the replacement for this gate, not a layer on top of it.
+                import live_scanner as _sc
+                if not getattr(_sc, "MULTI_CONTRACT_SIZING", False):
+                    return False, (f"Already short {inst.get('symbol')} — one "
+                                   f"open position per underlying, skipping "
+                                   f"{symbol}")
 
         # A RESTING ORDER IS AN OPEN POSITION IN WAITING (added 2026-10-06).
         #
@@ -1301,7 +1401,8 @@ class RealOverseer:
             # 5 days, not the 90 used for reconciliation: an unfilled entry is a
             # DAY order placed today, and the window only needs to clear a
             # weekend. One extra call per candidate order, not per scan.
-            orders = fetch_orders(client, account_hash, days_back=5)
+            orders = fetch_orders(client, account_hash, days_back=5,
+                                  strict=True)
         except Exception as exc:
             orders = None
             print(f"  [Overseer] could not read working orders ({exc}) — "
@@ -1379,6 +1480,28 @@ class RealOverseer:
         if not ok:
             return
 
+        # Contract count. With sizing disarmed this is 1 and costs no API call,
+        # which matters: order reads and writes share /accounts/{h}/orders, so
+        # an extra fetch here competes with the covers for the rate limit.
+        qty = 1
+        if getattr(scanner, "MULTI_CONTRACT_SIZING", False):
+            _bal  = (fetch_account(client, account_hash) or {}).get(
+                "currentBalances", {}) or {}
+            _cash = float(_bal.get("cashBalance")
+                          or _bal.get("availableFunds") or 0)
+            _av   = float(_bal.get("availableFunds") or 0)
+            _expo = scanner._symbol_exposure(s["symbol"])
+            _cap  = scanner.MAX_SYMBOL_FRACTION * _cash
+            qty   = _sized_contracts(scanner, s, _cash, _expo, _av)
+            if qty < 1:
+                print(f"  [Sizing] \u2298 {s['symbol']} {s['signal']} — "
+                      f"per-symbol cap full: exposure ${_expo:,.0f} "
+                      f"of ${_cap:,.0f}")
+                return
+            print(f"  [Sizing] {s['symbol']} \u00d7 {qty} contract(s) — "
+                  f"exposure ${_expo:,.0f} of ${_cap:,.0f} cap, "
+                  f"free ${_av:,.0f}")
+
         try:
             from schwab.orders.options import option_sell_to_open_limit
             from schwab.orders.common import Duration, Session
@@ -1424,7 +1547,7 @@ class RealOverseer:
             # the sell side. Both BUY_TO_CLOSE call sites already do this.
             # Pinned by test_order_limit_price.py.
             order = (
-                option_sell_to_open_limit(occ_sym, 1, f"{limit:.2f}")
+                option_sell_to_open_limit(occ_sym, qty, f"{limit:.2f}")
                 .set_duration(Duration.DAY)
                 .set_session(Session.NORMAL)
                 .build()
@@ -1457,6 +1580,7 @@ class RealOverseer:
             "symbol":          s["symbol"],
             "signal":          s["signal"],
             "strike":          float(s["strike"]),
+            "contracts":       qty,
             "expiry":          exp_date.isoformat(),
             "dte":             int(s.get("dte", 30)),
             "limit":           limit,
@@ -1541,6 +1665,7 @@ class RealOverseer:
                     target_price=target_price, opening_signal=entry["signal"],
                     opening_ref=opening_key, trigger="open",
                     entry_iv=entry_iv_pct,
+                    contracts=_cover_contracts(entry),
                 )
             except Exception as exc:
                 print(f"  [Overseer] ⚠ could not rest GTC close for "
@@ -1552,7 +1677,8 @@ class RealOverseer:
                             mark: float | None = None,
                             opening_signal: str = "SELL_PUT",
                             opening_ref=None, trigger: str = "target",
-                            entry_iv: float | None = None):
+                            entry_iv: float | None = None,
+                            contracts: int = 1):
         """
         Place a GOOD_TILL_CANCEL BUY_TO_CLOSE limit at ``target_price`` and
         track it in the pending list.
@@ -1608,7 +1734,7 @@ class RealOverseer:
             from schwab.orders.options import option_buy_to_close_limit
             from schwab.orders.common import Duration, Session
             order = (
-                option_buy_to_close_limit(occ_sym, 1, f"{target_price:.2f}")
+                option_buy_to_close_limit(occ_sym, contracts, f"{target_price:.2f}")
                 .set_duration(Duration.GOOD_TILL_CANCEL)
                 .set_session(Session.NORMAL)
                 .build()
@@ -2028,19 +2154,8 @@ class RealOverseer:
         # Safety ceiling: number of short contracts vs resting BUY_TO_CLOSE qty
         # at Schwab, per contract. Never place a cover that would push the broker
         # cover qty past the short qty (guards against an untracked broker cover).
-        short_qty, schwab_cover_qty = {}, {}
-        for op in opens:
-            occ = occ_map.get(ol.row_key(op))
-            if occ:
-                n = occ.replace(" ", "")
-                short_qty[n] = short_qty.get(n, 0) + 1
-        for o in orders:
-            if o.get("status") not in WORKING_STATUSES:
-                continue
-            for leg in o.get("orderLegCollection", []):
-                if leg.get("instruction") == "BUY_TO_CLOSE":
-                    n = leg.get("instrument", {}).get("symbol", "").replace(" ", "")
-                    schwab_cover_qty[n] = schwab_cover_qty.get(n, 0) + int(leg.get("quantity", 1) or 1)
+        short_qty        = _short_quantities(opens, occ_map)
+        schwab_cover_qty = _cover_quantities(orders)
         today_et = _now_et().date()
 
         for opening in opens:
@@ -2104,10 +2219,12 @@ class RealOverseer:
                 target_price=target_price, mark=mark,
                 opening_signal=opening["signal"], opening_ref=key,
                 trigger="target",
+                contracts=_cover_contracts(opening),
             )
             if placed:                       # keep the loop's view consistent
                 covered_refs.add(key)
-                schwab_cover_qty[occ_norm] = schwab_cover_qty.get(occ_norm, 0) + 1
+                schwab_cover_qty[occ_norm] = (schwab_cover_qty.get(occ_norm, 0)
+                                              + _cover_contracts(opening))
 
     def _maybe_early_take_profit(self, scanner, client, account_hash: str,
                                  opening: dict, occ_spaced: str, opening_ref: str):
@@ -2171,8 +2288,9 @@ class RealOverseer:
         try:
             from schwab.orders.options import option_buy_to_close_limit
             from schwab.orders.common import Duration, Session
+            cover_qty = options_ledger.contracts_of(entry)
             new_order = (
-                option_buy_to_close_limit(occ_spaced, 1, f"{new_target:.2f}")
+                option_buy_to_close_limit(occ_spaced, cover_qty, f"{new_target:.2f}")
                 .set_duration(Duration.GOOD_TILL_CANCEL)
                 .set_session(Session.NORMAL)
                 .build()
