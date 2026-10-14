@@ -41,24 +41,27 @@ import real_overseer as ro  # noqa: E402
 # The flag ships OFF
 # ---------------------------------------------------------------------------
 
-def test_multi_contract_sizing_is_off_by_default():
+def test_multi_contract_sizing_is_armed():
     """
-    launchd runs the overseer with KeepAlive, so a crash restarts it from this
-    source with no decision from anyone. Landing this armed would change live
-    sizing on a crash.
+    Armed 2026-10-14. The off-by-default assertion this replaces guarded the
+    landing of the three build commits; the flag is now the live configuration,
+    so the thing worth pinning is that it is deliberate and visible rather than
+    drifting.
     """
-    assert ls.MULTI_CONTRACT_SIZING is False
+    assert ls.MULTI_CONTRACT_SIZING is True
 
 
-def test_with_the_flag_off_quantity_is_one_whatever_the_capital():
+def test_with_the_flag_off_quantity_is_one_whatever_the_capital(monkeypatch):
+    """Disarming must restore pre-2026-10-14 behaviour exactly, so the flag
+    stays a real rollback and not a one-way door."""
+    monkeypatch.setattr(ls, "MULTI_CONTRACT_SIZING", False)
     sig = {"signal": "SELL_PUT", "symbol": "NVDA", "strike": 215.0}
     for cash, avail in ((45_838, 24_338), (400_000, 400_000),
                         (5_000_000, 5_000_000)):
         assert ro._sized_contracts(ls, sig, cash, 0, avail) == 1, cash
 
 
-def test_with_the_flag_on_quantity_comes_from_size_put(monkeypatch):
-    monkeypatch.setattr(ls, "MULTI_CONTRACT_SIZING", True)
+def test_with_the_flag_on_quantity_comes_from_size_put():
     sig = {"signal": "SELL_PUT", "symbol": "NVDA", "strike": 215.0}
     assert ro._sized_contracts(ls, sig, 400_000, 0, 400_000) == 3
     assert ro._sized_contracts(ls, sig, 45_838, 0, 45_838) == 1
@@ -201,8 +204,10 @@ SIG = {"symbol": "NVDA", "strike": 215.0, "signal": "SELL_PUT"}
 def test_flag_off_keeps_the_one_position_per_underlying_gate(monkeypatch):
     """
     Added 2026-09-29 after the book went 99% AMZN, in code rather than the
-    prompt on purpose. With the flag off it must still be there.
+    prompt on purpose. Arming the cap retires it — but disarming must bring it
+    back, so the flag stays a rollback rather than a one-way door.
     """
+    monkeypatch.setattr(ls, "MULTI_CONTRACT_SIZING", False)
     ok, why = _check([_short_pos()], SIG, monkeypatch)
     assert ok is False
     assert "one open position per underlying" in why
@@ -258,9 +263,9 @@ def test_the_prompts_symbol_rule_follows_the_flag(monkeypatch):
     armed that is no longer true, and a stale instruction makes the model veto
     top-ups the code now permits — the prompt would be fighting the allocator.
     """
-    off = ro._symbol_rule_text(ls)
-    monkeypatch.setattr(ls, "MULTI_CONTRACT_SIZING", True)
     on = ro._symbol_rule_text(ls)
+    monkeypatch.setattr(ls, "MULTI_CONTRACT_SIZING", False)
+    off = ro._symbol_rule_text(ls)
     assert "one open short per underlying" in off
     assert "one open short per underlying" not in on
     assert "20%" in on or "per-symbol cap" in on

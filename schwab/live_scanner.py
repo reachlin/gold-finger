@@ -72,13 +72,17 @@ MAX_SYMBOL_FRACTION = 0.20
 # blanket "one open position per underlying" gate stays in force — i.e. exactly
 # the behaviour measured through Stage 1.
 #
-# It ships off on purpose. The overseer runs under launchd with KeepAlive, so a
-# crash restarts it from this source with nobody deciding; landing this armed
-# would change live position sizing on a segfault. It is also inert below about
-# $100k of cash — 20% of $45,838 is $9,167, under a single $21,500 contract —
-# so there is nothing to gain by arming it early and a full book of live
-# evidence to gain by not.
-MULTI_CONTRACT_SIZING = False
+# Armed 2026-10-14 at the user's instruction, after landing the collateral,
+# sizing and cover-quantity work in three separate commits.
+#
+# Arming is near-inert at present capital and that is the point of doing it
+# now: 20% of $45,838 is $9,167, under a single $21,500 contract, so the floor
+# governs every entry and the cap governs nothing until roughly $100k. The cap
+# starts binding around $250k, where it holds ~5 names with the largest at 34%
+# of the book. Note this also retires the blanket "one open position per
+# underlying" gate in _pre_trade_check: exposure decides now, not presence.
+# The resting-order half of that gate still applies unconditionally.
+MULTI_CONTRACT_SIZING = True
 
 
 def _equity_budget(confidence, capital: float) -> float:

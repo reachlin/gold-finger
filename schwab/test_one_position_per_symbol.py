@@ -18,9 +18,28 @@ blocked by an unrelated Broadcom position.
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(__file__))
 
+import live_scanner as ls
 import real_overseer as ro
+
+
+@pytest.fixture(autouse=True)
+def _gate_in_force(monkeypatch):
+    """
+    MULTI_CONTRACT_SIZING was armed 2026-10-14, which retires the blanket gate
+    this module pins in favour of a per-symbol cap of 20% of cash — exposure
+    decides now, not presence.
+
+    These tests are kept and pinned to the DISARMED path on purpose. The flag
+    has to stay a real rollback rather than a one-way door: if it is flipped
+    back, every behaviour below must return exactly as it was, including the
+    OCC-root matcher that stopped a Visa signal being blocked by a Broadcom
+    position. The armed path is covered in test_multi_contract_orders.py.
+    """
+    monkeypatch.setattr(ls, "MULTI_CONTRACT_SIZING", False)
 
 
 def option(symbol_occ, put_call="PUT", strike=245.0, short=1.0):

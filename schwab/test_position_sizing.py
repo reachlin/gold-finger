@@ -251,5 +251,5 @@ def test_sizing_is_reachable_from_the_order_path():
     """The counterpart: size_put is no longer dead code."""
     import real_overseer as ro
     assert hasattr(ro, "_sized_contracts")
-    assert ls.MULTI_CONTRACT_SIZING is False, \
-        "sizing must still ship disarmed"
+    assert ls.MULTI_CONTRACT_SIZING is True, \
+        "sizing is armed as of 2026-10-14"
