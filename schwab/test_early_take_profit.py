@@ -27,6 +27,9 @@ import os
 import sys
 import json
 import tempfile
+from datetime import datetime
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -110,6 +113,20 @@ def _state(tmp, limit=0.77, early_tp=None, order_id=OLD_ID):
 def _opening(premium_sh=2.00, date="2026-10-07 12:06:34"):
     return {"symbol": "XOM", "strike": 155.0, "premium_sh": premium_sh,
             "date": date, "signal": "SELL_PUT"}
+
+
+# The scenario is "30% captured in 1 day", and `_maybe_early_take_profit`
+# derives days_held from the wall clock against the hardcoded 2026-10-07 open.
+# Left to the real clock the trade silently aged past EARLY_TP_MAX_DAYS (10)
+# and every replace stopped being attempted -- these tests began failing on
+# 2026-10-18 for no reason but the date. The clock is frozen one day after the
+# open so the fixture keeps meaning what its docstring says.
+FROZEN_NOW = datetime(2026, 10, 8, 12, 0, 0)
+
+
+@pytest.fixture(autouse=True)
+def _freeze_clock(monkeypatch):
+    monkeypatch.setattr(ro, "_now_et", lambda: FROZEN_NOW)
 
 
 def _run(tmp, mark, replace_resp, **state):

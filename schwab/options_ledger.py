@@ -216,6 +216,9 @@ def _close_row(opening: dict, reason: str, pnl: float, verdict: str = "CLOSED",
         "signal":  opening["signal"],
         "strike":  opening["strike"],
         "dte":     opening["dte"],
+        # The count travels with the close, so a per-row walk over history
+        # reads the same size the position actually was.
+        "contracts": contracts_of(opening),
         "verdict": verdict,
         "reason":  reason,
         "pnl":     round(pnl, 2),
@@ -289,7 +292,11 @@ def _settle_expiry(opening: dict, close: float, holdings: dict,
     sym     = opening["symbol"]
     strike  = float(opening["strike"])
     premium = float(opening["premium_sh"])
-    prem_ct = premium * SHARES_PER_CONTRACT
+    qty     = contracts_of(opening)
+    shares  = SHARES_PER_CONTRACT * qty
+    # premium_sh is per share and premium_ct per contract; everything that
+    # settles into cash or shares multiplies by the position's size here.
+    prem_ct = premium * SHARES_PER_CONTRACT * qty
 
     if opening["signal"] == "SELL_PUT":
         if close > strike:
@@ -303,17 +310,19 @@ def _settle_expiry(opening: dict, close: float, holdings: dict,
         h = holdings.get(sym)
         if h:   # stack onto an existing holding: average the cost basis
             n = h["contracts"]
-            h["cost_basis"] = round((h["cost_basis"] * n + cost_basis) / (n + 1), 4)
-            h["contracts"]  = n + 1
+            h["cost_basis"] = round(
+                (h["cost_basis"] * n + cost_basis * qty) / (n + qty), 4)
+            h["contracts"]  = n + qty
         else:
-            holdings[sym] = {"contracts": 1, "cost_basis": round(cost_basis, 4),
+            holdings[sym] = {"contracts": qty,
+                             "cost_basis": round(cost_basis, 4),
                              "put_key": row_key(opening),
                              "assigned_date": today.isoformat()}
         row = _close_row(opening,
                          f"assigned at ${strike} — cost basis ${cost_basis:.2f}",
                          0.0, verdict="ASSIGNED")
         return {"action": "put_assigned", "symbol": sym, "pnl": 0.0,
-                "detail": (f"assigned {SHARES_PER_CONTRACT} sh at ${strike}, "
+                "detail": (f"assigned {shares} sh at ${strike}, "
                            f"cost basis ${cost_basis:.2f} — Scavenger phase 2"),
                 "_rows": [row]}
 
@@ -327,7 +336,7 @@ def _settle_expiry(opening: dict, close: float, holdings: dict,
     # Called away — shares sold at strike, wheel cycle complete
     h          = holdings.pop(sym, None)
     cost_basis = h["cost_basis"] if h else strike
-    pnl        = (strike - cost_basis) * SHARES_PER_CONTRACT + prem_ct
+    pnl        = (strike - cost_basis) * shares + prem_ct
     out_rows   = [_close_row(opening, "called_away", pnl)]
     if h and h.get("put_key"):
         release = _close_row(opening, "shares_called_away", 0.0)
@@ -361,7 +370,7 @@ def _try_early_exit(opening: dict, close: float, hv: float,
     if cur_val > premium * target:
         return None
 
-    pnl = (premium - cur_val) * SHARES_PER_CONTRACT
+    pnl = (premium - cur_val) * SHARES_PER_CONTRACT * contracts_of(opening)
     row = _close_row(opening,
                      f"early_exit at {cur_val/premium*100:.0f}% of premium "
                      f"(target {target*100:.0f}%)", pnl)

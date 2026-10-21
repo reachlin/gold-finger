@@ -361,6 +361,26 @@ def _sized_contracts(scanner, s: dict, cash: float, exposure: float,
     return scanner.size_put(s, cash, exposure, available)
 
 
+def _fill_signal(entry: dict) -> dict:
+    """
+    The signal dict a confirmed fill is booked from.
+
+    Built from the scan's `signal_data` plus the fields the order actually
+    went out with — including `contracts`, which the scanner's signal never
+    carries because sizing happens after it. Leaving that out is how a
+    3-contract fill booked as one contract until 2026-10-21: the ledger then
+    under-reported collateral, the per-symbol cap stopped binding, and the
+    GTC cover was sized to buy back one of three.
+    """
+    return (entry.get("signal_data") or {}) | {
+        "symbol":    entry["symbol"],
+        "signal":    entry["signal"],
+        "strike":    entry["strike"],
+        "dte":       entry["dte"],
+        "contracts": options_ledger.contracts_of(entry),
+    }
+
+
 def _cover_contracts(opening) -> int:
     """
     Contracts a cover must buy back: whatever the opening position is short.
@@ -1127,7 +1147,9 @@ def book_open_fill(ledger_path: str, cash_ledger, s: dict, fill_price: float) ->
     id used as the cover's opening_ref (so each open, even a stacked identical
     contract, gets its own cover)."""
     import options_ledger as ol
-    premium_ct = round(fill_price * 100, 2)
+    qty        = ol.contracts_of(s)
+    premium_ct = round(fill_price * 100, 2)      # per contract, as stored
+    credited   = round(premium_ct * qty, 2)      # what actually hits cash
     row = {
         "date":        _now_et().strftime("%Y-%m-%d %H:%M:%S"),
         "symbol":      s["symbol"],
@@ -1142,15 +1164,17 @@ def book_open_fill(ledger_path: str, cash_ledger, s: dict, fill_price: float) ->
         "adx":         s.get("adx", ""),
         "confidence":  s.get("confidence", ""),
         "regime":      s.get("regime", ""),
-        "verdict":     "APPROVED",
+        "contracts":   qty,
+        "verdict":      "APPROVED",
         "reason":      f"real fill confirmed @ ${fill_price:.2f}",
     }
     ol.append_row(ledger_path, row)
     if cash_ledger is not None:
         cash_ledger.record(
-            "OPTION_SELL", s["symbol"], premium_ct,
+            "OPTION_SELL", s["symbol"], credited,
             f"{s['signal']} {s['symbol']} strike=${s.get('strike')} "
-            f"exp={s.get('dte', '?')}d premium=${premium_ct:.2f} (real fill)"
+            f"exp={s.get('dte', '?')}d premium=${premium_ct:.2f}"
+            f"{f' x{qty}' if qty > 1 else ''} (real fill)"
         )
     return ol.row_key(row)
 
@@ -1161,8 +1185,9 @@ def book_buyback(ledger_path: str, cash_ledger, opening: dict, fill_price: float
     import options_ledger as ol
     from options_ledger import _close_row
     entry_prem = float(opening["premium_sh"])
-    pnl  = round((entry_prem - fill_price) * 100, 2)
-    cost = round(fill_price * 100, 2)
+    qty  = ol.contracts_of(opening)
+    pnl  = round((entry_prem - fill_price) * 100 * qty, 2)
+    cost = round(fill_price * 100 * qty, 2)
     ol.append_row(ledger_path, _close_row(
         opening,
         f"early_exit bought back at ${fill_price:.2f} vs ${entry_prem:.2f} entry",
@@ -1181,7 +1206,8 @@ def book_expired(ledger_path: str, cash_ledger, opening: dict):
     """Option expired worthless: full premium is the P&L; no cash moves."""
     import options_ledger as ol
     from options_ledger import _close_row
-    pnl = round(float(opening.get("premium_ct", 0) or 0), 2)
+    pnl = round(float(opening.get("premium_ct", 0) or 0)
+                * ol.contracts_of(opening), 2)
     ol.append_row(ledger_path, _close_row(opening, "expired_worthless", pnl))
     if cash_ledger is not None:
         cash_ledger.record(
@@ -1200,16 +1226,19 @@ def book_assigned(ledger_path: str, cash_ledger, opening: dict,
     from options_ledger import _close_row, row_key, SHARES_PER_CONTRACT
     strike  = float(opening["strike"])
     premium = float(opening["premium_sh"])
+    qty     = ol.contracts_of(opening)
+    shares  = SHARES_PER_CONTRACT * qty
     ol.append_row(ledger_path, _close_row(
         opening,
-        f"assigned at ${strike:.2f} — {SHARES_PER_CONTRACT} shares acquired",
+        f"assigned at ${strike:.2f} — {shares} shares acquired",
         0.0, verdict="ASSIGNED",
     ))
     if cash_ledger is not None:
         cash_ledger.record(
-            "OPTION_ASSIGNED", opening["symbol"], -round(strike * 100, 2),
+            "OPTION_ASSIGNED", opening["symbol"],
+            -round(strike * 100 * qty, 2),
             f"{opening['signal']} ${strike} assigned — paid for "
-            f"{SHARES_PER_CONTRACT} shares"
+            f"{shares} shares"
         )
     # Record shares for the covered-call side of the wheel
     try:
@@ -1222,10 +1251,11 @@ def book_assigned(ledger_path: str, cash_ledger, opening: dict,
     h = holdings.get(sym)
     if h:   # stack onto an existing holding: average the cost basis
         n = h["contracts"]
-        h["cost_basis"] = round((h["cost_basis"] * n + cost_basis) / (n + 1), 4)
-        h["contracts"]  = n + 1
+        h["cost_basis"] = round(
+            (h["cost_basis"] * n + cost_basis * qty) / (n + qty), 4)
+        h["contracts"]  = n + qty
     else:
-        holdings[sym] = {"contracts": 1, "cost_basis": cost_basis,
+        holdings[sym] = {"contracts": qty, "cost_basis": cost_basis,
                          "put_key": row_key(opening),
                          "assigned_date": str(_now_et().date())}
     with open(holdings_path, "w") as f:
@@ -1616,10 +1646,7 @@ class RealOverseer:
         opening_key = book_open_fill(
                        scanner.OPTION_LEDGER_PATH,
                        getattr(scanner, "_cash_ledger", None),
-                       entry["signal_data"] | {"symbol": entry["symbol"],
-                                               "signal": entry["signal"],
-                                               "strike": entry["strike"],
-                                               "dte":    entry["dte"]},
+                       _fill_signal(entry),
                        fill)
         _save_pending([e for e in pending
                        if str(e.get("schwab_order_id", "")) != order_id])
