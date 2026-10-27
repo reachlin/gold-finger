@@ -520,6 +520,18 @@ def _check_fast_riskoff(spy_df: "pd.DataFrame | None") -> tuple[bool, str]:
 def _scan_all(client, regime: str = Overseer.RECLAMATION,
               spy_df: "pd.DataFrame | None" = None) -> list[dict]:
     signals  = []
+    # Keep the forward calendar current WHILE running, not just at startup.
+    # On 2026-10-26 a process up for eight days passed CACHE_MAX_AGE_DAYS,
+    # every confirmed date fell back to a projection, and a put went out two
+    # days before an AMZN print. Throttled inside maybe_refresh; scrapes only
+    # what is actually stale, and never raises into the scan.
+    try:
+        _cal = earnings_calendar.maybe_refresh(WATCHLIST)
+        if _cal and (_cal["refreshed"] or _cal["failed"]):
+            print(f"  [Earnings] calendar re-checked: {_cal['fresh']} fresh, "
+                  f"{_cal['refreshed']} refreshed, {_cal['failed']} failed")
+    except Exception as exc:
+        print(f"  [Earnings] calendar re-check skipped ({exc})")
     holdings = ol.load_holdings(WHEEL_HOLDINGS_PATH)
     for symbol in WATCHLIST:
         df_ind = _fetch_with_indicators(client, symbol)
@@ -1630,7 +1642,9 @@ def main():
     # gate stops trusting a cache older than CACHE_MAX_AGE_DAYS. No-op on most
     # startups; never fatal, since a stale cache still projects from cadence.
     try:
-        _cal = earnings_calendar.refresh_if_stale(WATCHLIST)
+        # maybe_refresh, not refresh_if_stale, so this startup pass also sets
+        # the throttle clock the per-scan re-check reads.
+        _cal = earnings_calendar.maybe_refresh(WATCHLIST)
         print(f"  [Earnings] calendar: {_cal['fresh']} fresh, "
               f"{_cal['refreshed']} refreshed, {_cal['failed']} failed")
     except Exception as exc:

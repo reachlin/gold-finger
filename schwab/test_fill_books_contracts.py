@@ -314,14 +314,26 @@ def test_legacy_rows_with_an_empty_contracts_column_book_as_one(tmp_path):
     assert ro._cover_contracts(row) == 1
 
 
-def test_the_live_ledger_still_reconciles_to_the_account():
+def test_the_live_ledger_still_reads_and_reconciles_within_itself():
     """
-    The real book on 2026-10-21: NVDA $215 and IBM $227.50, one contract
-    each, against Schwab's committed $44,250. Every row predates the
-    contracts column or has it blank, so this passes only while
-    contracts_of's default of 1 holds.
+    AMENDED 2026-10-27. This pinned the real book to $44,250 — NVDA $215 and
+    IBM $227.50 on 2026-10-21 — and so failed the moment IBM closed and AMZN
+    opened, six days later, on code that was working correctly. A test whose
+    expected value is a snapshot of live state reports the book changing as a
+    defect, which is noise that trains you to ignore it.
+
+    What is durable: the real file still parses, every row still yields a
+    contract count of at least 1 (collateral is a spending gate, so the only
+    safe failure is over-reporting), and the total equals the sum of its
+    per-symbol parts whatever is open.
     """
     rows = ol.read_rows(LIVE_LEDGER)
-    assert ol.committed_collateral(rows) == 44_250.0
-    assert ol.symbol_collateral(rows, "NVDA") == 21_500.0
-    assert ol.symbol_collateral(rows, "IBM") == 22_750.0
+    assert rows, "the live ledger must at least be readable"
+    assert all(ol.contracts_of(r) >= 1 for r in rows)
+
+    total   = ol.committed_collateral(rows)
+    symbols = {r["symbol"] for r in rows if r.get("symbol")}
+    by_sym  = sum(ol.symbol_collateral(rows, s) for s in symbols)
+    assert round(total, 2) == round(by_sym, 2), (
+        f"committed ${total:,.2f} but the per-symbol parts sum to ${by_sym:,.2f}")
+    assert total >= 0

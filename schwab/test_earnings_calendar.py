@@ -124,11 +124,15 @@ class TestNextEarnings:
         assert ec.next_earnings("ZZZZ", dt.date(2026, 10, 11),
                                 fund_dir=fund_dir) is None
 
-    def test_a_stale_cache_falls_back_to_a_projection(self, cache):
+    def test_a_stale_cache_is_degraded_information_not_absent_information(self, cache):
         """
-        The confirmed feed is only as good as its last refresh. A cache older
-        than CACHE_MAX_AGE_DAYS must not be trusted as "confirmed" — but the
-        quarterly cadence is still known, so project instead of giving up.
+        AMENDED 2026-10-27. This used to assert that a cache past
+        CACHE_MAX_AGE_DAYS was discarded in favour of a cadence projection.
+        It is not: a stale scrape still names a date the company published,
+        and on 2026-10-26 the 8-day-old AMZN cache held the right answer
+        (2026-10-29) while the projection it was dropped for returned
+        2026-10-24 — three days in the past. Stale ranks below confirmed and
+        above projected; the projection is the last resort.
         """
         _, fund_dir = cache
         _write_upcoming(fund_dir, "IBM", [dt.date(2026, 10, 21)],
@@ -136,11 +140,7 @@ class TestNextEarnings:
         _write_history(fund_dir, "IBM", ["2025-10-22", "2026-01-28",
                                          "2026-04-22", "2026-07-22"])
         got = ec.next_earnings("IBM", dt.date(2026, 10, 11), fund_dir=fund_dir)
-        assert got is not None
-        when, source = got
-        assert source == "projected"
-        # ~91 days after 2026-07-22 lands in the second half of October
-        assert dt.date(2026, 10, 14) <= when <= dt.date(2026, 10, 31)
+        assert got == (dt.date(2026, 10, 21), "stale cache")
 
     def test_projection_from_history_when_there_is_no_upcoming_file(self, cache):
         _, fund_dir = cache
@@ -346,13 +346,24 @@ class TestBlockReason:
         assert ec.block_reason(
             self._annotated(earnings_before_expiry=False)) is None
 
-    def test_unknown_earnings_does_not_block(self):
+    def test_unknown_earnings_blocks(self):
         """
-        A broken yfinance feed must not halt the income strategy. Unknown
-        passes — loudly, via the annotated field — rather than failing closed.
+        REVERSED on 2026-10-27. This test used to assert the opposite — that
+        unknown passes, so a broken yfinance feed could not halt the income
+        strategy. On 2026-10-26 that leniency let a stale cache and a
+        past-dated projection sell a $23,500 AMZN put two days before the
+        print. See test_earnings_gate_fails_closed.py for the whole chain.
         """
+        reason = ec.block_reason(self._annotated(earnings_date="unknown",
+                                                 earnings_before_expiry=None,
+                                                 earnings_move_pct=None))
+        assert reason is not None and "unknown" in reason.lower()
+
+    def test_an_instrument_with_no_earnings_history_still_passes(self):
+        """The narrow exemption that survives the reversal: an ETF."""
         assert ec.block_reason(self._annotated(earnings_date="unknown",
                                                earnings_before_expiry=None,
+                                               earnings_no_history=True,
                                                earnings_move_pct=None)) is None
 
     def test_a_projected_date_blocks_the_same_as_a_confirmed_one(self):
