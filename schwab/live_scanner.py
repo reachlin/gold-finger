@@ -38,6 +38,7 @@ from options_pricer import historical_vol
 import options_ledger as ol
 import assignment_risk
 import earnings_calendar
+import symbol_exclusions
 import timesfm_advisor
 import wheel_router
 import allocator
@@ -604,7 +605,17 @@ def _scan_all(client, regime: str = Overseer.RECLAMATION,
         s = (_scavenger.scan(symbol, df_ind, regime=regime)
              if not in_hold else {"signal": "NONE"})
         if s["signal"] != "NONE":
-            s = requote_signal(client, s)
+            # Dated exclusion list — "stay out of this name until this date".
+            # Checked BEFORE requoting so an excluded symbol never spends a
+            # chain call, and never reaches the LLM at all. Gates SELL_PUT
+            # only: a cover on an excluded symbol must always get through.
+            excl_block = symbol_exclusions.block_reason(s)
+            if excl_block:
+                print(f"  [Excluded] ⊘ {symbol} {s.get('signal')} "
+                      f"dropped — {excl_block}")
+                s = None
+            else:
+                s = requote_signal(client, s)
             if s is not None:
                 # Earnings gate. Measured over 4,360 backtested put cycles:
                 # holding a print is mean -$33.46/cycle against +$23.65 when
@@ -1649,6 +1660,13 @@ def main():
               f"{_cal['refreshed']} refreshed, {_cal['failed']} failed")
     except Exception as exc:
         print(f"  [Earnings] calendar refresh skipped ({exc})")
+
+    # Say out loud which symbols are off the table and until when. A policy
+    # nobody can see in the log is a policy that gets forgotten and then
+    # rediscovered as "why has it not traded AMZN in two months".
+    _excl = symbol_exclusions.summary()
+    if _excl:
+        print(f"  [Excluded] {_excl}")
 
     # Train LGBM move-risk models from local history (seconds/symbol):
     # drop risk for SELL_PUT/BUY, rally (called-away) risk for SELL_CALL

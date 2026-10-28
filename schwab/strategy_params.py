@@ -159,3 +159,24 @@ EARLY_TP_MAX_DAYS   = 10        # ...and it got there fast (<= N calendar days h
 # jittery wiggle. Requires entry IV to have been stored at open.
 EARLY_TP_IV_CRUSH_RATIO = 0.70  # current IV <= 70% of entry IV = crushed
 EARLY_TP_IV_MIN_PROFIT  = 0.20  # ...and at least 20% already captured
+
+# ---------------------------------------------------------------------------
+# Dated symbol exclusions — "stay out of this name until this date"
+# ---------------------------------------------------------------------------
+# {TICKER: "YYYY-MM-DD"}, where the date is the day the symbol becomes
+# eligible AGAIN (so the date itself is not excluded). Gates SELL_PUT only;
+# a BUY_TO_CLOSE on an excluded symbol is never blocked, because an exclusion
+# means "do not open this", never "cannot close this".
+#
+# A symbol named here with an unreadable date STAYS EXCLUDED. A typo must not
+# silently re-admit a symbol someone asked to keep out.
+#
+# AMZN added 2026-10-28 at the user's instruction, after closing a $235 put
+# one day before the print. The earnings gate only covers the report window,
+# and size_put's unheld-symbol floor let one AMZN contract take 52% of total
+# cash ($24,000 against $46,385) with the 20% cap reading $9,277 — so neither
+# existing control could express "stay away from this name".
+# See symbol_exclusions.py and test_symbol_exclusions.py.
+SYMBOL_EXCLUSIONS = {
+    "AMZN": "2027-01-01",
+}

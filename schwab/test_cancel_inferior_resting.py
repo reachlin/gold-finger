@@ -21,8 +21,24 @@ import os
 import sys
 import tempfile
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import real_overseer as ro
+import symbol_exclusions
+
+
+@pytest.fixture(autouse=True)
+def _no_symbol_exclusions(monkeypatch):
+    """
+    This file tests the cancel-inferior-resting path, which runs behind the
+    dated exclusion list added 2026-10-28. Its fixtures use AMZN, and AMZN is
+    excluded in the shipped config, so without this the exclusion refuses
+    every candidate and nothing under test is exercised. Scoped through
+    monkeypatch so it cannot leak into test_symbol_exclusions.py, which
+    asserts the real config.
+    """
+    monkeypatch.setattr(symbol_exclusions, "SYMBOL_EXCLUSIONS", {})
 
 
 def _fresh(tmp):

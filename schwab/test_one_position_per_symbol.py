@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 import live_scanner as ls
 import real_overseer as ro
+import symbol_exclusions
 
 
 @pytest.fixture(autouse=True)
@@ -38,8 +39,18 @@ def _gate_in_force(monkeypatch):
     back, every behaviour below must return exactly as it was, including the
     OCC-root matcher that stopped a Visa signal being blocked by a Broadcom
     position. The armed path is covered in test_multi_contract_orders.py.
+
+    The exclusion list is neutralised for the same reason the flag is pinned:
+    this file tests the one-position gate, which in _pre_trade_check sits
+    BEHIND the dated exclusion list added 2026-10-28. Every fixture here uses
+    AMZN — fittingly, the symbol of the 2026-09-18 concentration incident in
+    the docstring above — and AMZN is excluded in the shipped config, so
+    without this the exclusion short-circuits first and the gate under test
+    never runs. Scoped through monkeypatch so it cannot leak into
+    test_symbol_exclusions.py, which asserts the real config.
     """
     monkeypatch.setattr(ls, "MULTI_CONTRACT_SIZING", False)
+    monkeypatch.setattr(symbol_exclusions, "SYMBOL_EXCLUSIONS", {})
 
 
 def option(symbol_occ, put_call="PUT", strike=245.0, short=1.0):

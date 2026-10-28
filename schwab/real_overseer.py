@@ -45,6 +45,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from chain_quotes import round_up_to_tick
 import options_ledger
+import symbol_exclusions
 
 _ET = ZoneInfo("America/New_York")
 
@@ -1359,6 +1360,16 @@ class RealOverseer:
         """Verify AVAILABLE funds cover collateral and no duplicate short
         exists. Uses availableFunds (net of locked collateral) — never
         cashBalance."""
+        # Dated exclusion list, first and cheapest: the scanner already drops
+        # excluded symbols, so reaching here means a signal survived a restart
+        # or arrived by another path. Checked before the account fetch for the
+        # same reason the per-symbol cap was moved ahead of it in 01dfc71 —
+        # a refusal should not cost an API call. SELL_PUT only, so a cover can
+        # never be blocked by this.
+        excl = symbol_exclusions.block_reason(s)
+        if excl:
+            return False, excl
+
         sec = fetch_account(client, account_hash)
         if sec is None:
             return False, "Cannot fetch Schwab account"
